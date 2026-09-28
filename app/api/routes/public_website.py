@@ -108,6 +108,22 @@ async def public_testimonials():
     return {"testimonials": await svc.public_testimonials(db)}
 
 
+# ── Industries (signup + marketing: LeadAI serves any business) ─────────────
+
+@router.get("/industries")
+async def public_industries():
+    """Enabled industries of the catalog (names only — no AI configuration)."""
+    import asyncio
+    from app.pipeline.business_context import list_industries
+    try:
+        items = await asyncio.to_thread(list_industries)
+    except Exception as e:
+        logger.warning("public_industries failed: %s", e)
+        items = []
+    return {"industries": [{k: i[k] for k in ("key", "name", "icon", "description")}
+                           for i in items]}
+
+
 # ── Pricing (single source of truth: the billing plan collection) ───────────
 
 @router.get("/pricing")

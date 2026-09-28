@@ -125,6 +125,13 @@
               <div class="field-error" id="companyError" aria-live="polite"></div>
             </div>
             <div class="form-group">
+              <label class="form-label" for="industry">Industry <span class="optional">(optional)</span></label>
+              <select class="form-input" id="industry" name="industry" aria-describedby="industryHint">
+                <option value="">Select your industry</option>
+              </select>
+              <div class="field-hint" id="industryHint">LeadAI works for any business — this tunes lead detection for yours.</div>
+            </div>
+            <div class="form-group">
               <label class="form-label" for="phone">Phone <span class="optional">(optional)</span></label>
               <input class="form-input" type="tel" id="phone" name="phone" autocomplete="tel" inputmode="tel" maxlength="30"
                      aria-describedby="phoneError" data-error="phoneError"/>
@@ -192,6 +199,13 @@
 
   f.message.addEventListener("input", function () { $("charCount").textContent = String(f.message.value.length); });
 
+  // Industry choices from the platform catalog (optional field)
+  fetch("/api/public/industries").then(function (r) { return r.ok ? r.json() : { industries: [] }; }).then(function (d) {
+    var sel = $("industry");
+    (d.industries || []).forEach(function (i) {
+      var o = document.createElement("option"); o.value = i.key; o.textContent = (i.icon ? i.icon + " " : "") + i.name; sel.appendChild(o);
+    });
+  }).catch(function () {});
   // Prefill from the website (e.g. /request-demo?email=…&company=…)
   var qs = new URLSearchParams(location.search);
   if (qs.get("email") && UI.isEmail(qs.get("email"))) f.email.value = qs.get("email");
@@ -260,6 +274,7 @@
         name: f.name.value.trim(),
         email: email,
         company: f.company.value.trim(),
+        industry: ($("industry") && $("industry").value) || undefined,
         phone: f.phone.value.trim() || null,
         password: f.password.value,
         message: f.message.value.trim() || null

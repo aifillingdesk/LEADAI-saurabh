@@ -79,6 +79,13 @@ def _restore_credential_settings():
     from app.config import get_settings
     s = get_settings()
     saved = {k: getattr(s, k) for k in _CREDENTIAL_FIELDS}
+    # tests never depend on the developer's own .env Super Admin
+    s.superadmin_email, s.superadmin_password = "", ""
+    try:
+        from app.admin import envvars
+        envvars._CACHE.clear()
+    except Exception:
+        pass
     yield
     for k, v in saved.items():
         setattr(s, k, v)

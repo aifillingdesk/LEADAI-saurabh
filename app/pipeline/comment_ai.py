@@ -26,6 +26,7 @@ import httpx
 from app.admin.envvars import get_envvar_str
 from app.config import get_settings
 from app.db.models import utcnow
+from app.pipeline.business_context import BUILTIN_INDUSTRIES, GENERAL, GENERIC_REQUIREMENT_TERMS
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -88,16 +89,37 @@ _URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _WHATSAPP_RE = re.compile(r"whatsapp|whats ?app|wa\.me", re.IGNORECASE)
 _WHATSAPP_WITH_NUM_RE = re.compile(r"(?i)whatsapp[^\d]{0,12}(?:\+?91[\s\-.]?)?\d{5}[\s\-.]?\d{5}")
 _BUDGET_RE = re.compile(
-    r"(?:₹|rs\.?|rupees|inr|lakh|lac|crore|cr\.?)\s*\d+|\d+\s*(?:lakh|lac|crore|cr\.?)\b",
+    r"(?:₹|rs\.?|rupees|inr|lakh|lac|crore|cr\.?|\$|usd|us\$|€|eur|£|gbp|aed|sar)\s*\d+"
+    r"|\d+\s*(?:lakh|lac|crore|cr\.?|usd|dollars?|euros?|pounds?|aed|dirhams?)\b",
     re.IGNORECASE,
 )
-_REQUIREMENT_WORDS = [
-    "bhk", "flat", "apartment", "villa", "plot", "land", "shop", "office",
-    "showroom", "property", "house", "ghar", "bungalow", "banglow",
-    "builder floor", "penthouse", "commercial", "retail", "warehouse",
-    "factory", "farmhouse", "studio", "need", "want", "looking", "chahiye",
-    "required", "require", "searching", "interested in",
-]
+
+
+def _order_terms(terms: List[str]) -> List[str]:
+    """Industry-specific terms first, generic need words last, so a concrete
+    requirement ("suv", "bhk", "modular kitchen") is reported instead of
+    "need" / "want"."""
+    unique = list(dict.fromkeys(t for t in terms if t))
+    generic = [t for t in unique if t in GENERIC_REQUIREMENT_TERMS]
+    return [t for t in unique if t not in GENERIC_REQUIREMENT_TERMS] + generic
+
+
+def _terms(requirement_terms: Optional[List[str]]) -> List[str]:
+    return _REQUIREMENT_WORDS if requirement_terms is None else requirement_terms
+
+
+def _term_in(term: str, lower: str) -> bool:
+    """Short terms ("ac", "ev", "ca", "ro") only when not inside another word
+    (digits may touch them: "2bhk"); longer ones as substrings (plurals)."""
+    if len(term) <= 3:
+        return re.search(r"(?<![a-z])" + re.escape(term) + r"(?![a-z])", lower) is not None
+    return term in lower
+
+
+# Requirement vocabulary when no business context is given: the "general"
+# (any business) industry's terms plus generic need words.
+_REQUIREMENT_WORDS = _order_terms(
+    list(BUILTIN_INDUSTRIES[GENERAL]["requirement_terms"]) + GENERIC_REQUIREMENT_TERMS)
 _CITY_WORDS = [
     "noida", "gurgaon", "gurugram", "delhi", "new delhi", "mumbai",
     "jaipur", "pune", "bangalore", "bengaluru", "hyderabad", "chennai",
@@ -226,8 +248,11 @@ def is_promotional_comment(text: str) -> bool:
 
 
 def rule_based_classify(text: Optional[str], author_name: str = "",
-                        page_name: str = "") -> Dict[str, Any]:
-    """Stage 1 — deterministic filter returning the canonical analysis shape."""
+                        page_name: str = "",
+                        requirement_terms: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Stage 1 — deterministic filter returning the canonical analysis shape.
+    ``requirement_terms`` is the organization's industry vocabulary
+    (business_context.requirement_terms_for); None = every industry."""
     empty = {
         "is_useful": True,
         "reason": None,
@@ -287,10 +312,11 @@ def rule_based_classify(text: Optional[str], author_name: str = "",
     analysis = {**empty, "is_useful": True,
                 "reason": "Comment may contain lead information",
                 "confidence_score": 0.55, "priority": "medium"}
-    return _rule_extraction(analysis, raw, lower)
+    return _rule_extraction(analysis, raw, lower, requirement_terms)
 
 
-def _rule_extraction(analysis: Dict[str, Any], text: str, lower: str) -> Dict[str, Any]:
+def _rule_extraction(analysis: Dict[str, Any], text: str, lower: str,
+                     requirement_terms: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Deterministic regex extraction applied on the rule path so contact and
     requirement fields are still surfaced without an AI call. Never invents —
@@ -302,7 +328,7 @@ def _rule_extraction(analysis: Dict[str, Any], text: str, lower: str) -> Dict[st
     url_m = _URL_RE.search(text)
     budget_m = _BUDGET_RE.search(lower)
     city_m = next((c for c in _CITY_WORDS if c in lower), None)
-    req_words = [w for w in _REQUIREMENT_WORDS if w in lower]
+    req_words = [w for w in _terms(requirement_terms) if _term_in(w, lower)]
     urg_words = [w for w in _URGENCY_WORDS if w in lower]
 
     if phone_m:
@@ -597,10 +623,13 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
                        post_caption: str = "", organization_id: Optional[str] = None,
                        user_id: Optional[str] = None, search_id: Optional[str] = None,
                        business_category: str = "", allow_ai: bool = True,
-                       page_name: str = "") -> Dict[str, Any]:
+                       page_name: str = "",
+                       requirement_terms: Optional[List[str]] = None) -> Dict[str, Any]:
     """Two-stage analysis for one comment with prompt versioning and usage tracking. Never raises.
     ``page_name`` lets the rule stage drop the page's own comments before any
-    AI call.
+    AI call. ``business_category`` is the organization's business context
+    (business_context.context_prompt_text) — the model judges intent relative
+    to that business; ``requirement_terms`` is its rule-stage vocabulary.
 
     Behavior is admin-configurable: ``ai.enabled`` turns the Gemini stage on
     or off, ``ai.rule_fallback`` decides whether rule analysis is used when
@@ -611,7 +640,7 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
 
     ai_enabled = get_bool_cached("ai.enabled")
     rule_fallback = get_bool_cached("ai.rule_fallback")
-    rule = rule_based_classify(comment_text, author_name, page_name)
+    rule = rule_based_classify(comment_text, author_name, page_name, requirement_terms)
     if not rule["is_useful"]:
         return {**rule, "analyzed_by": "rules"}
     if not ai_enabled or not allow_ai:
@@ -624,14 +653,18 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
     active_prompt = get_active_prompt("comment_lead_analysis")
     prompt_version = active_prompt.get("version", 1)
     prompt_key = active_prompt.get("prompt_key", "comment_lead_analysis")
-    system_prompt = active_prompt.get("system_instructions") or COMMENT_SYSTEM_PROMPT
+    from app.pipeline.business_context import json_safe, system_prompt_with_context
+    # the business context is appended to whichever prompt version is
+    # active, so admin-edited prompts are industry-aware too
+    system_prompt = system_prompt_with_context(
+        active_prompt.get("system_instructions") or COMMENT_SYSTEM_PROMPT, business_category)
     user_template = active_prompt.get("user_template") or DEFAULT_COMMENT_USER_TEMPLATE
 
     context = {
         "author": author_name or "unknown",
         "post_caption": post_caption or "",
         "comment_text": comment_text or "",
-        "business_category": business_category or "",
+        "business_category": json_safe(business_category),
     }
     user_content = render_template(user_template, context)
     model = active_prompt.get("model") or get_setting_cached("ai.model") or settings.gemini_model or "gemini-2.5-flash"
@@ -723,7 +756,8 @@ def comment_lead_score(ai_analysis: Optional[Dict[str, Any]] = None) -> int:
 
 
 def signal_lead_score(ai_analysis: Optional[Dict[str, Any]] = None,
-                      text: Optional[str] = None) -> int:
+                      text: Optional[str] = None,
+                      requirement_terms: Optional[List[str]] = None) -> int:
     """Additive 0-100 signal score from the admin-weighted signals: phone,
     email, budget, urgency, location and buying intent. Only signals that
     actually appear in the comment/AI extraction count."""
@@ -731,7 +765,7 @@ def signal_lead_score(ai_analysis: Optional[Dict[str, Any]] = None,
     ai = ai_analysis or {}
     if not ai.get("is_useful"):
         return 0
-    signals = set(extract_display_signals(text, ai))
+    signals = set(extract_display_signals(text, ai, requirement_terms))
     score = 0
     if "phone" in signals or "whatsapp" in signals:
         score += get_int_cached("scoring.phone", 20)
@@ -765,7 +799,8 @@ def derive_quality_from_score(score: int) -> Optional[str]:
 # Display filter — show a comment only when it carries at least one lead signal
 # ─────────────────────────────────────────────────────────────────────────────
 
-def extract_display_signals(text: Optional[str], ai_analysis: Optional[Dict[str, Any]] = None) -> List[str]:
+def extract_display_signals(text: Optional[str], ai_analysis: Optional[Dict[str, Any]] = None,
+                            requirement_terms: Optional[List[str]] = None) -> List[str]:
     """Lead signals present in the comment. Each signal can be toggled from
     the admin Comment Intelligence settings (default: all on)."""
     from app.admin.settings import get_bool_cached
@@ -810,7 +845,7 @@ def extract_display_signals(text: Optional[str], ai_analysis: Optional[Dict[str,
         add("selling_intent")
     if detect["budget"] and (buyer.get("budget") or _BUDGET_RE.search(lower)):
         add("budget")
-    if detect["budget"] and (buyer.get("requirement") or any(w in lower for w in _REQUIREMENT_WORDS)):
+    if detect["budget"] and (buyer.get("requirement") or any(_term_in(w, lower) for w in _terms(requirement_terms))):
         add("requirement")
     if detect["location"] and (buyer.get("preferred_location") or person.get("city")
                                or any(c in lower for c in _CITY_WORDS)):
@@ -835,16 +870,17 @@ def should_display_comment(text: Optional[str], ai_analysis: Optional[Dict[str, 
 # Persist — analyze all comments of one post → `ai_comments`
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None) -> Dict[str, Any]:
+def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None,
+                  requirement_terms: Optional[List[str]] = None) -> Dict[str, Any]:
     """Nested AI extraction → flat, display-ready fields."""
     from app.admin.settings import get_bool_cached, get_int_cached
     contact = analysis.get("contact") if isinstance(analysis.get("contact"), dict) else {}
     person = analysis.get("person") if isinstance(analysis.get("person"), dict) else {}
     buyer = analysis.get("buyer") if isinstance(analysis.get("buyer"), dict) else {}
     phone = contact.get("phone") or contact.get("mobile")
-    signals = extract_display_signals(text, analysis)
+    signals = extract_display_signals(text, analysis, requirement_terms)
     score = comment_lead_score(analysis)
-    signal_score = signal_lead_score(analysis, text)
+    signal_score = signal_lead_score(analysis, text, requirement_terms)
     quality = analysis.get("lead_quality")
     if get_bool_cached("scoring.derive_quality") and not quality and signal_score > 0:
         quality = derive_quality_from_score(signal_score) or quality
@@ -855,8 +891,9 @@ def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None) -> Dict[
         "whatsapp": contact.get("whatsapp"),
         "website": contact.get("website"),
         "budget": buyer.get("budget"),
-        "requirement": (buyer.get("requirement") or buyer.get("property_type")
-                        or buyer.get("service_needed") or buyer.get("product")),
+        "requirement": (buyer.get("requirement") or buyer.get("service_needed")
+                        or buyer.get("product") or buyer.get("property_type")
+                        or buyer.get("vehicle_type")),
         "location": person.get("city") or buyer.get("preferred_location") or person.get("state"),
         "intent": buyer.get("intent"),
         "urgency": buyer.get("urgency"),
@@ -981,6 +1018,12 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
         summary["ai_blocked"] = ai_block_reason
     from app.lifecycle.config import token_cost
     ai_token_cost = token_cost("ai_call")
+    # the organization's industry / business profile drives every comment
+    from app.pipeline import business_context as bc
+    biz = bc.org_business_context(org_id, db)
+    biz_text = bc.context_prompt_text(biz)
+    req_terms = _order_terms(bc.requirement_terms_for(biz, db))
+    summary["industry"] = biz["industry_key"]
 
     for doc in comments:
         # Enforce per-job AI call budget (0 = unlimited)
@@ -993,7 +1036,8 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
             organization_id=str(org_id) if org_id else None,
             user_id=str(owner_user_id) if owner_user_id else None,
             search_id=run_id or doc.get("search_run_id"), allow_ai=ai_allowed,
-            page_name=(page_doc or {}).get("page_name") or post_doc.get("page_name") or "")
+            page_name=(page_doc or {}).get("page_name") or post_doc.get("page_name") or "",
+            business_category=biz_text, requirement_terms=req_terms)
         if analysis.get("analyzed_by") == "gemini":
             ai_calls_used += 1
             if org_id and ai_token_cost:
@@ -1006,7 +1050,7 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
                     # out of tokens: finish the batch with rules only
                     ai_allowed = False
                     summary["ai_blocked"] = "tokens_exhausted"
-        flat = _flat_extract(analysis, doc.get("text"))
+        flat = _flat_extract(analysis, doc.get("text"), req_terms)
         update = {
             "comment_ref": str(doc["_id"]),
             "comment_id": doc.get("comment_id"),
@@ -1023,6 +1067,7 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
             "created_by": _owner_field("created_by", doc),
             "search_run_id": _owner_field("search_run_id", doc),
             "details": analysis,
+            "industry": biz["industry_key"],
             "analyzed_by": analysis.get("analyzed_by"),
             "analyzed_at": utcnow(),
             **flat,

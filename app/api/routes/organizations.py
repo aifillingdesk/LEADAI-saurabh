@@ -17,6 +17,7 @@ request), enforces permissions, applies the role hierarchy (an Admin can
 never grant owner/super admin or modify another Admin), revokes sessions
 when a member's access changes, and writes an audit entry.
 """
+import asyncio
 import logging
 import re
 from typing import Any, Dict, Optional
@@ -62,7 +63,7 @@ _SETTING_TYPES: Dict[str, type] = {
     "invite_expiry_days": int, "default_member_role": str,
     "lead_keywords": list, "lead_statuses": list,
     "lead_exclude_keywords": list, "email_notifications": bool,
-    "notify_lead_assigned": bool,
+    "notify_lead_assigned": bool, "filter_by_industry": bool,
 }
 # Integer settings with an allowed range (inclusive)
 _SETTING_RANGES: Dict[str, tuple] = {
@@ -170,6 +171,10 @@ async def get_current_organization(ctx: TenantContext = Depends(require_org_perm
     cleaned.pop("metadata", None)
     cleaned["user_role"] = ctx.user_role
     cleaned["permissions"] = ctx.permissions
+    # effective business context (industry used by lead analysis)
+    from app.pipeline.business_context import build_context
+    biz = await asyncio.to_thread(build_context, org)
+    cleaned["industry_key"], cleaned["industry_name"] = biz["industry_key"], biz["industry_name"]
     return {"success": True, "organization": cleaned}
 
 
@@ -248,6 +253,11 @@ async def update_current_organization(body: UpdateOrgProfileRequest, request: Re
         val = getattr(body, field)
         if val is not None:
             updates[field] = (_check_url(field, val) if field in _URL_FIELDS else val.strip())[:500]
+    if updates.get("industry"):
+        # a catalog industry is stored by key; other text is kept as a custom label
+        from app.pipeline.business_context import resolve_industry_key
+        updates["industry"] = (await asyncio.to_thread(resolve_industry_key, updates["industry"])
+                               or updates["industry"][:80])
     if body.name is not None and body.name.strip():
         updates["name"] = body.name.strip()[:120]
     if body.currency is not None:

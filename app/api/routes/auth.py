@@ -85,6 +85,7 @@ class SignupRequest(BaseModel):
     company: Optional[str] = None
     phone: Optional[str] = None
     message: Optional[str] = None
+    industry: Optional[str] = None
 
 
 class SwitchOrgRequest(BaseModel):
@@ -131,7 +132,8 @@ async def signup(body: SignupRequest, request: Request):
     name = (body.name or body.email.split("@")[0]).strip()
     res = create_demo_request(name=name, email=body.email, password=body.password,
                               company=company, phone=body.phone,
-                              message=body.message, ip=ip, source="signup")
+                              message=body.message, ip=ip, source="signup",
+                              industry=body.industry)
     return {
         "success": True,
         "status": res["status"],
@@ -302,6 +304,10 @@ async def me(request: Request):
         org = db.organizations.find_one({"_id": ObjectId(ctx.organization_id)}) if db is not None else None
         out["admin_portal_enabled"] = bool((org or {}).get("admin_portal_enabled")) or \
             (org or {}).get("status") == "active"
+        # the business context every search of this organization is analysed with
+        from app.pipeline.business_context import build_context
+        biz = build_context(org or {}, db)
+        out["industry"] = {"key": biz["industry_key"], "name": biz["industry_name"]}
     return {"success": True, "user": out}
 
 

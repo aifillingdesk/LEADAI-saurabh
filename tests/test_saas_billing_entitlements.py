@@ -82,9 +82,10 @@ def _make_cookie(user_dict):
 
 
 def _make_super_admin_cookie():
-    settings = get_settings()
+    # the one Super Admin comes from SUPERADMIN_* (independent of the local .env)
+    from tests.conftest import as_superadmin
     return _make_cookie({
-        "email": settings.panel_admin_email,
+        "email": as_superadmin("root@platform.test"),
         "name": "Super Admin",
         "role": "super_admin",
         "scope": "admin",

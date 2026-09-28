@@ -847,16 +847,24 @@
   }
 
   async function editOrgModal(org, after) {
+    var inds = [];
+    try { inds = (await api('/api/super-admin/industries')).industries.filter(function (i) { return i.enabled || i.key === org.industry; }); } catch (e) { inds = []; }
+    var known = inds.some(function (i) { return i.key === org.industry; });
     var res = await openModal({ title: 'Edit organization', body:
       '<div class="sa-field"><label for="eoName">Name</label><input class="form-input" id="eoName" name="name" value="' + esc(org.name) + '" maxlength="120" required></div>' +
       '<div class="sa-form-grid"><div class="sa-field"><label for="eoTz">Timezone</label><input class="form-input" id="eoTz" name="timezone" value="' + esc(org.timezone || 'UTC') + '"></div>' +
       '<div class="sa-field"><label for="eoCur">Currency</label><input class="form-input" id="eoCur" name="currency" value="' + esc(org.currency || 'USD') + '" maxlength="3"></div></div>' +
+      (inds.length ? '<div class="sa-field"><label for="eoInd">Industry</label><select class="form-select" id="eoInd" name="industry">' +
+        (known ? '' : '<option value="" selected>' + esc(org.industry ? 'Custom: ' + org.industry : 'Not set (platform default)') + '</option>') +
+        inds.map(function (i) { return '<option value="' + esc(i.key) + '"' + (i.key === org.industry ? ' selected' : '') + '>' + esc(i.icon + ' ' + i.name) + '</option>'; }).join('') +
+        '</select><span class="hint">Drives the lead AI for this organization. The org Admin can refine it in their business profile.</span></div>' : '') +
       '<label class="sa-check"><input type="checkbox" name="admin_portal_enabled"' + (org.admin_portal_enabled !== false ? ' checked' : '') + '> Admin portal enabled for this organization</label>' +
       '<div class="sa-field"><label for="eoNotes">Internal notes <span class="sa-muted">(super admins only)</span></label><textarea class="form-textarea" id="eoNotes" name="notes" rows="3" maxlength="2000" style="min-height:70px">' + esc(org.admin_notes || '') + '</textarea></div>',
       onSubmit: function (f, fd) {
         return api('/api/super-admin/organizations/' + encodeURIComponent(org.id), { method: 'PATCH', body: {
           name: String(fd.get('name') || '').trim(), timezone: fd.get('timezone'), currency: fd.get('currency'),
-          notes: fd.get('notes'), admin_portal_enabled: !!fd.get('admin_portal_enabled') } });
+          notes: fd.get('notes'), admin_portal_enabled: !!fd.get('admin_portal_enabled'),
+          industry: fd.get('industry') || undefined } });
       } });
     if (res) { toast('Organization updated'); if (after) after(); }
   }
@@ -975,6 +983,7 @@
           '<dt>ID</dt><dd class="sa-mono">' + esc(id) + '</dd><dt>Status</dt><dd>' + pill(o.status) + (o.suspended_reason ? ' <span class="sa-small sa-muted">' + esc(o.suspended_reason) + '</span>' : '') + '</dd>' +
           '<dt>Plan</dt><dd>' + esc(o.plan_id || '—') + '</dd><dt>Timezone</dt><dd>' + esc(o.timezone || '—') + '</dd><dt>Currency</dt><dd>' + esc(o.currency || '—') + '</dd>' +
           '<dt>Admin portal</dt><dd>' + (o.admin_portal_enabled === false ? 'Disabled' : 'Enabled') + '</dd>' +
+          '<dt>Industry</dt><dd>' + esc(o.industry || 'Not set (platform default)') + '</dd>' +
           (o.archived_at ? '<dt>Archived</dt><dd>' + esc(fmtDT(o.archived_at)) + ' by ' + esc(o.archived_by) + ' — ' + esc(o.archive_reason) + '</dd>' : '') +
           (o.admin_notes ? '<dt>Notes</dt><dd>' + esc(o.admin_notes) + '</dd>' : '') + '</dl></div>' +
           '<div class="sa-card"><h3>Admins</h3>' + ((o.admins || []).length ? '<ul class="sa-feed">' + o.admins.map(function (m) {
@@ -2694,6 +2703,80 @@
       } catch (err) { toast(err.message, 'error'); }
     };
   }
+  // ── Industries (business context for lead analysis) ─────────────────────
+  async function viewIndustries(root) {
+    var d = await api('/api/super-admin/industries');
+    var list = function (a) { return (a || []).join(', '); };
+    var terms = function (v) { return String(v || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean); };
+    root.innerHTML = header('Industries', 'LeadAI serves any business. Each organization picks an industry; its lead analysis (AI prompt, rule vocabulary and optional comment filter) follows it.',
+      '<button type="button" class="btn btn-primary btn-sm" data-new>Add industry</button>') +
+      '<div class="sa-card sa-section"><form class="sa-row" data-def novalidate><label for="indDefault" style="font-weight:600">Platform default industry</label>' +
+      '<select class="form-select" id="indDefault" name="industry" style="max-width:320px">' + d.industries.filter(function (i) { return i.enabled; }).map(function (i) {
+        return '<option value="' + esc(i.key) + '"' + (i.key === d.default_industry ? ' selected' : '') + '>' + esc(i.icon + ' ' + i.name) + '</option>'; }).join('') +
+      '</select><button type="submit" class="btn btn-secondary btn-sm">Save default</button><span class="sa-small sa-muted">Used for organizations that have not chosen an industry.' +
+      (d.custom_label_organizations ? ' ' + fmtN(d.custom_label_organizations) + ' organization(s) use a custom industry label.' : '') + '</span></form></div>' +
+      '<div class="sa-table-wrap sa-section"><table class="sa-table"><thead><tr><th>Industry</th><th>Comment categories</th><th>Suggested keywords</th><th class="num">Organizations</th><th>Status</th><th></th></tr></thead><tbody>' +
+      d.industries.map(function (i) {
+        return '<tr><td><b>' + esc(i.icon + ' ' + i.name) + '</b><div class="sa-small sa-muted">' + esc(i.key) + (i.builtin ? ' · built-in' : ' · custom') + '</div><div class="sa-small">' + esc(i.description) + '</div></td>' +
+          '<td class="sa-small">' + esc(list(i.category_keys) || '—') + '</td><td class="sa-small">' + esc(list(i.default_keywords.slice(0, 8)) || '—') + '</td>' +
+          '<td class="num">' + fmtN(i.organizations) + '</td><td>' + pill(i.enabled ? 'active' : 'disabled', i.enabled ? 'Enabled' : 'Disabled') + '</td>' +
+          '<td class="sa-row" style="justify-content:flex-end"><button type="button" class="btn btn-secondary btn-sm" data-edit="' + esc(i.key) + '">Edit</button>' +
+          (i.key === 'general' ? '' : '<button type="button" class="btn btn-secondary btn-sm" data-toggle="' + esc(i.key) + '">' + (i.enabled ? 'Disable' : 'Enable') + '</button>') +
+          (i.builtin ? '' : '<button type="button" class="btn btn-danger btn-sm" data-del="' + esc(i.key) + '">Delete</button>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+    var byKey = {}; d.industries.forEach(function (i) { byKey[i.key] = i; });
+    var reload = function () { viewIndustries(root); };
+    var editor = function (i) {
+      i = i || { icon: '🏷️', category_keys: [], default_keywords: [], requirement_terms: [] };
+      var cats = d.comment_categories.map(function (c) {
+        return '<label class="sa-small" style="display:inline-flex;gap:6px;margin:0 12px 6px 0"><input type="checkbox" name="cat" value="' + esc(c.key) + '"' + (i.category_keys.indexOf(c.key) >= 0 ? ' checked' : '') + '>' + esc(c.icon + ' ' + c.name) + '</label>';
+      }).join('');
+      var field = function (id, label, value, hint, area) {
+        return '<div class="sa-field"><label for="ind_' + id + '">' + esc(label) + '</label>' + (area
+          ? '<textarea class="form-textarea" id="ind_' + id + '" name="' + id + '" rows="2" maxlength="600">' + esc(value || '') + '</textarea>'
+          : '<input class="form-input" id="ind_' + id + '" name="' + id + '" value="' + esc(value || '') + '" maxlength="' + (id === 'icon' ? 8 : 300) + '">') +
+          (hint ? '<span class="hint">' + esc(hint) + '</span>' : '') + '</div>';
+      };
+      return openModal({ title: i.key ? 'Edit industry · ' + i.name : 'Add industry', size: 'lg', submitLabel: i.key ? 'Save industry' : 'Add industry',
+        body: field('name', 'Name', i.name) + field('icon', 'Icon (emoji)', i.icon) + field('description', 'Description', i.description) +
+          field('ai_guidance', 'What counts as a qualified lead (sent to the AI)', i.ai_guidance, 'Organizations can refine this in their business profile.', true) +
+          field('default_keywords', 'Suggested lead keywords (comma separated)', list(i.default_keywords), 'Offered to org Admins and used by the optional industry filter.', true) +
+          field('requirement_terms', 'Requirement terms (comma separated)', list(i.requirement_terms), 'Words customers use for what they want — used by rule-based detection without AI.', true) +
+          '<div class="sa-field"><span style="font-weight:600;font-size:13px">Comment categories</span><div style="margin-top:6px">' + cats + '</div></div>',
+        onSubmit: async function (form, fd) {
+          var body = { name: String(fd.get('name') || '').trim(), icon: String(fd.get('icon') || '').trim(),
+            description: String(fd.get('description') || '').trim(), ai_guidance: String(fd.get('ai_guidance') || '').trim(),
+            default_keywords: terms(fd.get('default_keywords')), requirement_terms: terms(fd.get('requirement_terms')),
+            category_keys: fd.getAll('cat') };
+          if (!body.name) throw new Error('Name is required.');
+          await api(i.key ? '/api/super-admin/industries/' + encodeURIComponent(i.key) : '/api/super-admin/industries', { method: i.key ? 'PATCH' : 'POST', body: body });
+          toast(i.key ? 'Industry saved' : 'Industry added'); reload();
+        } });
+    };
+    $('[data-new]', root).onclick = function () { editor(null); };
+    $('[data-def]', root).onsubmit = async function (e) {
+      e.preventDefault();
+      try { await busy($('button[type=submit]', e.target), function () { return api('/api/super-admin/industries/default', { method: 'PUT', body: { industry: $('#indDefault', root).value } }); }); toast('Default industry saved'); reload(); }
+      catch (err) { toast(err.message, 'error'); }
+    };
+    $$('[data-edit]', root).forEach(function (b) { b.onclick = function () { editor(byKey[b.getAttribute('data-edit')]); }; });
+    $$('[data-toggle]', root).forEach(function (b) {
+      b.onclick = async function () {
+        var i = byKey[b.getAttribute('data-toggle')];
+        if (i.enabled && !(await confirmDialog({ title: 'Disable ' + i.name + '?', message: 'Organizations can no longer choose it. ' + (i.organizations ? i.organizations + ' organization(s) using it fall back to the platform default industry.' : ''), confirmLabel: 'Disable' }))) return;
+        try { await busy(b, function () { return api('/api/super-admin/industries/' + encodeURIComponent(i.key), { method: 'PATCH', body: { enabled: !i.enabled } }); }); toast(i.enabled ? 'Industry disabled' : 'Industry enabled'); reload(); }
+        catch (err) { toast(err.message, 'error'); }
+      };
+    });
+    $$('[data-del]', root).forEach(function (b) {
+      b.onclick = async function () {
+        var i = byKey[b.getAttribute('data-del')];
+        if (!(await confirmDialog({ title: 'Delete ' + i.name + '?', message: 'This custom industry is removed from the catalog.', confirmLabel: 'Delete' }))) return;
+        try { await busy(b, function () { return api('/api/super-admin/industries/' + encodeURIComponent(i.key), { method: 'DELETE' }); }); toast('Industry deleted'); reload(); }
+        catch (err) { toast(err.message, 'error'); }
+      };
+    });
+  }
   async function viewFlags(root) {
     root.innerHTML = header('Feature flags', 'Global switches for product features, scraping platforms, maintenance and notifications.', adminLink('features', 'Platform console features')) + '<div id="ffBody"></div>';
     await flagsEditor($('#ffBody', root), ['features', 'platforms', 'maintenance']);
@@ -2761,7 +2844,7 @@
     ['Customers', [['organizations', 'Organizations', 'org'], ['admins', 'Admins', 'shield'], ['users', 'Users', 'users'], ['demo', 'Demo Management', 'gift', 'demo'], ['support', 'Support', 'msg', 'support']]],
     ['Revenue', [['plans', 'Plans', 'layers'], ['pricing', 'Pricing', 'tag'], ['subscriptions', 'Subscriptions', 'repeat', 'queue'], ['payments', 'Payments', 'card'], ['tokens', 'Tokens & Usage', 'coin']]],
     ['LeadAI Operations', [['ops/agent', 'URL Search Agent', 'bolt'], ['ops/searches', 'Searches', 'search'], ['ops/jobs', 'Apify Jobs', 'cpu'], ['/admin#/pages', 'Pages', 'file'], ['/admin#/posts', 'Posts', 'msg'], ['/admin#/ci', 'Comments', 'msg'], ['ops/leads', 'Leads', 'star']]],
-    ['Intelligence', [['ai', 'AI Management', 'brain'], ['analytics', 'Analytics', 'chart']]],
+    ['Intelligence', [['ai', 'AI Management', 'brain'], ['industries', 'Industries', 'layers'], ['analytics', 'Analytics', 'chart']]],
     ['Governance', [['notifications', 'Notifications', 'bell', 'notif'], ['audit', 'Audit Logs', 'list'], ['security', 'Security Center', 'lock'], ['roles', 'Roles & Permissions', 'key']]],
     ['Platform', [['website', 'Website / CMS', 'globe'], ['integrations', 'Integrations', 'plug'], ['health', 'System Health', 'heart'], ['flags', 'Feature Flags', 'flag'], ['reports', 'Reports / Exports', 'download'], ['/admin#/settings', 'Global Settings', 'gear'], ['maintenance', 'Maintenance', 'tool']]]
   ];
@@ -2771,7 +2854,7 @@
     subscriptions: [viewSubscriptions, 'Subscriptions'], payments: [viewPayments, 'Payments'], tokens: [viewTokens, 'Tokens & Usage'],
     'ops/agent': [viewOpsAgent, 'URL Search Agent'], 'ops/searches': [viewOpsSearches, 'Searches'], 'ops/jobs': [viewOpsJobs, 'Apify Jobs'],
     'ops/leads': [viewOpsLeads, 'Leads'], 'ops/chain': [null, 'Investigation', viewChain],
-    ai: [viewAI, 'AI Management'], analytics: [viewAnalytics, 'Analytics'], notifications: [viewNotifications, 'Notifications'],
+    ai: [viewAI, 'AI Management'], industries: [viewIndustries, 'Industries'], analytics: [viewAnalytics, 'Analytics'], notifications: [viewNotifications, 'Notifications'],
     audit: [viewAudit, 'Audit Logs'], security: [viewSecurity, 'Security Center'], roles: [viewRoles, 'Roles & Permissions'],
     website: [viewWebsite, 'Website / CMS'], cms: [viewWebsite, 'Website / CMS'], support: [viewSupport, 'Support', viewSupportTicket], integrations: [viewIntegrations, 'Integrations'], health: [viewHealth, 'System Health'],
     flags: [viewFlags, 'Feature Flags'], reports: [viewReports, 'Reports / Exports'], maintenance: [viewMaintenance, 'Maintenance']

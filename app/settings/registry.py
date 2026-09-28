@@ -240,6 +240,11 @@ SETTINGS: List[SettingSpec] = [
        label="Gemini model", placeholder="gemini-2.5-flash"),
     _s("ai.temperature", "ai", "Gemini engine", "float",
        label="Temperature", min=0, max=2),
+    _s("business.default_industry", "ai", "Business context", "str",
+       label="Default industry key",
+       description="Industry used for organizations that chose none "
+                   "(managed in Super Admin → Industries; unknown keys fall back to 'general').",
+       placeholder="general"),
     _s("scoring.confidence_weight", "ai", "Lead scoring", "int",
        label="Confidence weight", min=0, max=100),
     _s("scoring.priority_weight", "ai", "Lead scoring", "int",

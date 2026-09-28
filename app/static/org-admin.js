@@ -790,9 +790,10 @@
 
   // ── Organization ───────────────────────────────────────────────────
   ROUTES.organization = {
-    title: (p) => 'Organization · ' + ({ branding: 'Branding', settings: 'Settings' }[p[1]] || 'Profile'),
+    title: (p) => 'Organization · ' + ({ branding: 'Branding', settings: 'Settings', business: 'Business profile' }[p[1]] || 'Profile'),
     async render(v) {
-      const tab = ['profile', 'branding', 'settings'].indexOf(v.parts[1]) >= 0 ? v.parts[1] : 'profile';
+      const tab = ['profile', 'business', 'branding', 'settings'].indexOf(v.parts[1]) >= 0 ? v.parts[1] : 'profile';
+      if (tab === 'business') return renderBusinessProfile(v);
       const org = await getOrg(true);
       if (!v.alive()) return;
       const editable = can('settings.manage');
@@ -805,7 +806,7 @@
         if (org.timezone && tzs.indexOf(org.timezone) < 0) tzs.unshift(org.timezone);
         body = `<form class="oa-card oa-form" data-form novalidate><div class="oa-form-grid">
           ${fld('name', 'Organization name', org.name, 'text', ro, 'required maxlength="120"')}
-          ${fld('industry', 'Industry', org.industry, 'text', ro, 'maxlength="120" placeholder="e.g. Real estate"')}
+          <div class="oa-field"><span class="oa-label">Industry</span><div class="oa-small" style="padding:10px 0">${esc(org.industry_name || org.industry || 'General / Any business')} · <a class="oa-link" href="#organization/business">Business profile →</a></div></div>
           ${fld('website', 'Website', org.website, 'url', ro, 'placeholder="https://example.com"')}
           ${fld('logo_url', 'Logo URL', org.logo_url, 'url', ro, 'placeholder="https://…/logo.png"')}
           ${fld('contact_email', 'Contact email', org.contact_email, 'email', ro, '')}
@@ -857,7 +858,7 @@
         </form>`;
       }
       v.el.innerHTML = head('Organization', 'Your organization profile, workspace branding and settings.') +
-        tabs([['#organization/profile', 'Profile'], ['#organization/branding', 'Branding'], ['#organization/settings', 'Settings']], '#organization/' + tab) + body;
+        tabs(ORG_TABS, '#organization/' + tab) + body;
       const form = $('[data-form]', v.el);
       liveValidate(form);
       if (tab === 'branding') {
@@ -881,7 +882,7 @@
           if (!f.name.value.trim()) return bad('name', 'Organization name is required.');
           for (const u of ['website', 'logo_url']) if (f[u].value.trim() && !safeUrl(f[u].value.trim())) return bad(u, 'Enter a full http(s):// URL.');
           if (f.contact_email.value.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.contact_email.value.trim())) return bad('contact_email', 'Enter a valid email.');
-          ['name', 'industry', 'website', 'logo_url', 'contact_email', 'contact_phone', 'country', 'timezone', 'description'].forEach(k => { payload[k] = f[k].value.trim(); });
+          ['name', 'website', 'logo_url', 'contact_email', 'contact_phone', 'country', 'timezone', 'description'].forEach(k => { payload[k] = f[k].value.trim(); });
         } else if (tab === 'branding') {
           if (f.logo_url.value.trim() && !safeUrl(f.logo_url.value.trim())) return bad('logo_url', 'Enter a full http(s):// URL.');
           for (const c of ['primary_color', 'accent_color']) if (!/^#[0-9a-f]{6}$/i.test(f[c].value.trim())) return bad(c, 'Use a #RRGGBB colour.');
@@ -909,6 +910,43 @@
       });
     },
   };
+  const ORG_TABS = [['#organization/profile', 'Profile'], ['#organization/business', 'Business profile'], ['#organization/branding', 'Branding'], ['#organization/settings', 'Settings']];
+  // Business profile: the industry and business description that LeadAI's
+  // lead analysis (AI prompt, rule vocabulary, optional comment filter) uses.
+  async function renderBusinessProfile(v) {
+    const d = await api('/api/org-admin/business-profile'); if (!v.alive()) return;
+    const edit = d.can_edit, ro = edit ? '' : 'disabled', p = d.profile || {};
+    const byKey = Object.fromEntries(d.industries.map(i => [i.key, i]));
+    const area = (name, lbl, max, ph, hint) => `<div class="oa-field span-2"><label for="f-${name}">${esc(lbl)}</label><textarea class="form-textarea" id="f-${name}" name="${name}" rows="2" maxlength="${max}" placeholder="${attr(ph)}" ${ro}>${esc(p[name] || '')}</textarea>${hint ? `<span class="oa-hint">${esc(hint)}</span>` : ''}</div>`;
+    v.el.innerHTML = head('Organization', 'Your organization profile, workspace branding and settings.') + tabs(ORG_TABS, '#organization/business') +
+      `<div class="oa-note">${ico('info')}<span>LeadAI works for any business. Your industry and description tell the lead AI what counts as a real lead for <b>you</b> — every new search in your organization uses them.</span></div>
+      <form class="oa-card oa-form" data-form novalidate><div class="oa-form-grid">
+        <div class="oa-field"><label for="f-industry">Industry</label><select class="form-select" id="f-industry" name="industry" ${ro}>${selectOpts(d.industries.map(i => [i.key, (i.icon ? i.icon + ' ' : '') + i.name]), d.industry)}</select><span class="oa-hint" data-ind-desc></span></div>
+        ${fld('custom_industry', 'Industry label (optional)', p.custom_industry, 'text', ro, 'maxlength="80" placeholder="e.g. Organic skincare brand"', 'Your own name for your niche; shown to the AI instead of the industry name.')}
+        ${area('description', 'What your business does', 600, 'e.g. We are a used-car dealership in Pune selling certified pre-owned SUVs and sedans.')}
+        ${area('offerings', 'Products or services you sell', 600, 'e.g. Pre-owned cars, car loans, exchange, extended warranty')}
+        ${area('target_customers', 'Ideal customers', 400, 'e.g. Families and first-time buyers in Pune with a budget of 4–12 lakh')}
+        ${area('lead_criteria', 'What makes a qualified lead', 600, 'e.g. Asks for price, EMI, test drive or exchange value, or shares a phone number', 'Leave empty to use the industry default shown below.')}
+        <div class="oa-field span-2"><span class="oa-label" id="rt-l">Extra requirement terms <span class="optional">(optional)</span></span><div class="oa-chips" data-chips="terms" aria-labelledby="rt-l"></div><span class="oa-hint">Words your customers use for what they want (product names, models, services). They help lead detection even without AI.</span></div>
+        <div class="oa-field span-2">${switchRow('filter_by_industry', 'Only analyse comments relevant to my industry', 'When ON and you have no custom lead keywords, comments are pre-filtered by your industry\'s keywords plus universal buying-intent phrases before AI analysis (saves AI usage). When OFF, every comment is analysed.', d.filter_by_industry, !edit)}</div>
+      </div>
+      <div class="oa-card" style="margin-top:14px;background:var(--surface-2,transparent)"><div class="oa-card-head"><div class="oa-card-title">What the lead AI will be told</div></div><p class="oa-small" data-preview style="white-space:pre-wrap">${esc(d.ai_context_preview)}</p><p class="oa-hint">Saved changes apply to new searches. Industry default for a qualified lead: <span data-guidance>${esc((byKey[d.industry] || {}).ai_guidance || '')}</span></p></div>
+      ${edit ? '<div class="oa-form-foot"><button type="submit" class="btn btn-primary">Save business profile</button></div>' : readonlyNote()}</form>`;
+    const form = $('[data-form]', v.el);
+    const terms = chipEditor($('[data-chips="terms"]', form), p.requirement_terms || [], !edit);
+    const syncInd = () => { const i = byKey[form.industry.value] || {}; $('[data-ind-desc]', form).textContent = i.description || ''; $('[data-guidance]', form).textContent = i.ai_guidance || ''; };
+    form.industry.addEventListener('change', syncInd); syncInd();
+    if (!edit) return;
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = form.elements, btn = $('button[type=submit]', form);
+      const body = { industry: f.industry.value, filter_by_industry: f.filter_by_industry.checked, requirement_terms: terms.values() };
+      ['custom_industry', 'description', 'offerings', 'target_customers', 'lead_criteria'].forEach(k => { body[k] = f[k].value.trim(); });
+      busy(btn, true, 'Saving…');
+      try { const r = await api('/api/org-admin/business-profile', { method: 'PUT', body }); toast(r.message, 'success'); await getOrg(true); route(); }
+      catch (err) { toast(err.message, 'error'); busy(btn, false); }
+    });
+  }
   function fld(name, lbl, val, type, ro, extra, hint) {
     return `<div class="oa-field"><label for="f-${attr(name)}">${esc(lbl)}</label><input class="form-input" id="f-${attr(name)}" name="${attr(name)}" type="${attr(type)}" value="${attr(val == null ? '' : val)}" ${ro || ''} ${extra || ''} aria-describedby="e-${attr(name)}"/>${hint ? `<span class="oa-hint">${esc(hint)}</span>` : ''}<span class="oa-err" id="e-${attr(name)}" role="alert"></span></div>`;
   }
@@ -1476,13 +1514,13 @@
       const g = d.global_rule;
       v.el.innerHTML = head('Lead rules', 'Keywords that decide which comments are analysed as potential leads for your organization.') +
         tabs([['#leads', 'All leads'], ['#leads/assigned', 'Assigned'], ['#pipeline', 'Lifecycle'], ['#rules', 'Rules']], '#rules') +
-        `<div class="alert ${d.using_defaults ? 'alert-info' : 'alert-success'}" style="margin-bottom:16px">${ico('info', 'alert-icon')}<div class="alert-body">${d.using_defaults ? `<div class="alert-title">Using LeadAI's global defaults</div>${g ? 'Default rule “' + esc(g.name || 'Active rule') + '”' + (g.include_keywords.length ? ': ' + esc(g.include_keywords.slice(0, 15).join(', ')) + (g.include_keywords.length > 15 ? '…' : '') : '') : 'No global filter is active, so every comment is analysed.'} Add your own keywords below to tailor lead detection to your business.` : '<div class="alert-title">Your organization\'s keywords are active</div>New searches only analyse comments containing at least one of these keywords (plus comments with contact details). Remove all keywords to go back to the global defaults.'}</div></div>
+        `<div class="alert ${d.using_defaults ? 'alert-info' : 'alert-success'}" style="margin-bottom:16px">${ico('info', 'alert-icon')}<div class="alert-body">${d.using_defaults ? `<div class="alert-title">Using LeadAI's global defaults</div>${g ? 'Default rule “' + esc(g.name || 'Active rule') + '”' + (g.include_keywords.length ? ': ' + esc(g.include_keywords.slice(0, 15).join(', ')) + (g.include_keywords.length > 15 ? '…' : '') : '') : 'No global filter is active, so every comment is analysed.'} Add your own keywords below to tailor lead detection to your business.${d.filter_by_industry ? ' Industry filter is ON: comments are pre-filtered for ' + esc(d.industry.name) + '.' : ''} Your industry (${esc(d.industry.name)}) is set in <a class="oa-link" href="#organization/business">Business profile</a>.` : '<div class="alert-title">Your organization\'s keywords are active</div>New searches only analyse comments containing at least one of these keywords (plus comments with contact details). Remove all keywords to go back to the global defaults.'}</div></div>
         <div class="oa-grid oa-grid-2"><form class="oa-card oa-form" data-f>
-          <div class="oa-field"><span class="oa-label" id="kw-l">Lead keywords</span><div class="oa-chips" data-chips="keywords" aria-labelledby="kw-l"></div><span class="oa-hint">Press Enter or comma to add. Example: property, buy, rent, house, apartment, price, interested.</span></div>
+          <div class="oa-field"><span class="oa-label" id="kw-l">Lead keywords</span><div class="oa-chips" data-chips="keywords" aria-labelledby="kw-l"></div><span class="oa-hint">Press Enter or comma to add. Use the words your customers write, e.g. price, demo, test drive, admission, booking, interested.${edit && d.industry && d.industry.suggested_keywords.length ? ` <button type="button" class="oa-link" data-suggest style="background:none;border:0;padding:0;cursor:pointer">Add suggestions for ${esc(d.industry.name)}</button>` : ''}</span></div>
           <div class="oa-field"><span class="oa-label" id="ex-l">Exclude keywords <span class="optional">(optional)</span></span><div class="oa-chips" data-chips="exclude" aria-labelledby="ex-l"></div><span class="oa-hint">Comments containing any of these are never treated as leads (e.g. spam, giveaway).</span></div>
           ${edit ? '<div class="oa-form-foot"><button type="button" class="btn btn-ghost" data-clear>Use global defaults</button><button type="submit" class="btn btn-primary">Save rules</button></div>' : readonlyNote()}
         </form>
-        <form class="oa-card oa-form" data-test><div class="oa-card-head"><div class="oa-card-title">Test a comment</div></div><label class="sr-only" for="rt">Comment text</label><textarea class="form-textarea" id="rt" name="text" rows="4" maxlength="2000" placeholder="e.g. Is this apartment still available? What's the price?" style="min-height:100px"></textarea><div class="oa-actions" style="justify-content:flex-end"><button type="submit" class="btn btn-secondary">Test against saved rules</button></div><div data-res aria-live="polite"></div></form></div>`;
+        <form class="oa-card oa-form" data-test><div class="oa-card-head"><div class="oa-card-title">Test a comment</div></div><label class="sr-only" for="rt">Comment text</label><textarea class="form-textarea" id="rt" name="text" rows="4" maxlength="2000" placeholder="e.g. Is this still available? What's the price and how do I book?" style="min-height:100px"></textarea><div class="oa-actions" style="justify-content:flex-end"><button type="submit" class="btn btn-secondary">Test against saved rules</button></div><div data-res aria-live="polite"></div></form></div>`;
       const chips = {};
       $$('[data-chips]', v.el).forEach(box => { chips[box.dataset.chips] = chipEditor(box, box.dataset.chips === 'keywords' ? d.keywords : d.exclude_keywords, !edit, box.dataset.chips === 'exclude'); });
       const f = $('[data-f]', v.el);
@@ -1492,6 +1530,8 @@
         catch (e) { toast(e.message, 'error'); busy(btn, false); }
       };
       if (edit) {
+        const sg = $('[data-suggest]', f);
+        if (sg) sg.onclick = () => chips.keywords.addMany(d.industry.suggested_keywords);
         f.onsubmit = (e) => { e.preventDefault(); save(chips.keywords.values(), chips.exclude.values(), $('button[type=submit]', f)); };
         $('[data-clear]', f).onclick = async (e) => { if (await confirmDialog('Use global defaults?', 'Your organization keywords are removed and LeadAI\'s default lead detection applies.', { confirm: 'Use defaults' })) save([], [], e.currentTarget); };
       }
@@ -1527,7 +1567,8 @@
     };
     box.addEventListener('click', (e) => { const b = e.target.closest('[data-rm]'); if (b) { vals.splice(Number(b.dataset.rm), 1); draw(); const i = $('input', box); if (i) i.focus(); } else if (e.target === box) { const i = $('input', box); if (i) i.focus(); } });
     draw();
-    return { values: () => { const i = $('input', box); if (i && i.value.trim()) add(i.value, true); return vals.slice(); } };
+    return { values: () => { const i = $('input', box); if (i && i.value.trim()) add(i.value, true); return vals.slice(); },
+      addMany: (arr) => { (arr || []).forEach(x => add(x, true)); draw(); } };
   }
 
   // ── Apify ──────────────────────────────────────────────────────────

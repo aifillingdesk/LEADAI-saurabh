@@ -213,11 +213,11 @@ def _panel_scope_user(email: str, name: str, role: str) -> Dict[str, Any]:
 def verify_admin_login(email: str, password: str) -> Optional[Dict[str, Any]]:
     """Constant-time check for the ADMIN PORTAL login (scope "admin").
 
-    Accounts: the .env ``panel_admin_email`` is always a recovery
-    super-admin; additional managers/viewers live in the ``admin_users``
-    collection (managed from the admin Security page). A DB record with the
-    same email as the env admin takes precedence so a password set in the
-    panel works while the env password stays valid as a fallback.
+    Accounts: the one Super Admin is SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
+    and for that email the environment is the only source of truth. The
+    deprecated PANEL_ADMIN_* pair is honoured only when SUPERADMIN_* is not
+    set. Platform managers/viewers live in the ``admin_users`` collection
+    (managed from the admin Security page) and can never be Super Admin.
 
     Returns the user dict on success, None otherwise. All comparisons use
     secure verification. Supports automatic migration from legacy SHA-256.

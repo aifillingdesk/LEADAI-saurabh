@@ -32,6 +32,7 @@ sessions/password (/api/auth/*).
   POST /leads/bulk                    assign | status | priority for many leads (one audit)
   POST /members/bulk                  suspend | restore | deactivate many members (one audit)
   GET/PUT /lead-rules, POST /lead-rules/test   org lead keywords
+  GET/PUT /business-profile           industry + business description used by lead AI
   GET  /data/{pages|posts|comments}   org-wide scraped data
   GET  /apify/summary, /apify/jobs, /apify/runs   Apify activity (view only)
   GET  /analytics                     charts data for a date range
@@ -1183,9 +1184,15 @@ async def get_lead_rules(ctx: TenantContext = Depends(require_portal(P.SETTINGS_
     db = _db()
     settings = (await _org_doc(db, ctx)).get("settings") or {}
     kws = settings.get("lead_keywords") or []
+    import asyncio
+    from app.pipeline.business_context import org_business_context
+    biz = await asyncio.to_thread(org_business_context, ctx.organization_id)
     return {"success": True, "keywords": kws,
             "exclude_keywords": settings.get("lead_exclude_keywords") or [],
             "using_defaults": not kws, "global_rule": _global_rule_summary(),
+            "filter_by_industry": bool(settings.get("filter_by_industry")),
+            "industry": {"key": biz["industry_key"], "name": biz["industry_name"],
+                         "suggested_keywords": biz["default_keywords"]},
             "can_edit": P.SETTINGS_MANAGE in ctx.permissions}
 
 
@@ -1223,6 +1230,12 @@ async def test_lead_rules(body: LeadRulesTest, ctx: TenantContext = Depends(requ
         return {"success": True, "source": "organization", "matched": R.matches(text, kws, exclude),
                 "matched_keywords": res.get("matched_keywords", []),
                 "excluded_keywords": res.get("excluded_keywords", [])}
+    rule = R.org_rule(ctx.organization_id)  # the industry filter, when enabled
+    if rule:
+        res = evaluate_rule(text, rule)
+        return {"success": True, "source": "industry", "matched": res.get("status") != "NOT_MATCHED",
+                "matched_keywords": res.get("matched_keywords", []),
+                "excluded_keywords": res.get("excluded_keywords", [])}
     g = _global_rule_summary()
     if not g:
         return {"success": True, "source": "none", "matched": True, "matched_keywords": [],
@@ -1232,6 +1245,75 @@ async def test_lead_rules(body: LeadRulesTest, ctx: TenantContext = Depends(requ
     return {"success": True, "source": "global", "matched": res.get("status") != "NOT_MATCHED",
             "matched_keywords": res.get("matched_keywords", []),
             "excluded_keywords": res.get("excluded_keywords", [])}
+
+
+# ── Business profile (industry context for lead analysis) ───────────────────
+
+class BusinessProfileBody(BaseModel):
+    industry: str
+    custom_industry: Optional[str] = ""
+    description: Optional[str] = ""
+    offerings: Optional[str] = ""
+    target_customers: Optional[str] = ""
+    lead_criteria: Optional[str] = ""
+    requirement_terms: List[str] = []
+    filter_by_industry: bool = False
+
+
+def _business_profile_payload(org: Dict[str, Any], ctx: TenantContext) -> Dict[str, Any]:
+    from app.pipeline import business_context as bc
+    settings = org.get("settings") or {}
+    effective = bc.build_context(org)
+    return {"success": True,
+            "industry": effective["industry_key"],
+            "profile": {**bc.clean_profile(settings.get("business_profile") or {}),
+                        "custom_industry": effective["custom_industry"]},
+            "filter_by_industry": bool(settings.get("filter_by_industry")),
+            "effective": {k: effective[k] for k in (
+                "industry_key", "industry_name", "category_keys", "default_keywords",
+                "ai_guidance")},
+            "ai_context_preview": bc.context_prompt_text(effective),
+            "industries": [{k: i[k] for k in ("key", "name", "icon", "description",
+                                               "default_keywords", "ai_guidance")}
+                           for i in bc.list_industries()],
+            "can_edit": P.SETTINGS_MANAGE in ctx.permissions}
+
+
+@router.get("/business-profile")
+async def get_business_profile(ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW))):
+    import asyncio
+    org = await _org_doc(_db(), ctx)
+    return await asyncio.to_thread(_business_profile_payload, org, ctx)
+
+
+@router.put("/business-profile")
+async def put_business_profile(body: BusinessProfileBody, request: Request,
+                               ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE))):
+    """Set the organization's industry and business description. Every new
+    search's lead analysis (AI prompt, rule vocabulary and, when enabled, the
+    comment filter) uses it."""
+    import asyncio
+    from app.pipeline import business_context as bc
+    industry = await asyncio.to_thread(bc.get_industry, body.industry)
+    if not industry or not industry["enabled"]:
+        raise HTTPException(status_code=422, detail="Choose an industry from the list")
+    profile = bc.clean_profile(body.model_dump())
+    db = _db()
+    before = await _org_doc(db, ctx)
+    await db.organizations.update_one({"_id": ObjectId(ctx.organization_id)}, {"$set": {
+        "industry": industry["key"],
+        "settings.business_profile": profile,
+        "settings.filter_by_industry": bool(body.filter_by_industry),
+        "updated_at": utcnow()}})
+    await _audit(ctx, request, "business_profile.updated", "organization",
+                 resource_type="organization", resource_id=ctx.organization_id,
+                 details={"before": {"industry": before.get("industry"),
+                                     "filter_by_industry": bool((before.get("settings") or {}).get("filter_by_industry"))},
+                          "after": {"industry": industry["key"],
+                                    "filter_by_industry": bool(body.filter_by_industry)}})
+    org = await _org_doc(db, ctx)
+    return {**await asyncio.to_thread(_business_profile_payload, org, ctx),
+            "message": f"Business profile saved — lead analysis now uses {industry['name']}."}
 
 
 # ── Org-wide scraped data (pages / posts / comments) ────────────────────────

@@ -148,7 +148,8 @@ def render_template(template: str, context: Dict[str, Any]) -> str:
     for key, value in context.items():
         pattern = r"\{\{\s*" + re.escape(key) + r"\s*\}\}"
         val_str = "" if value is None else str(value)
-        result = re.sub(pattern, lambda m, v=val_str: v.replace("\\", "\\\\"), result)
+        # a replacement FUNCTION is used literally (no backslash processing)
+        result = re.sub(pattern, lambda m, v=val_str: v, result)
     return result
 
 

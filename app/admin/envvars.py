@@ -152,7 +152,9 @@ ENVVAR_REGISTRY: list[EnvVarDef] = [
     {"name": "BUSINESS_DOMAIN", "kind": "str", "secret": False, "restart": False,
      "settings_attr": None, "env_only": True, "default": "",
      "group": "Server", "description": "Your business domain, stored for "
-                                      "reference (not consumed by the app)."},
+                                      "reference (not consumed by the app). "
+                                      "Lead analysis uses each organization's "
+                                      "industry / business profile instead."},
     # Security hardening
     {"name": "ALLOWED_ORIGINS", "kind": "str", "secret": False, "restart": True,
      "settings_attr": "allowed_origins", "default": "",

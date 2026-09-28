@@ -59,7 +59,8 @@ def validate_password(pw: str) -> None:
 
 def create_demo_request(*, name: str, email: str, password: str, company: str,
                         phone: Optional[str] = None, message: Optional[str] = None,
-                        ip: Optional[str] = None, source: str = "website") -> Dict[str, Any]:
+                        ip: Optional[str] = None, source: str = "website",
+                        industry: Optional[str] = None) -> Dict[str, Any]:
     db = _db()
     email = (email or "").strip().lower()
     name = (name or "").strip()
@@ -74,6 +75,9 @@ def create_demo_request(*, name: str, email: str, password: str, company: str,
     if db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="An account with this email already exists")
 
+    # the business's industry (catalog key; other text kept as a custom label)
+    from app.pipeline.business_context import clean_text, resolve_industry_key
+    industry = resolve_industry_key(industry, db) or clean_text(industry, 80) or None
     cfg = get_demo_config()
     now = utcnow()
     base_slug = _slugify(company)
@@ -83,6 +87,7 @@ def create_demo_request(*, name: str, email: str, password: str, company: str,
 
     org_id = str(db.organizations.insert_one({
         "name": company, "slug": slug, "status": "pending", "plan_id": None,
+        "industry": industry,
         "admin_portal_enabled": False,
         "timezone": "UTC", "currency": "USD",
         "settings": {"shared_workspace": False},
@@ -106,6 +111,7 @@ def create_demo_request(*, name: str, email: str, password: str, company: str,
     req = {
         "organization_id": org_id, "user_id": user_id, "name": name, "email": email,
         "phone": (phone or "").strip() or None, "company": company,
+        "industry": industry,
         "message": (message or "").strip()[:2000] or None,
         "status": "pending", "source": source, "ip": ip,
         "requested_config": cfg,

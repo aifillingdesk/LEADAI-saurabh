@@ -40,6 +40,12 @@ Nothing here duplicates a path of those two routers.
     GET  /ai/overview | /ai/prompts | /ai/models
     POST /ai/prompts | /ai/prompts/{id}/activate | /ai/prompts/{id}/rollback
     PATCH /ai/models/{id}
+  Industries (business context for lead analysis)
+    GET  /industries                               catalog incl. disabled + organizations per industry
+    POST /industries                               add a custom industry
+    PATCH /industries/{key}                        edit / enable / disable (built-ins are overridden)
+    DELETE /industries/{key}                       custom only; built-in -> 409 (disable instead)
+    PUT  /industries/default                       platform default industry
   Reports
     GET  /reports                                  catalog + recent exports
     GET  /reports/{kind}.csv                       redacted CSV, every export audited
@@ -471,6 +477,7 @@ class OrgEditBody(BaseModel):
     currency: Optional[str] = None
     notes: Optional[str] = None
     admin_portal_enabled: Optional[bool] = None
+    industry: Optional[str] = None
 
 
 @router.patch("/organizations/{org_id}")
@@ -498,6 +505,13 @@ async def edit_organization(org_id: str, body: OrgEditBody, request: Request,
         updates["admin_notes"] = body.notes.strip()[:2000]
     if body.admin_portal_enabled is not None:
         updates["admin_portal_enabled"] = bool(body.admin_portal_enabled)
+    if body.industry is not None and body.industry != org.get("industry"):
+        import asyncio
+        from app.pipeline.business_context import get_industry
+        item = await asyncio.to_thread(get_industry, body.industry)
+        if not item or not item["enabled"]:
+            raise HTTPException(status_code=422, detail="Choose an enabled industry")
+        updates["industry"] = item["key"]
     if not updates:
         return {"success": True, "organization": _clean(org)}
     before = {k: org.get(k) for k in updates}
@@ -2015,3 +2029,135 @@ async def support_ticket_status(ticket_id: str, body: TicketStatusBody, request:
                  details={"before": t.get("status"), "after": body.status, "reason": body.reason[:300]},
                  **_meta(request))
     return {"success": True, "ticket": _ticket(await db.support_tickets.find_one({"_id": t["_id"]}), full=True)}
+
+
+# ── Industries ─────────────────────────────────────────────────────────────
+
+class IndustryBody(BaseModel):
+    key: Optional[str] = None
+    name: Optional[str] = None
+    icon: Optional[str] = None
+    description: Optional[str] = None
+    ai_guidance: Optional[str] = None
+    category_keys: Optional[List[str]] = None
+    default_keywords: Optional[List[str]] = None
+    requirement_terms: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+
+class DefaultIndustryBody(BaseModel):
+    industry: str
+
+
+def _industry_catalog() -> Dict[str, Any]:
+    from app.admin.settings import get_str
+    from app.db.mongo import get_sync_db
+    from app.pipeline import business_context as bc
+    from app.pipeline.comment_filter import CATEGORIES
+    db = get_sync_db()
+    usage = bc.industry_usage(db)
+    return {"success": True,
+            "industries": [{**i, "organizations": usage.get(i["key"], 0)}
+                           for i in bc.list_industries(db, include_disabled=True)],
+            "custom_label_organizations": usage.get("custom", 0),
+            "default_industry": get_str(bc.DEFAULT_SETTING, bc.GENERAL) or bc.GENERAL,
+            "comment_categories": [{"key": k, "name": v["name"], "icon": v.get("icon", "")}
+                                   for k, v in CATEGORIES.items()]}
+
+
+def _industry_fields(body: IndustryBody, *, partial: bool) -> Dict[str, Any]:
+    from app.pipeline.business_context import clean_industry_payload
+    try:
+        return clean_industry_payload(body.model_dump(exclude_unset=True, exclude={"key"}),
+                                      partial=partial)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/industries")
+async def list_industries(ctx: TenantContext = Depends(SUPER)):
+    import asyncio
+    return await asyncio.to_thread(_industry_catalog)
+
+
+@router.post("/industries")
+async def create_industry(body: IndustryBody, request: Request, ctx: TenantContext = Depends(SUPER)):
+    import asyncio
+    from app.pipeline import business_context as bc
+    fields = _industry_fields(body, partial=False)
+    key = (body.key or re.sub(r"[^a-z0-9]+", "_", fields["name"].lower())).strip("_")[:40]
+    if not bc.KEY_RE.match(key):
+        raise HTTPException(status_code=422, detail="Key must be 2-40 lowercase letters, digits or _")
+    if await asyncio.to_thread(bc.get_industry, key):
+        raise HTTPException(status_code=409, detail=f"Industry '{key}' already exists")
+    doc = {"key": key, "enabled": True, "category_keys": [], "default_keywords": [],
+           "requirement_terms": [], "icon": "🏷️", "description": "", "ai_guidance": "",
+           **fields, "created_at": utcnow(), "updated_at": utcnow(), "created_by": ctx.email}
+    await _db()[bc.COLLECTION].insert_one(doc)
+    await aaudit("industry.created", "settings", user=ctx.audit_user(), resource_type="industry",
+                 resource_id=key, details={"name": doc["name"]}, **_meta(request))
+    return {"success": True, "industry": await asyncio.to_thread(bc.get_industry, key)}
+
+
+@router.put("/industries/default")
+async def set_default_industry(body: DefaultIndustryBody, request: Request,
+                               ctx: TenantContext = Depends(SUPER)):
+    import asyncio
+    from app.admin.settings import get_str, set_setting
+    from app.pipeline import business_context as bc
+    item = await asyncio.to_thread(bc.get_industry, body.industry)
+    if not item or not item["enabled"]:
+        raise HTTPException(status_code=422, detail="Choose an enabled industry")
+    before = await asyncio.to_thread(get_str, bc.DEFAULT_SETTING, bc.GENERAL)
+    await asyncio.to_thread(set_setting, bc.DEFAULT_SETTING, item["key"], ctx.email)
+    await aaudit("industry.default_changed", "settings", user=ctx.audit_user(),
+                 resource_type="industry", resource_id=item["key"],
+                 details={"before": before, "after": item["key"]}, **_meta(request))
+    return {"success": True, "default_industry": item["key"]}
+
+
+@router.patch("/industries/{key}")
+async def update_industry(key: str, body: IndustryBody, request: Request,
+                          ctx: TenantContext = Depends(SUPER)):
+    import asyncio
+    from app.pipeline import business_context as bc
+    current = await asyncio.to_thread(bc.get_industry, key)
+    if not current:
+        raise HTTPException(status_code=404, detail="Industry not found")
+    fields = _industry_fields(body, partial=True)
+    if key == bc.GENERAL and fields.get("enabled") is False:
+        raise HTTPException(status_code=409, detail="The General industry is the fallback and cannot be disabled")
+    if fields.get("enabled") is False:
+        from app.admin.settings import get_str
+        if (await asyncio.to_thread(get_str, bc.DEFAULT_SETTING, bc.GENERAL)) == key:
+            raise HTTPException(status_code=409, detail="Choose another default industry before disabling this one")
+    if not fields:
+        return {"success": True, "industry": current}
+    await _db()[bc.COLLECTION].update_one(
+        {"key": key}, {"$set": {**fields, "updated_at": utcnow(), "updated_by": ctx.email},
+                       "$setOnInsert": {"key": key, "created_at": utcnow()}}, upsert=True)
+    await aaudit("industry.updated", "settings", user=ctx.audit_user(), resource_type="industry",
+                 resource_id=key, details={"before": {k: current.get(k) for k in fields},
+                                           "after": fields, "builtin": current["builtin"]},
+                 **_meta(request))
+    return {"success": True, "industry": await asyncio.to_thread(bc.get_industry, key)}
+
+
+@router.delete("/industries/{key}")
+async def delete_industry(key: str, request: Request, ctx: TenantContext = Depends(SUPER)):
+    import asyncio
+    from app.pipeline import business_context as bc
+    current = await asyncio.to_thread(bc.get_industry, key)
+    if not current:
+        raise HTTPException(status_code=404, detail="Industry not found")
+    if current["builtin"]:
+        raise HTTPException(status_code=409, detail="Built-in industries cannot be deleted — disable it instead")
+    from app.db.mongo import get_sync_db
+    in_use = (await asyncio.to_thread(bc.industry_usage, get_sync_db())).get(key, 0)
+    if in_use:
+        raise HTTPException(status_code=409,
+                            detail=f"{in_use} organization(s) use this industry — disable it instead")
+    await _db()[bc.COLLECTION].delete_one({"key": key})
+    await aaudit("industry.deleted", "settings", user=ctx.audit_user(), resource_type="industry",
+                 resource_id=key, details={"name": current["name"]}, **_meta(request))
+    return {"success": True}

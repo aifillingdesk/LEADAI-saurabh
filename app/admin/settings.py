@@ -73,6 +73,10 @@ SETTING_DEFAULTS: Dict[str, Any] = {
     "ai.rule_fallback": True,
     "ai.max_calls_per_job": 500,
     "ai.temperature": 0.1,
+
+    # Business context: industry used for organizations that chose none
+    # (a key of app/pipeline/business_context.py; "general" = any business)
+    "business.default_industry": "general",
     "ai.model": settings.gemini_model or "gemini-2.5-flash",
 
     # Lead scoring — components of the deterministic comment_lead_score

@@ -3733,6 +3733,10 @@ async function checkAuth() {
   $("userChip").classList.remove("hidden");
   $("topbarWorkspaceName").textContent = user.organization_name || "Workspace";
   $("sidebarRole").textContent = ROLE_LABELS[user.org_role] || user.org_role || "";
+  // lead analysis uses the organization's industry (set by the org Admin)
+  const ind = user.industry || {};
+  $("industryHintName").textContent = ind.name || "";
+  $("industryHint").classList.toggle("hidden", !ind.name);
 
   const isAdmin = user.org_role === "owner" || user.org_role === "admin";
   const showAdminPortal = Boolean(user.admin_portal_enabled) && isAdmin;

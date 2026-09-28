@@ -1,15 +1,19 @@
 """
 Organization-level lead qualification rules.
 
-An organization Admin can set its own lead keywords (e.g. "property, buy,
-rent, house, apartment, price, interested") in the Admin Portal. They are
-stored on the organization document:
+An organization Admin can set its own lead keywords for its business (e.g.
+"test drive, on road price, emi" for a car dealer or "admission, fees,
+batch" for a coaching institute) in the Admin Portal. They are stored on the
+organization document:
 
     organizations.settings.lead_keywords          include keywords
     organizations.settings.lead_exclude_keywords  veto keywords (optional)
+    organizations.settings.filter_by_industry     filter by the org's industry
 
-When an organization has no keywords the pipeline falls back to the global
-defaults (the Super Admin's active comment-filter rule, or no filter).
+Precedence: the organization's keywords; otherwise, when "filter by
+industry" is on, the categories of its industry (business_context) plus the
+cross-industry intent presets; otherwise the global defaults (the Super
+Admin's active comment-filter rule, or no filter).
 
 Public API
   org_keywords(org_id)            -> list[str] | None   (None = use global defaults)
@@ -80,7 +84,7 @@ def org_rule(org_id: Any, db=None) -> Optional[Dict[str, Any]]:
     settings = _org_settings(org_id, db)
     include = _normalize(settings.get("lead_keywords"))
     if not include:
-        return None
+        return industry_rule(org_id, db) if settings.get("filter_by_industry") else None
     return {
         "_id": f"org:{org_id}",
         "name": "Organization lead rules",
@@ -90,6 +94,39 @@ def org_rule(org_id: Any, db=None) -> Optional[Dict[str, Any]]:
         "categories": [],
         "include_keywords": include,
         "exclude_keywords": _normalize(settings.get("lead_exclude_keywords")),
+        "match_mode": "any",
+        "group_operator": "and",
+        "groups": [],
+        "language": "all",
+        "detect_contacts": True,
+        "intent_type": "",
+        "organization_id": str(org_id),
+    }
+
+
+# presets that catch buying intent in every industry, so an industry filter
+# never drops "interested, price?" style comments
+INDUSTRY_FILTER_PRESETS = ["high_intent", "info_request"]
+
+
+def industry_rule(org_id: Any, db=None) -> Optional[Dict[str, Any]]:
+    """Comment-filter rule from the organization's industry: its comment
+    categories, its suggested keywords and own requirement terms, plus the
+    cross-industry intent presets; contact details always pass. None for the
+    general (any business) industry, which has nothing to narrow on."""
+    from app.pipeline.business_context import GENERAL, org_business_context
+    ctx = org_business_context(org_id, db)
+    if ctx["industry_key"] == GENERAL and not ctx["custom_terms"]:
+        return None
+    return {
+        "_id": f"org-industry:{org_id}",
+        "name": f"Industry: {ctx['industry_name']}",
+        "description": "Comments relevant to the organization's industry",
+        "platform": "all",
+        "business_category": ctx["industry_key"],
+        "categories": list(ctx["category_keys"]) + INDUSTRY_FILTER_PRESETS,
+        "include_keywords": _normalize(ctx["default_keywords"] + ctx["custom_terms"]),
+        "exclude_keywords": _normalize(_org_settings(org_id, db).get("lead_exclude_keywords")),
         "match_mode": "any",
         "group_operator": "and",
         "groups": [],

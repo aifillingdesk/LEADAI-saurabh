@@ -1,6 +1,6 @@
 # LeadAI v2.5.0 — AI-Orchestrated Social Lead Intelligence Platform
 
-An AI-powered **SaaS lead generation and management platform** that works from a **single social URL**: paste a Facebook page, Instagram profile, YouTube channel, or LinkedIn company link, and the platform fetches real data through **Apify** actors, drills into posts and comments, and uses a **rule-based + Google Gemini** pipeline to extract, qualify, and score high-intent leads — served through a FastAPI REST API with a browser dashboard, a full admin control center, and a public marketing website.
+An AI-powered, **industry-agnostic SaaS lead generation and management platform** for any legitimate business — real estate, automobiles, education, healthcare, finance, travel, hotels, restaurants, e-commerce, software/SaaS, agencies, professional services, construction, interior design, weddings, retail, manufacturing, B2B and more. It works from a **single social URL**: paste a Facebook page, Instagram profile, YouTube channel, or LinkedIn company link, and the platform fetches real data through **Apify** actors, drills into posts and comments, and uses a **rule-based + Google Gemini** pipeline to extract, qualify, and score high-intent leads — served through a FastAPI REST API with a browser dashboard, a full admin control center, and a public marketing website.
 
 Paste **`https://www.facebook.com/somepage`** (or an Instagram / YouTube / LinkedIn profile) and the platform:
 
@@ -10,6 +10,8 @@ Paste **`https://www.facebook.com/somepage`** (or an Instagram / YouTube / Linke
 4. Collects comments (Facebook, Instagram & LinkedIn) from qualifying posts
 5. AI-analyzes each comment for phone, email, WhatsApp, budget, requirement, urgency, and intent (buying / selling / rent / investment / other)
 6. Scores leads 0–100 with a deterministic rank, manages lead lifecycle (new → contacted → qualified → follow-up → converted / lost), and lets you export pages, posts, and leads as CSV
+
+Every organization chooses its **industry** and describes its business (Org Admin → Organization → Business profile). Lead analysis — the Gemini prompt, the rule-based vocabulary and the optional industry comment filter — always uses that organization's business context, so "a lead" means something different for a car dealer, a coaching institute or a SaaS company. See [Industries & business context](#industries--business-context).
 
 The detected platform (facebook / instagram / youtube / linkedin) is propagated end-to-end — storage, API responses, UI labels, report page, and CSV exports — so an Instagram search always looks like Instagram and is **never** mislabeled as Facebook.
 
@@ -59,7 +61,7 @@ The detected platform (facebook / instagram / youtube / linkedin) is propagated 
 
 ### The Problem
 
-Businesses that sell high-value products (real estate, automobiles, interior design, wedding services, etc.) need a constant stream of qualified buyers. Social media is full of buying signals — business pages post offers and interested people comment with phone numbers, budgets, and urgent requirements. Manually reading thousands of comments is impossible.
+Every business that sells a product or service — a car dealer, a coaching institute, a clinic, a SaaS company, a restaurant, a manufacturer, a real-estate developer — needs a constant stream of qualified buyers. Social media is full of buying signals — business pages post offers and interested people comment with phone numbers, budgets, and urgent requirements. Manually reading thousands of comments is impossible.
 
 ### What LeadAI Does
 
@@ -84,7 +86,26 @@ LeadAI automates the entire funnel from **a single social URL**:
 
 ### Who It Is For
 
-Sales teams, agencies, and lead-generation businesses that already know which pages/profiles matter and want qualified buyers/sellers from social-media conversations — especially around Indian markets.
+Sales teams, agencies, and lead-generation businesses in **any industry** that already know which pages/profiles matter and want qualified buyers from social-media conversations. Rule-based extraction understands English, Hinglish and Hindi, and budgets in ₹/lakh/crore as well as $, €, £, AED and SAR.
+
+### Industries & business context
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Industry catalog | `app/pipeline/business_context.py` (`BUILTIN_INDUSTRIES`) + `industries` collection | 22 built-in industries (General, Real Estate, Automobiles, Education, Healthcare, Finance, Travel, Hotels, Restaurants, E-commerce, Retail, Software/SaaS, Agencies, Professional Services, Construction, Interior Design, Events & Weddings, Home Services, Fitness & Beauty, Manufacturing, B2B Services, Recruitment). Each has suggested keywords, requirement terms, linked comment categories and "what a qualified lead is" guidance for the AI. |
+| Super Admin | `/superadmin#/industries` · `/api/super-admin/industries` | Add custom industries, edit or disable built-in ones (overrides are stored, code defaults stay), choose the platform default industry. All changes audited. |
+| Org Admin | `/org-admin#organization/business` · `/api/org-admin/business-profile` | Pick the industry and describe the business (what it does, offerings, ideal customers, what makes a qualified lead, extra requirement terms). Optional "only analyse comments relevant to my industry" filter. Audited. |
+| Signup | `/signup` (optional *Industry* field) | The chosen industry is stored on the pending organization. |
+| Users | User Portal search screen | Shows "Leads are analysed for your business: <industry>"; every search uses the organization's context automatically. |
+
+How the context is used for every post of a search (`analyze_comments_for_post`):
+
+1. **AI** — the business context is appended to the active prompt (whatever version is active) inside a delimited block marked as configuration data, never instructions, and is also sent as `business_category`. Gemini judges intent relative to *this* business.
+2. **Rules** — the offline stage uses the industry's requirement terms plus the organization's own terms (a car dealer's "suv", a school's "admission"); the *General* industry keeps a conservative cross-industry list.
+3. **Filter (optional)** — with `filter_by_industry` on and no custom lead keywords, comments are pre-filtered by the industry's categories and keywords plus the universal *High Purchase Intent* and *Information Request* presets.
+4. Each analysed lead stores the `industry` it was analysed with.
+
+Organizations that never chose an industry use the platform default (`business.default_industry`, default `general` = any business), so existing behaviour is unchanged.
 
 ---
 
@@ -129,6 +150,8 @@ Status legend: ✅ Implemented · 🟡 Partially Implemented · ⬜ Planned
 | Deterministic 0–100 lead score | ✅ | `comment_lead_score` in `comment_ai.py` |
 | Keyword/comment filter pipeline (keyword/category/advanced rules) | ✅ | `app/pipeline/comment_filter.py` |
 | Predefined business categories (real estate, automotive, etc.) | ✅ | `CATEGORIES` dict in `comment_filter.py` |
+| Industry-aware analysis (per-organization industry + business profile drive AI, rules and filter) | ✅ | `app/pipeline/business_context.py` |
+| Industry catalog managed by the Super Admin (22 built-in + custom, default industry) | ✅ | `/superadmin#/industries` |
 | Lead lifecycle state machine (new → contacted → qualified → ...) | ✅ | `app/pipeline/lead_lifecycle.py` |
 | Notes and follow-ups on leads | ✅ | `POST /api/leads/{id}/notes` + `/follow-ups` |
 
@@ -889,7 +912,7 @@ Self-service account creation:
 
 | Element | Description |
 | --- | --- |
-| **Form fields** | First Name, Last Name, Work Email, Organization Name, Password (with strength meter), Confirm Password |
+| **Form fields** | Name, Work Email, Company, Industry (optional, from the catalog), Phone (optional), Password (with strength meter), Message |
 | **Password strength** | 4-level meter (Too short → Weak → Fair → Good → Strong) with color coding |
 | **Terms consent** | Checkbox linking to /terms and /privacy |
 | **Error/success banners** | Inline validation errors, success redirect to dashboard |
@@ -1110,6 +1133,7 @@ Twenty-plus MongoDB collections, all documents stored from **real actor output o
 | `reason` | str | Why the comment was kept/dropped |
 | `details` | dict | Full nested extraction |
 | `analyzed_by` | str | `rules` \| `gemini` |
+| `industry` | str | Industry key of the organization's business context used for the analysis |
 | `analyzed_at` | datetime | When analyzed |
 
 ### `admin_users` — admin accounts
@@ -1119,7 +1143,7 @@ Twenty-plus MongoDB collections, all documents stored from **real actor output o
 | `email` | str | Unique email |
 | `name` | str | Display name |
 | `password` | str | bcrypt hash (cost 12) |
-| `role` | str | `viewer` \| `manager` \| `super_admin` |
+| `role` | str | `viewer` \| `manager` (a stored `super_admin` is treated as `manager` — the only Super Admin is the `SUPERADMIN_*` environment account) |
 | `enabled` | bool | Account active |
 
 ### `system_settings` — key-value settings store
@@ -1186,7 +1210,10 @@ Twenty-plus MongoDB collections, all documents stored from **real actor output o
 | --- | --- | --- |
 | `name` | str | Organization name |
 | `slug` | str | URL-friendly identifier (unique) |
-| `status` | str | `active` \| `trial` \| `suspended` \| `disabled` \| `pending` \| `cancelled` \| `archived` |
+| `status` | str | `pending` (demo request) \| `demo` (approved demo) \| `rejected` \| `active` (paid, confirmed by Super Admin) \| `trial` (legacy) \| `suspended` \| `disabled` \| `cancelled` \| `archived` |
+| `industry` | str | Industry key from the catalog (older free-text values are resolved by name or kept as a custom label) |
+| `settings.business_profile` | dict | `custom_industry`, `description`, `offerings`, `target_customers`, `lead_criteria`, `requirement_terms` — the business context sent to lead analysis |
+| `settings.filter_by_industry` | bool | Pre-filter comments by the industry (default off) |
 | `plan_id` | str | Current subscription plan |
 | `timezone` | str | Default timezone |
 | `currency` | str | Billing currency |
@@ -1252,10 +1279,21 @@ Twenty-plus MongoDB collections, all documents stored from **real actor output o
 | --- | --- | --- |
 | `email` | str | Unique email |
 | `name` | str | Display name |
-| `password` | str | bcrypt hash |
-| `organization_id` | ObjectId | Primary organization |
-| `role` | str | Organization role |
-| `status` | str | `active` \| `inactive` \| `suspended` |
+| `password_hash` | str | bcrypt hash (never stored or shown in plaintext) |
+| `default_organization_id` | str | Primary organization (role lives in `organization_members`) |
+| `status` | str | `pending_approval` (demo request) \| `active` \| `suspended` \| `disabled` (the demo decision itself lives on the organization: `pending` → `demo` / `rejected`) |
+
+### `industries` — industry catalog (Super Admin)
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `key` | str | Unique key (built-in keys hold overrides; other keys are custom industries) |
+| `name`, `icon`, `description` | str | Display |
+| `ai_guidance` | str | What a qualified lead is for this industry (sent to the AI) |
+| `category_keys` | list[str] | Linked comment-filter categories |
+| `default_keywords` | list[str] | Suggested lead keywords |
+| `requirement_terms` | list[str] | Rule-stage vocabulary |
+| `enabled` | bool | Selectable by organizations (`general` can never be disabled) |
 
 ### `cms_pages` — CMS managed pages
 
@@ -1301,7 +1339,7 @@ Interactive docs at `/docs` (Swagger UI) when `enable_api_docs=true`. All produc
 | Method | Endpoint | Purpose | Auth |
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | Login with email/password. Body: `{email, password, scope}`. Sets session cookie. | None |
-| POST | `/api/auth/signup` | Create new account. Body: `{name, email, password, organization_name}`. | None |
+| POST | `/api/auth/signup` | Submit a demo request (password stored as a bcrypt hash; organization `pending` until the Super Admin approves). Body: `{name, email, password, company, phone?, message?, industry?}`. | None |
 | POST | `/api/auth/logout` | Clear session cookie. | Session |
 | GET | `/api/auth/me` | Return current user from session. | Session |
 
@@ -1500,7 +1538,21 @@ Interactive docs at `/docs` (Swagger UI) when `enable_api_docs=true`. All produc
 | GET | `/api/public/faq` | Published FAQ items |
 | GET | `/api/public/pages/{slug}` | Published page content |
 | POST | `/api/public/contact` | Submit contact form (rate-limited) |
+| GET | `/api/public/industries` | Enabled industries (key, name, icon, description) for signup |
 | GET | `/health` | Health check (MongoDB ping, latency) |
+
+### Industry & Business Context Routes
+
+| Method | Endpoint | Purpose | Role |
+| --- | --- | --- | --- |
+| GET | `/api/org-admin/business-profile` | Industry, business profile, AI context preview, catalog | Org `settings.view` |
+| PUT | `/api/org-admin/business-profile` | Set industry + business profile + industry filter (audited) | Org `settings.manage` |
+| GET | `/api/super-admin/industries` | Catalog incl. disabled, organizations per industry, default | Super Admin |
+| POST | `/api/super-admin/industries` | Add a custom industry | Super Admin |
+| PATCH | `/api/super-admin/industries/{key}` | Edit / enable / disable (built-ins are overridden) | Super Admin |
+| DELETE | `/api/super-admin/industries/{key}` | Delete a custom industry not in use (built-in → 409) | Super Admin |
+| PUT | `/api/super-admin/industries/default` | Platform default industry | Super Admin |
+| PATCH | `/api/super-admin/organizations/{org_id}` | Also accepts `industry` | Super Admin |
 
 ---
 
@@ -1566,7 +1618,8 @@ flowchart TD
 ```
 
 - **Provider**: Google Gemini via direct REST, no SDK. Model default `gemini-2.5-flash` (`GEMINI_MODEL`).
-- **Input**: JSON payload with `author`, `post_caption`, `comment_text` — one comment per call.
+- **Input**: JSON payload with `author`, `post_caption`, `comment_text`, `business_category` — one comment per call.
+- **Business context**: the organization's industry and business profile are appended to the system prompt in a delimited, data-only block; intent and lead quality are judged relative to that business (see [Industries & business context](#industries--business-context)).
 - **Output**: Strict JSON with `is_useful`, `lead_type`, `confidence_score`, `priority`, `lead_quality`, `sentiment`, `contact{}`, `person{}`, `buyer{}`.
 - **Error handling**: 429 opens 10-minute circuit breaker; any exception falls back to Stage-1 rule result.
 - **Rule path**: `rule_based_classify` + `_rule_extraction` (regex contact/budget/location/urgency/intent extraction).
@@ -1579,6 +1632,15 @@ flowchart TD
 **Location**: `app/pipeline/comment_filter.py` (860 lines)
 
 The keyword filter is the **first layer** of the lead pipeline, running before AI analysis.
+
+### Which rule applies to a search
+
+1. A rule or preset explicitly chosen for the run
+2. Keywords/categories entered in the search form
+3. The organization's own lead keywords (Org Admin → Lead rules)
+4. The organization's **industry filter**, when *filter by industry* is on (industry categories + keywords + intent presets)
+5. The globally active rule (platform admin)
+6. No filter — every comment is analysed (default)
 
 ### Modes
 
@@ -1765,6 +1827,7 @@ Stored in MongoDB `system_settings` collection, configurable via Admin Control C
 
 | Key | Default | Description |
 | --- | --- | --- |
+| `business.default_industry` | `general` | Industry for organizations that chose none (Super Admin → Industries) |
 | `ai.enabled` | true | Enable Gemini analysis |
 | `ai.rule_fallback` | true | Fallback to rules if AI fails |
 | `ai.max_calls_per_job` | 1000 | Gemini calls budget per run |
@@ -1937,6 +2000,9 @@ After a deploy, `https://<your-app>/health` must show
    the User Portal within the demo limits.
 4. **Customer** picks a plan and checks out. Payment only moves the
    subscription to *awaiting confirmation* — nothing is activated yet.
+   An Admin can set the organization's **industry and business profile** at
+   any time (Admin Portal → Organization → Business profile); every search's
+   lead analysis uses it.
 5. **Super Admin** confirms the subscription; only then is the organization
    active and its Admin Portal (`/org-admin`) enabled for the customer, who is
    the organization's owner/Admin with the same credentials.
@@ -1964,7 +2030,7 @@ After a deploy, `https://<your-app>/health` must show
 | Page | URL | Description |
 | --- | --- | --- |
 | Website | `/website` | Marketing landing page |
-| Signup | `/signup` | Self-service account creation |
+| Signup | `/signup` | Demo request (account stays `pending` until the Super Admin approves it) |
 | Contact | `/contact` | Contact form |
 | Features | `/features` | Alias for website |
 | Pricing | `/pricing` | Alias for website |
@@ -1980,7 +2046,7 @@ After a deploy, `https://<your-app>/health` must show
 | --- | --- |
 | **viewer** | Read-only access to all admin views |
 | **manager** | Full access except user management, job/lead deletion, session revocation |
-| **super_admin** | Full access including user CRUD, deletion, session revocation |
+| **super_admin** | Full access including user CRUD, deletion, session revocation — only the `SUPERADMIN_*` environment account; no database account can hold it |
 
 ### Security Features
 
@@ -2141,8 +2207,8 @@ logging:
 ## 29. Testing
 
 ```bash
-# All tests (excluding scratch/)
-python -m pytest --ignore=scratch -v
+# All tests (pytest.ini limits collection to tests/)
+python -m pytest -v
 
 # Log parser tests only
 python -m pytest tests/test_log_parser.py -v
@@ -2151,10 +2217,10 @@ python -m pytest tests/test_log_parser.py -v
 python -m pytest tests/test_http_endpoints.py -v
 
 # Quick summary
-python -m pytest --ignore=scratch -q
+python -m pytest -q
 ```
 
-**880 tests** covering:
+**1,368 tests** (full suite; highlights below):
 
 | Category | Count | Test File |
 |----------|-------|-----------|
@@ -2176,6 +2242,7 @@ python -m pytest --ignore=scratch -q
 | HTTP/API endpoints (auth, roles, validation) | 76 | `test_http_endpoints.py` |
 | **Log parser (structured parsing, redaction, multiline)** | **117** | **`test_log_parser.py`** |
 | MongoDB index idempotency | 6 | `test_http_endpoints.py` |
+| Industries & business context (catalog, business profile, AI context, rule vocabulary, industry filter, isolation) | 13 | `test_industry_context.py` |
 
 ---
 

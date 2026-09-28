@@ -327,6 +327,8 @@ def ensure_indexes():
         _create_index_safe(db.comment_categories, [("active", ASCENDING)])
         _create_index_safe(db.comment_categories, [("name", ASCENDING)], unique=True, sparse=True)
         _create_index_safe(db.comment_categories, [("created_at", ASCENDING)])
+        # industry catalog (custom industries + overrides of built-in ones)
+        _create_index_safe(db.industries, [("key", ASCENDING)], unique=True)
 
         # ── Master Prompt 3: AI & Apify Control Centers, Leads & Follow-ups ──
         _create_index_safe(db.ai_prompts, [("prompt_key", ASCENDING), ("version", ASCENDING)], unique=True)

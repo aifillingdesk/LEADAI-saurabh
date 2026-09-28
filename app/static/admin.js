@@ -3388,7 +3388,7 @@ function krOpenEditor(ruleId, catalog) {
 
   openModal(rule ? `Edit rule — ${rule.name || ""}` : "New keyword rule", `
     <div class="adm-form-grid">
-      <div class="adm-field"><label>Rule name</label><input class="adm-input" id="krName" value="${esc(start.name || "")}" placeholder="e.g. Real estate buyers — Noida"></div>
+      <div class="adm-field"><label>Rule name</label><input class="adm-input" id="krName" value="${esc(start.name || "")}" placeholder="e.g. High-intent buyers — automotive"></div>
       <div class="adm-field"><label>Description</label><input class="adm-input" id="krDesc" value="${esc(start.description || "")}" placeholder="What does this rule capture?"></div>
       <div class="adm-field"><label>Match mode</label>
         <select class="adm-select" id="krMode">
