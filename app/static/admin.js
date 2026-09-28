@@ -5012,8 +5012,8 @@ async function viewUsers() {
          <select class="adm-input" id="userRole">
            <option value="viewer" ${u && u.role === "viewer" ? "selected" : ""}>viewer</option>
            <option value="manager" ${u && u.role === "manager" ? "selected" : ""}>manager</option>
-           <option value="super_admin" ${u && u.role === "super_admin" ? "selected" : ""}>super_admin</option>
          </select>
+         <span class="adm-hint">The one Super Admin is set by SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD in the hosting environment.</span>
        </div>
        ${u ? `
          <label class="adm-check"><input type="checkbox" id="userEnabled" ${u.enabled ? "checked" : ""}> enabled</label>

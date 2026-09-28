@@ -17,10 +17,10 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(autouse=True)
 def _set_panel_admin_email():
-    import os
-    os.environ["PANEL_ADMIN_EMAIL"] = "envadmin@test.com"
+    # the one Super Admin comes from SUPERADMIN_* (a stored role never grants it)
+    from tests.conftest import as_superadmin
+    as_superadmin("envadmin@test.com")
     yield
-    os.environ.pop("PANEL_ADMIN_EMAIL", None)
 
 
 def _build_sync_db_mock():

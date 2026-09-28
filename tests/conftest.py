@@ -67,6 +67,43 @@ def _in_memory_mongo(request, monkeypatch):
     yield sync_client
 
 
+TEST_SUPERADMIN_PASSWORD = "Test-SuperAdmin-Pass-2026"
+_CREDENTIAL_FIELDS = ("superadmin_email", "superadmin_password", "panel_admin_email",
+                      "panel_admin_password_hash", "admin_email", "admin_password_hash")
+
+
+@pytest.fixture(autouse=True)
+def _restore_credential_settings():
+    """Tests may set the Super Admin (``as_superadmin``) or legacy credential
+    settings; every test starts and ends with the process's real values."""
+    from app.config import get_settings
+    s = get_settings()
+    saved = {k: getattr(s, k) for k in _CREDENTIAL_FIELDS}
+    yield
+    for k, v in saved.items():
+        setattr(s, k, v)
+    try:
+        from app.admin import envvars
+        envvars._CACHE.clear()
+    except Exception:
+        pass
+
+
+def as_superadmin(email: str, password: str = TEST_SUPERADMIN_PASSWORD) -> str:
+    """Make ``email`` THE Super Admin exactly as production does it — through
+    SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD (a database role never grants it).
+    Restored automatically after the test."""
+    from app.config import get_settings
+    s = get_settings()
+    s.superadmin_email, s.superadmin_password = email, password
+    try:
+        from app.admin import envvars
+        envvars._CACHE.clear()
+    except Exception:
+        pass
+    return email.strip().lower()
+
+
 def seed_site_account(email, *, org_status="active", role="owner", user_status="active",
                       org_name="Test Org", db=None):
     """Insert an active ``users`` record + organization + membership so that a

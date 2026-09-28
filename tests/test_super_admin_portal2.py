@@ -66,6 +66,8 @@ def _cookie(claims):
 
 
 def _super(db):
+    from tests.conftest import as_superadmin
+    as_superadmin("root@platform.test")  # the one Super Admin comes from SUPERADMIN_*
     uid = _user(db, "root@platform.test", platform_role="super_admin")
     return _cookie({"user_id": uid, "email": "root@platform.test", "name": "Root",
                     "scope": "admin", "role": "super_admin"})

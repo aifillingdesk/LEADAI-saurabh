@@ -55,35 +55,15 @@ def migrate_to_multi_tenant(db) -> Dict[str, Any]:
             default_org_id = str(default_org["_id"])
             report["default_org_created"] = False
 
-        # 2. Ensure the legacy site owner exists in `users` (ADMIN_EMAIL).
-        #    Never invent credentials: without ADMIN_EMAIL + a password hash
-        #    no account is seeded, and a seeded owner is an ORGANIZATION owner,
-        #    never a platform super admin (that is PANEL_ADMIN_EMAIL's job).
+        # 2. Accounts are NEVER created from environment variables: admins and
+        #    users come only from demo signup / invitations, and the Super Admin
+        #    lives in SUPERADMIN_* alone. For a legacy ADMIN_EMAIL account that
+        #    already exists without its own password, its env hash is copied
+        #    onto the record once (sign-in is database-only).
         admin_email = (settings.admin_email or "").strip().lower()
         owner_user = db.users.find_one({"email": admin_email}) if admin_email else None
         owner_user_id = str(owner_user["_id"]) if owner_user else None
-        if admin_email and not owner_user:
-            legacy_admin = db.admin_users.find_one({"email": admin_email})
-            pwd_hash = (legacy_admin or {}).get("password_hash") or (settings.admin_password_hash or "")
-            if not pwd_hash:
-                logger.warning("[Migration] ADMIN_EMAIL is set without ADMIN_PASSWORD_HASH — "
-                               "not seeding an owner account (use the password reset flow).")
-            else:
-                owner_user_doc = {
-                    "email": admin_email,
-                    "name": "Admin",
-                    "password_hash": pwd_hash,
-                    "status": "active",
-                    "is_platform_admin": False,
-                    "platform_role": None,
-                    "default_organization_id": default_org_id,
-                    "created_at": utcnow(),
-                    "updated_at": utcnow(),
-                    "last_login": None,
-                }
-                owner_user_id = str(db.users.insert_one(owner_user_doc).inserted_id)
-                logger.info("[Migration] Seeded default owner user '%s' (_id: %s)", admin_email, owner_user_id)
-        elif owner_user and not (owner_user.get("password_hash") or "").strip() \
+        if owner_user and not (owner_user.get("password_hash") or "").strip() \
                 and (settings.admin_password_hash or "").strip():
             # Sign-in is database-only now: give the legacy ADMIN_EMAIL account
             # its env password as its own hash (only when it has none), so it

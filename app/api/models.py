@@ -24,7 +24,7 @@ class CreateUserRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
     password: str = Field(..., min_length=8, max_length=128)
     name: str = Field(..., min_length=1, max_length=80)
-    role: str = Field(..., pattern="^(viewer|manager|super_admin)$")
+    role: str = Field(..., pattern="^(viewer|manager)$")  # the one Super Admin is SUPERADMIN_* only
 
     @field_validator("email")
     @classmethod
@@ -38,7 +38,7 @@ class CreateUserRequest(BaseModel):
 class UpdateUserRequest(BaseModel):
     """PATCH /api/admin/users/{user_id} request body."""
     name: Optional[str] = Field(None, max_length=80)
-    role: Optional[str] = Field(None, pattern="^(viewer|manager|super_admin)$")
+    role: Optional[str] = Field(None, pattern="^(viewer|manager)$")  # the one Super Admin is SUPERADMIN_* only
     password: Optional[str] = Field(None, min_length=8, max_length=128)
 
 

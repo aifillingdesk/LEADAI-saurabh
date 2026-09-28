@@ -77,9 +77,12 @@ def effective_role(email: str) -> str:
         return ""
     if is_env_admin_email(email):
         return "super_admin"
+    # There is exactly ONE Super Admin: the environment account above. A
+    # database record carrying "super_admin" (legacy data) is capped at
+    # manager, so no database account can ever act as the Super Admin.
     record = get_admin_record(email)
     if record and record.get("enabled", True) and record.get("role") in ROLE_RANK:
-        return record["role"]
+        return "manager" if record["role"] == "super_admin" else record["role"]
     try:
         db = get_sync_db()
         if db is not None:
@@ -88,6 +91,8 @@ def effective_role(email: str) -> str:
                     and user_doc.get("status", "active") == "active"
                     and user_doc.get("platform_role")):
                 role = user_doc["platform_role"]
+                if role == "super_admin":
+                    return "manager"  # only the environment account is Super Admin
                 if role in ROLE_RANK:
                     return role
                 # SaaS platform roles map onto the admin panel's rank scale

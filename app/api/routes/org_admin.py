@@ -680,7 +680,7 @@ async def reset_user_access(user_id: str, request: Request, body: Optional[Reset
         "requested_ip": request_meta(request)["ip"], "requested_by": ctx.email,
         "organization_id": ctx.organization_id, "created_at": now})
     link = absolute_url(f"/reset-password?token={token}")
-    send_email(record["email"], f"Reset your LeadAI access — {ctx.organization_name}",
+    delivery = send_email(record["email"], f"Reset your LeadAI access — {ctx.organization_name}",
                f"Hi {record.get('name') or ''},\n\nAn administrator of {ctx.organization_name} "
                f"asked us to reset your access. Use this link to choose a new password "
                f"(valid for {_RESET_TOKEN_TTL_MIN} minutes, single use):\n{link}\n\n"
@@ -693,9 +693,12 @@ async def reset_user_access(user_id: str, request: Request, body: Optional[Reset
                                 details={"target_user_id": str(user_id)})
     await _audit(ctx, request, "member.access_reset", "team", resource_type="member",
                  resource_id=str(user_id),
-                 details={"email": record["email"], "sessions_revoked": revoked})
-    return {"success": True, "sessions_revoked": revoked,
-            "message": f"A password reset link was emailed to {record['email']}."}
+                 details={"email": record["email"], "sessions_revoked": revoked,
+                          "email_delivery": delivery})
+    # not emailed (no SMTP configured / failed): hand the one-time link to
+    # the admin who issued it, once — it is never stored in plain text
+    from app.api.routes.super_admin_platform import _reset_response
+    return _reset_response(record["email"], delivery, link, revoked)
 
 
 class MemberBulkBody(BaseModel):

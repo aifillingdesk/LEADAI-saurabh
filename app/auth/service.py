@@ -256,10 +256,11 @@ def verify_admin_login(email: str, password: str) -> Optional[Dict[str, Any]]:
             except Exception as e:
                 logger.warning("Failed to migrate admin hash: %s", e)
         _touch_last_login(email_clean, now)
+        role = record.get("role") or "viewer"
         return _panel_scope_user(
             email_clean,
             record.get("name") or email_clean.split("@")[0],
-            record.get("role") or "viewer",
+            "manager" if role == "super_admin" else role,  # one Super Admin: the env account
         )
 
     # 2) Legacy env super admin (PANEL_ADMIN_*), only without SUPERADMIN_*

@@ -1899,6 +1899,53 @@ URLs:
 - API docs: [http://localhost:8000/docs](http://localhost:8000/docs) (if enabled)
 - Health: [http://localhost:8000/health](http://localhost:8000/health)
 - URL-search report: `http://localhost:8000/static/url_report.html?run_id=<URL-run-id>`
+- Super Admin login: [http://localhost:8000/login?superadmin=1](http://localhost:8000/login?superadmin=1)
+
+### Deploying on Render
+
+Render builds the `Dockerfile`. The `.env` file is never uploaded, so set the
+variables in **Render → your service → Environment**:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `MONGO_URI`, `MONGO_DB_NAME` | Yes | Your MongoDB Atlas connection |
+| `SUPERADMIN_EMAIL` | Yes | The one permanent Super Admin |
+| `SUPERADMIN_PASSWORD` | Yes | 12+ characters, or a bcrypt hash of it |
+| `SESSION_SECRET` | Yes | Long random string; without it everyone is signed out on each restart |
+| `SESSION_COOKIE_SECURE` | Yes | `true` (Render serves HTTPS) |
+| `TRUST_PROXY_HEADERS` | Yes | `true` (real client IP behind Render's proxy for login limits) |
+| `APIFY_API_TOKEN` | For searches | Apify token |
+| `GEMINI_API_KEY` | Optional | AI lead analysis (rule-based without it) |
+| `PUBLIC_BASE_URL` | Recommended | e.g. `https://your-app.onrender.com`, used in emailed links |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Optional | Without SMTP, invite and reset links are shown once to the admin who created them |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Optional | Real payments; without them the mock checkout is used (a Super Admin must still confirm every subscription) |
+
+Never add admin or user emails/passwords here: those accounts are created in
+the app (demo signup → Super Admin approval → invitations).
+
+After a deploy, `https://<your-app>/health` must show
+`"superadmin_configured": true`; then sign in at `/login?superadmin=1`.
+
+### Customer journey (who does what)
+
+1. **Visitor** requests a demo on the website with name, email, company and a
+   password (stored bcrypt-hashed; status `pending`, no access yet).
+2. **Super Admin** approves or rejects it in `/superadmin#/demo`. Approval
+   activates the account and grants the configured demo tokens, duration,
+   limits and features (Super Admin → Demo configuration).
+3. **Customer** signs in with the credentials from step 1 and uses LeadAI in
+   the User Portal within the demo limits.
+4. **Customer** picks a plan and checks out. Payment only moves the
+   subscription to *awaiting confirmation* — nothing is activated yet.
+5. **Super Admin** confirms the subscription; only then is the organization
+   active and its Admin Portal (`/org-admin`) enabled for the customer, who is
+   the organization's owner/Admin with the same credentials.
+6. **Admin** invites users (one-time links; each user sets their own
+   password). The plan's user limit is enforced on the server.
+7. **Super Admin** manages everything: organizations, plans and limits, demo
+   settings, account status, sign-in email, member roles and password resets
+   (one-time links — passwords are never shown or stored in plain text). All
+   changes are audited.
 
 ---
 

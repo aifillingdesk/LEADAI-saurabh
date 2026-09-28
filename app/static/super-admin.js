@@ -1001,11 +1001,22 @@
             { label: 'Account', sort: 'user_status', render: function (m) { return pill(m.user_status); } },
             { label: 'Last login', sort: 'last_login', sortVal: function (m) { var d2 = toDate(m.last_login); return d2 ? d2.getTime() : 0; }, csv: function (m) { return fmtDT(m.last_login); }, render: function (m) { return '<span title="' + esc(fmtDT(m.last_login)) + '">' + esc(ago(m.last_login)) + '</span>'; } },
             { label: '', cls: 'num', render: function (m) {
-              return '<div class="row-actions"><button type="button" class="btn btn-secondary btn-xs" data-reset>Reset access</button>' +
+              return '<div class="row-actions">' + (m.role !== 'owner' ? '<button type="button" class="btn btn-secondary btn-xs" data-role>Role</button>' : '') +
+                '<button type="button" class="btn btn-secondary btn-xs" data-reset>Reset access</button>' +
                 (m.user_status === 'active' ? '<button type="button" class="btn btn-danger btn-xs" data-v="suspended">Suspend</button>' : '<button type="button" class="btn btn-secondary btn-xs" data-v="active">Activate</button>') + '</div>'; } }
           ],
           bindRow: function (tr, m) {
             $('[data-reset]', tr).onclick = function () { resetAccess(m.user_id, m.email).catch(function (e) { toast(e.message, 'error'); }); };
+            var rb = $('[data-role]', tr);
+            if (rb) rb.onclick = async function () {
+              var opts = [['admin', 'Admin'], ['manager', 'Manager'], ['member', 'User'], ['viewer', 'Viewer']].map(function (x) {
+                return '<option value="' + x[0] + '"' + (x[0] === m.role ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
+              var r = await openModal({ title: 'Change role — ' + (m.name || m.email), submitLabel: 'Change role', body:
+                '<div class="sa-field"><label for="mrRole">Role in this organization</label><select class="form-input" id="mrRole" name="role">' + opts + '</select></div>' +
+                '<div class="sa-field"><label for="mrReason">Reason</label><input class="form-input" id="mrReason" name="reason" maxlength="300"></div>',
+                onSubmit: function (f, fd) { return api('/api/super-admin/organizations/' + encodeURIComponent(id) + '/members/' + encodeURIComponent(m.user_id) + '/role', { method: 'PATCH', body: { role: String(fd.get('role')), reason: String(fd.get('reason') || '') } }); } });
+              if (r) { toast(r.message || 'Role changed'); reload(); }
+            };
             $('[data-v]', tr).onclick = function () { userStatusAction({ id: m.user_id, email: m.email, name: m.name }, this.getAttribute('data-v'), reload).catch(function (e) { toast(e.message, 'error'); }); };
           },
           empty: { title: 'No members', desc: 'This organization has no members yet.' }
@@ -1081,7 +1092,21 @@
       '<label class="sa-check"><input type="checkbox" name="revoke" checked> Also sign the user out of every active session</label>' +
       '<div class="sa-field"><label for="raReason">Reason</label><input class="form-input" id="raReason" name="reason" maxlength="300"></div>',
       onSubmit: function (f, fd) { return api('/api/super-admin/users/' + encodeURIComponent(userId) + '/reset-access', { method: 'POST', body: { reason: String(fd.get('reason') || ''), revoke_sessions: !!fd.get('revoke') } }); } });
-    if (r) toast(r.message || 'Reset link sent');
+    if (r && r.reset_url) await showOneTimeLink('Reset link — copy it now', r.message, r.reset_url);
+    else if (r) toast(r.message || 'Reset link sent');
+  }
+  // A one-time link returned because email could not be delivered: shown
+  // once, never stored — the admin passes it to the user securely.
+  function showOneTimeLink(title, message, url) {
+    return openModal({ title: title, submitLabel: 'Copy link', cancelLabel: 'Close', body:
+      '<p style="margin:0 0 10px;color:var(--text-secondary)">' + esc(message) + '</p>' +
+      '<input class="form-input" readonly value="' + esc(url) + '" aria-label="One-time link" onfocus="this.select()">' +
+      '<p class="sa-small sa-muted" style="margin:8px 0 0">It works once and expires. It will not be shown again.</p>',
+      onSubmit: function () {
+        try { return navigator.clipboard.writeText(url).then(function () { toast('Link copied'); return true; },
+          function () { toast('Select the link and copy it manually', 'info'); return false; }); }
+        catch (e) { toast('Select the link and copy it manually', 'info'); return false; }
+      } });
   }
 
   async function viewAdmins(root, q) {
@@ -1157,7 +1182,7 @@
     setTitle(u.name || u.email, 'Customers › Users');
     root.innerHTML = '<div class="sa-row sa-small" style="margin-bottom:6px"><a class="sa-link" href="#/users">← Users</a></div>' +
       header(u.name || u.email, u.email + ' · joined ' + fmtDate(u.created_at),
-        pill(u.status || 'active') + (protectedAcct ? pill('info', 'Super Admin') : '<button type="button" class="btn btn-secondary btn-sm" id="udReset">Reset access</button><button type="button" class="btn btn-secondary btn-sm" id="udRevoke">Sign out everywhere</button>' +
+        pill(u.status || 'active') + (protectedAcct ? pill('info', 'Super Admin') : '<button type="button" class="btn btn-secondary btn-sm" id="udEmail">Change email</button><button type="button" class="btn btn-secondary btn-sm" id="udReset">Reset access</button><button type="button" class="btn btn-secondary btn-sm" id="udRevoke">Sign out everywhere</button>' +
           ((u.status || 'active') !== 'active' ? '<button type="button" class="btn btn-secondary btn-sm" data-st="active">Activate</button>' : '<button type="button" class="btn btn-danger btn-sm" data-st="suspended">Suspend</button>') +
           (u.status !== 'disabled' ? '<button type="button" class="btn btn-danger btn-sm" data-st="disabled">Deactivate</button>' : ''))) +
       '<div class="sa-grid sa-kpis">' +
@@ -1166,6 +1191,14 @@
       kpi('Active sessions', fmtN(u.active_sessions)) + kpi('Last login', ago(u.last_login)) + '</div>' +
       '<div class="sa-section" id="udTabs"></div>';
     if (!protectedAcct) {
+      $('#udEmail', root).onclick = async function () {
+        var r = await openModal({ title: 'Change sign-in email', submitLabel: 'Change email', danger: true, body:
+          '<p style="margin:0;color:var(--text-secondary)">The user is signed out everywhere and both the old and the new address are told about the change.</p>' +
+          '<div class="sa-field"><label for="ceEmail">New email</label><input class="form-input" id="ceEmail" name="email" type="email" required value="' + esc(u.email) + '"></div>' +
+          '<div class="sa-field"><label for="ceReason">Reason</label><input class="form-input" id="ceReason" name="reason" maxlength="300"></div>',
+          onSubmit: function (f, fd) { return api('/api/super-admin/users/' + encodeURIComponent(id) + '/email', { method: 'PATCH', body: { email: String(fd.get('email') || '').trim(), reason: String(fd.get('reason') || '') } }); } });
+        if (r) { toast(r.message || 'Email changed'); reload(); }
+      };
       $('#udReset', root).onclick = function () { resetAccess(id, u.email).catch(function (e) { toast(e.message, 'error'); }); };
       $('#udRevoke', root).onclick = async function () {
         var r = await confirmDialog({ title: 'Sign out everywhere', message: 'Revokes every active session of ' + u.email + '.', confirmLabel: 'Revoke sessions', reason: 'optional' });

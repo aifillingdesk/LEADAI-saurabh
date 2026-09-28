@@ -339,10 +339,11 @@ async def reset_user_access(user_id: str, body: ResetAccessBody, request: Reques
         "user_id": str(user["_id"]), "token_hash": hashlib.sha256(token.encode()).hexdigest(),
         "expires_at": now + timedelta(minutes=_RESET_TOKEN_TTL_MIN), "used_at": None,
         "purpose": "admin_reset", "requested_by": ctx.email, "created_at": now})
-    send_email(user["email"], "Reset your LeadAI password",
+    reset_url = absolute_url('/reset-password?token=' + token)
+    delivery = send_email(user["email"], "Reset your LeadAI password",
                f"Hi {user.get('name') or ''},\n\nOur support team issued a password reset for your "
                f"account. Use this link to choose a new password (valid for {_RESET_TOKEN_TTL_MIN} "
-               f"minutes, single use):\n{absolute_url('/reset-password?token=' + token)}\n\n"
+               f"minutes, single use):\n{reset_url}\n\n"
                "If you did not expect this, contact support.", kind="password_reset")
     revoked = 0
     if body.revoke_sessions:
@@ -351,9 +352,99 @@ async def reset_user_access(user_id: str, body: ResetAccessBody, request: Reques
     await aaudit("user.access_reset", "security", user=ctx.audit_user(), resource_type="user",
                  resource_id=str(user["_id"]),
                  details={"email": user["email"], "reason": body.reason[:300],
-                          "sessions_revoked": revoked}, **_meta(request))
-    return {"success": True, "message": f"A one-time reset link was emailed to {user['email']}.",
-            "sessions_revoked": revoked}
+                          "sessions_revoked": revoked, "email_delivery": delivery},
+                 **_meta(request))
+    return _reset_response(user["email"], delivery, reset_url, revoked)
+
+
+def _reset_response(email: str, delivery: str, reset_url: str, revoked: int) -> Dict[str, Any]:
+    """When the email really went out, the link stays in the user's inbox only.
+    When it could not be sent (no SMTP configured, or it failed) the one-time
+    link is returned ONCE to the admin who issued it, to pass on securely —
+    it is never stored in plain text or shown again."""
+    out = {"success": True, "sessions_revoked": revoked, "email_delivery": delivery}
+    if delivery == "sent":
+        out["message"] = f"A one-time reset link was emailed to {email}."
+    else:
+        out["message"] = (f"Email could not be sent to {email} (email delivery is not "
+                          "configured). Copy this one-time link and send it to the user securely.")
+        out["reset_url"] = reset_url
+    return out
+
+
+class ChangeEmailBody(BaseModel):
+    email: str
+    reason: str = ""
+
+
+@router.patch("/users/{user_id}/email")
+async def change_user_email(user_id: str, body: ChangeEmailBody, request: Request,
+                            ctx: TenantContext = Depends(SUPER)):
+    """Change an account's sign-in email. The account is signed out everywhere
+    and both addresses are told about the change (audited before/after)."""
+    from app.auth.service import revoke_user_sessions
+    from app.auth.superadmin import is_superadmin_email
+    from app.events.email import send_email
+    db = _db()
+    oid = _oid(user_id)
+    user = await db.users.find_one({"_id": oid}) if oid else None
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    new_email = (body.email or "").strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", new_email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address")
+    old_email = user.get("email") or ""
+    if new_email == old_email:
+        return {"success": True, "message": "Email unchanged", "email": old_email}
+    if is_superadmin_email(new_email) or await db.users.find_one({"email": new_email}, {"_id": 1}) \
+            or await db.admin_users.find_one({"email": new_email}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail="That email is already in use")
+    await db.users.update_one({"_id": oid}, {"$set": {"email": new_email, "updated_at": utcnow()}})
+    await db.organization_members.update_many({"user_id": str(oid)}, {"$set": {"email": new_email}})
+    revoked = revoke_user_sessions(str(oid), revoked_by=f"super_admin_email_change:{ctx.email}")
+    for addr in {old_email, new_email} - {""}:
+        send_email(addr, "Your LeadAI sign-in email was changed",
+                   f"The sign-in email of your LeadAI account was changed from {old_email} to "
+                   f"{new_email} by LeadAI support. Sign in with {new_email} from now on. "
+                   "If you did not expect this, contact support.", kind="account_change")
+    await aaudit("user.email_changed", "security", user=ctx.audit_user(), resource_type="user",
+                 resource_id=str(oid), details={"before": old_email, "after": new_email,
+                                                "reason": body.reason[:300],
+                                                "sessions_revoked": revoked}, **_meta(request))
+    return {"success": True, "email": new_email, "sessions_revoked": revoked,
+            "message": f"Sign-in email changed to {new_email}. The user was signed out everywhere."}
+
+
+class MemberRoleBody(BaseModel):
+    role: str
+    reason: str = ""
+
+
+@router.patch("/organizations/{org_id}/members/{user_id}/role")
+async def change_member_role(org_id: str, user_id: str, body: MemberRoleBody, request: Request,
+                             ctx: TenantContext = Depends(SUPER)):
+    """Change a member's role inside one organization (Admin / Manager / User
+    / Viewer). The owner's role is fixed; nobody can be made owner or Super
+    Admin here."""
+    db = _db()
+    role = (body.role or "").strip().lower()
+    if role not in ("admin", "manager", "member", "viewer"):
+        raise HTTPException(status_code=422, detail="Role must be admin, manager, member or viewer")
+    member = await db.organization_members.find_one({"organization_id": str(org_id),
+                                                     "user_id": str(user_id)})
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found in this organization")
+    if member.get("role") == "owner":
+        raise HTTPException(status_code=409, detail="The organization owner's role cannot be changed")
+    before = member.get("role")
+    if before != role:
+        await db.organization_members.update_one({"_id": member["_id"]},
+                                                 {"$set": {"role": role, "updated_at": utcnow()}})
+        await aaudit("member.role_changed", "security", user=ctx.audit_user(),
+                     organization_id=str(org_id), resource_type="member", resource_id=str(user_id),
+                     details={"before": before, "after": role, "reason": body.reason[:300],
+                              "via": "super_admin"}, **_meta(request))
+    return {"success": True, "role": role, "message": f"Role changed from {before} to {role}."}
 
 
 @router.post("/users/{user_id}/revoke-sessions")

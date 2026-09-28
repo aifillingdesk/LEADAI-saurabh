@@ -208,7 +208,10 @@ def resolve_tenant_context(claims: Dict[str, Any], db=None) -> TenantContext:
             # a SaaS platform user keeps their precise platform role
             rec = db.users.find_one({"email": email, "is_platform_admin": True},
                                     {"platform_role": 1})
-            if rec and rec.get("platform_role") in PLATFORM_ROLE_RANK and role != "super_admin":
+            # (never "super_admin" from the database: that role belongs to the
+            # one environment-defined Super Admin)
+            if (rec and rec.get("platform_role") in PLATFORM_ROLE_RANK
+                    and rec["platform_role"] != "super_admin" and role != "super_admin"):
                 platform_role = rec["platform_role"]
         if not platform_role:
             _forbid("forbidden", "Platform access required")

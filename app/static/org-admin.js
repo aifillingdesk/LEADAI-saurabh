@@ -1127,7 +1127,16 @@
       const res = await confirmDialog('Reset access?', `We'll email ${u.email} a secure one-time link to set a new password. No password is shown or sent.`, { confirm: 'Send reset link', extra: '<label class="oa-switch" style="border:0"><input type="checkbox" data-rev checked/><span class="oa-switch-text"><b>Sign them out everywhere</b><span>Ends all of their current sessions now.</span></span></label>', collect: (root) => ({ revoke: $('[data-rev]', root).checked }) });
       if (!res) return;
       busy(rs, true, 'Sending…');
-      try { const r = await api(`/api/org-admin/users/${encodeURIComponent(u.user_id)}/reset-access`, { method: 'POST', body: { revoke_sessions: !!res.revoke } }); toast(r.message, 'success'); }
+      try {
+        const r = await api(`/api/org-admin/users/${encodeURIComponent(u.user_id)}/reset-access`, { method: 'POST', body: { revoke_sessions: !!res.revoke } });
+        const link = safeUrl(r.reset_url);
+        if (link) {
+          // email not delivered: show the one-time link once, to pass on securely
+          openModal({ title: 'Copy the reset link', body: `<p class="oa-small" style="margin:0 0 10px">${esc(r.message)}</p><div class="oa-color"><input class="form-input oa-mono" readonly value="${attr(link)}" aria-label="One-time reset link"/><button type="button" class="btn btn-secondary btn-sm" data-copy>Copy</button></div><p class="oa-small" style="margin:8px 0 0">It works once and expires. It will not be shown again.</p>`,
+            foot: '<button type="button" class="btn btn-primary btn-sm" data-close>Done</button>',
+            onMount: (m) => { const cp = $('[data-copy]', m); if (cp) cp.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(link).then(() => toast('Link copied', 'success')); }; } });
+        } else toast(r.message, 'success');
+      }
       catch (e) { toast(e.message, 'error'); } finally { busy(rs, false); }
     };
     const rm = $('[data-remove]', v.el);

@@ -103,6 +103,9 @@ def _site(uid, email, org_id, role):
 
 def _staff(db, role):
     email = f"{role}@platform.test"
+    if role == "super_admin":
+        from tests.conftest import as_superadmin
+        as_superadmin(email)  # the one Super Admin comes from SUPERADMIN_*
     found = db.users.find_one({"email": email})
     uid = str(found["_id"]) if found else _user(db, email, platform_role=role)
     return _cookie({"user_id": uid, "email": email, "name": role, "scope": "admin", "role": role})
