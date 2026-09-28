@@ -573,7 +573,12 @@ async def health():
     except Exception:
         pass
     status = "ok" if mongo_ok else "degraded"
-    result = {"status": status, "auth_enabled": True}
+    from app.auth.superadmin import config_status
+    result = {"status": status, "auth_enabled": True,
+              # deployed revision (Render sets RENDER_GIT_COMMIT) and whether a
+              # Super Admin is configured — a yes/no only, never who or how
+              "commit": (os.environ.get("RENDER_GIT_COMMIT") or "")[:7] or None,
+              "superadmin_configured": bool(config_status()["configured"])}
     if mongo_latency_ms is not None:
         result["mongo_latency_ms"] = mongo_latency_ms
     return result

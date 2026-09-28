@@ -142,3 +142,49 @@ def test_app_starts_without_any_credentials(caplog):
         for k, v in saved.items():
             setattr(s, k, v)
         clear_cache()
+
+
+def test_values_pasted_with_quotes_or_spaces_still_work(client, only_superadmin_env):
+    """Hosting dashboards often get values pasted with wrapping quotes or
+    stray spaces; they are not part of the credential."""
+    only_superadmin_env.superadmin_email = f'  "{SUPER_EMAIL}" '
+    only_superadmin_env.superadmin_password = f"'{SUPER_PASSWORD}'\n"
+    assert _login(client, SUPER_EMAIL, SUPER_PASSWORD, "admin").status_code == 200
+
+
+def test_legacy_sha256_and_panel_values_on_the_server(client, only_superadmin_env):
+    """The old PANEL_ADMIN_* pair (as copied from a local .env) signs in when
+    SUPERADMIN_* is not set, including a quoted value and a legacy SHA-256."""
+    import hashlib
+    only_superadmin_env.superadmin_email = ""
+    only_superadmin_env.superadmin_password = ""
+    only_superadmin_env.panel_admin_email = '"legacy@leadai.example"'
+    only_superadmin_env.panel_admin_password_hash = " " + hash_password("Legacy-Pass-2026") + " "
+    assert _login(client, "legacy@leadai.example", "Legacy-Pass-2026", "admin").status_code == 200
+    client.cookies.clear()
+    only_superadmin_env.superadmin_email = "sha@leadai.example"
+    only_superadmin_env.superadmin_password = hashlib.sha256(b"Sha-Pass-2026").hexdigest()
+    assert _login(client, "sha@leadai.example", "Sha-Pass-2026", "admin").status_code == 200
+
+
+def test_failed_superadmin_login_reason_is_logged_not_returned(client, only_superadmin_env, caplog):
+    with caplog.at_level("WARNING"):
+        r = _login(client, SUPER_EMAIL, "wrong-password", "admin")
+    assert r.status_code == 401 and r.json()["detail"] == "Invalid email or password"
+    assert any("wrong password for the configured Super Admin" in m.getMessage() for m in caplog.records)
+    caplog.clear()
+    only_superadmin_env.superadmin_email = ""
+    only_superadmin_env.superadmin_password = ""
+    with caplog.at_level("WARNING"):
+        _login(client, SUPER_EMAIL, SUPER_PASSWORD, "admin")
+    msgs = " ".join(m.getMessage() for m in caplog.records)
+    assert "no Super Admin is configured" in msgs and SUPER_PASSWORD not in msgs
+
+
+def test_health_reports_commit_and_superadmin_state(client, only_superadmin_env, monkeypatch):
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "30a85df0123456789")
+    body = client.get("/health").json()
+    assert body["commit"] == "30a85df" and body["superadmin_configured"] is True
+    assert SUPER_EMAIL not in str(body)
+    only_superadmin_env.superadmin_password = ""
+    assert client.get("/health").json()["superadmin_configured"] is False

@@ -263,12 +263,12 @@ def verify_admin_login(email: str, password: str) -> Optional[Dict[str, Any]]:
         )
 
     # 2) Legacy env super admin (PANEL_ADMIN_*), only without SUPERADMIN_*
-    expected_email = "" if managed_by_env() else get_envvar_str(
-        "PANEL_ADMIN_EMAIL", settings.panel_admin_email).strip().lower()
+    from app.auth.superadmin import _clean
+    expected_email = "" if managed_by_env() else _clean(get_envvar_str(
+        "PANEL_ADMIN_EMAIL", settings.panel_admin_email)).lower()
     if expected_email and email_clean == expected_email:
-        expected_hash = (get_envvar_str("PANEL_ADMIN_PASSWORD_HASH",
-                                        settings.panel_admin_password_hash)
-                         or "").strip()
+        expected_hash = _clean(get_envvar_str("PANEL_ADMIN_PASSWORD_HASH",
+                                              settings.panel_admin_password_hash))
         if expected_hash and password:
             valid, new_hash = _verify_and_migrate_password(password, expected_hash)
             if valid:

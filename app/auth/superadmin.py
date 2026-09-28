@@ -28,11 +28,21 @@ logger = logging.getLogger(__name__)
 
 MIN_PASSWORD_LENGTH = 12
 _BCRYPT = re.compile(r"^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$")
+_SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def _clean(value: Optional[str]) -> str:
+    """An environment value as typed into a hosting dashboard: surrounding
+    whitespace and one pair of wrapping quotes are not part of the value."""
+    v = (value or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        v = v[1:-1].strip()
+    return v
+
+
 def _norm(email: Optional[str]) -> str:
-    return (email or "").strip().lower()
+    return _clean(email).lower()
 
 
 def env_superadmin_email() -> str:
@@ -40,15 +50,25 @@ def env_superadmin_email() -> str:
     return _norm(get_settings().superadmin_email)
 
 
+def env_superadmin_password() -> str:
+    """SUPERADMIN_PASSWORD as configured (cleaned), "" when unset."""
+    return _clean(get_settings().superadmin_password)
+
+
 def managed_by_env() -> bool:
     """True when the SUPERADMIN_* variables define the Super Admin."""
-    s = get_settings()
-    return bool(env_superadmin_email() and (s.superadmin_password or "").strip())
+    return bool(env_superadmin_email() and env_superadmin_password())
 
 
 def _legacy_email() -> str:
     from app.admin.envvars import get_envvar_str
     return _norm(get_envvar_str("PANEL_ADMIN_EMAIL", get_settings().panel_admin_email))
+
+
+def _legacy_configured() -> bool:
+    from app.admin.envvars import get_envvar_str
+    return bool(_legacy_email() and _clean(get_envvar_str(
+        "PANEL_ADMIN_PASSWORD_HASH", get_settings().panel_admin_password_hash)))
 
 
 def superadmin_email() -> str:
@@ -71,6 +91,10 @@ def _verify_secret(password: str, secret: str) -> bool:
             return bcrypt.checkpw(password.encode("utf-8"), secret.encode("utf-8"))
         except ValueError:
             return False
+    if _SHA256_HEX.match(secret):
+        # legacy SHA-256 hex hash (the old PANEL_ADMIN_PASSWORD_HASH format)
+        return hmac.compare_digest(hashlib.sha256(password.encode("utf-8")).hexdigest(),
+                                   secret.lower())
     # plain value: constant-time comparison of fixed-length digests
     return hmac.compare_digest(hashlib.sha256(password.encode("utf-8")).digest(),
                                hashlib.sha256(secret.encode("utf-8")).digest())
@@ -84,26 +108,42 @@ def verify_env_superadmin(email: str, password: str) -> Optional[bool]:
     or the email is a different account."""
     if not managed_by_env() or _norm(email) != env_superadmin_email():
         return None
-    return _verify_secret(password, get_settings().superadmin_password.strip())
+    return _verify_secret(password, env_superadmin_password())
+
+
+def explain_login_failure(email: str) -> str:
+    """Why an admin-portal sign-in for ``email`` failed, for the SERVER LOG
+    only (never returned to the client). Never includes a secret."""
+    status = config_status()
+    target = superadmin_email()
+    if not status["configured"]:
+        return (f"no Super Admin is configured on this server ({status.get('problem')}). "
+                "Set SUPERADMIN_EMAIL and SUPERADMIN_PASSWORD in the hosting "
+                "environment and redeploy.")
+    if _norm(email) == target:
+        return (f"wrong password for the configured Super Admin ({status['source']}). "
+                "Check SUPERADMIN_PASSWORD in the hosting environment.")
+    return (f"the email is not the configured Super Admin ({_mask(target)}, from "
+            f"{status['source']}) and has no platform account.")
 
 
 def config_status() -> Dict[str, Any]:
     """Non-secret summary of the Super Admin configuration."""
     s = get_settings()
     if managed_by_env():
-        pw = s.superadmin_password.strip()
-        is_hash = bool(_BCRYPT.match(pw))
+        pw = env_superadmin_password()
+        is_hash = bool(_BCRYPT.match(pw) or _SHA256_HEX.match(pw))
         return {"configured": True, "source": "SUPERADMIN_EMAIL",
                 "email_valid": bool(_EMAIL.match(env_superadmin_email())),
                 "password_is_hash": is_hash,
                 "password_too_short": (not is_hash) and len(pw) < MIN_PASSWORD_LENGTH}
-    if env_superadmin_email() and not (s.superadmin_password or "").strip():
+    if env_superadmin_email() and not env_superadmin_password():
         return {"configured": False, "source": "SUPERADMIN_EMAIL",
                 "problem": "SUPERADMIN_PASSWORD is empty"}
-    if (s.superadmin_password or "").strip() and not env_superadmin_email():
+    if env_superadmin_password() and not env_superadmin_email():
         return {"configured": False, "source": "SUPERADMIN_PASSWORD",
                 "problem": "SUPERADMIN_EMAIL is empty"}
-    if s.panel_admin_email and s.panel_admin_password_hash:
+    if _legacy_configured():
         return {"configured": True, "source": "PANEL_ADMIN_EMAIL (deprecated)"}
     return {"configured": False, "source": None,
             "problem": "SUPERADMIN_EMAIL and SUPERADMIN_PASSWORD are not set"}

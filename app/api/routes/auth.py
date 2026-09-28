@@ -195,6 +195,11 @@ async def login(body: LoginRequest, request: Request, response: Response):
             await aaudit("auth.login", "auth", user=email, ip=ip, success=False,
                          user_agent=user_agent, details={"reason": code, "scope": body.scope})
             raise HTTPException(status_code=status, detail={"code": code, "message": msg})
+        if body.scope == "admin":
+            # operator diagnostics in the server log (e.g. Render → Logs);
+            # the client only ever sees the generic message below
+            from app.auth.superadmin import explain_login_failure
+            logger.warning("Super Admin portal sign-in failed: %s", explain_login_failure(email))
         record_login_failure(ip)
         just_locked = record_account_failure(email)
         log_security_event("account_locked" if just_locked else "login_failed",
