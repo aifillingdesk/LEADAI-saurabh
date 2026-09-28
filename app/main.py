@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 from fastapi import FastAPI, Request
@@ -58,26 +59,55 @@ def _setup_logging():
     root.setLevel(getattr(logging, root_level, logging.DEBUG))
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S")
+    redact = _SecretRedactingFilter()
     console = logging.StreamHandler()
     console.setLevel(getattr(logging, console_level, logging.INFO))
     console.setFormatter(fmt)
+    console.addFilter(redact)
     root.addHandler(console)
-    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    from logging.handlers import RotatingFileHandler
-    log_file = RotatingFileHandler(
-        os.path.join(log_dir, "app.log"), encoding="utf-8",
-        maxBytes=10 * 1024 * 1024, backupCount=5)
-    log_file.setLevel(getattr(logging, file_level, logging.DEBUG))
-    log_file.setFormatter(fmt)
-    root.addHandler(log_file)
+    # test runs (in-memory DB) must not append to the real application log
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        from logging.handlers import RotatingFileHandler
+        log_file = RotatingFileHandler(
+            os.path.join(log_dir, "app.log"), encoding="utf-8",
+            maxBytes=10 * 1024 * 1024, backupCount=5)
+        log_file.setLevel(getattr(logging, file_level, logging.DEBUG))
+        log_file.setFormatter(fmt)
+        log_file.addFilter(redact)
+        root.addHandler(log_file)
     # uvicorn's own access logs stay on console only
     logging.getLogger("uvicorn.access").propagate = False
     # mongo driver chatter is not useful at DEBUG level — force to WARNING
-    # to prevent log flood from pymongo.topology / pymongo.connection
+    # to prevent log flood from pymongo.topology / pymongo.connection.
+    # httpx logs every request URL at INFO — including API keys passed as a
+    # query parameter (Gemini's ?key=) — so it is kept at WARNING too.
     for noisy in ("pymongo", "pymongo.topology", "pymongo.connection",
-                  "pymongo.monitoring", "motor", "urllib3", "httpcore"):
+                  "pymongo.monitoring", "motor", "urllib3", "httpcore", "httpx"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+class _SecretRedactingFilter(logging.Filter):
+    """Masks credentials that libraries may put in a log line (API keys in
+    query strings, bearer tokens, passwords in connection strings)."""
+    _PATTERNS = (
+        (re.compile(r"([?&](?:key|api_key|apikey|token|access_token)=)[^&\s\"']+", re.I), r"\1***"),
+        (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.I), r"\1***"),
+        (re.compile(r"(mongodb(?:\+srv)?://[^:/\s]+:)[^@\s]+@", re.I), r"\1***@"),
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        cleaned = message
+        for pattern, repl in self._PATTERNS:
+            cleaned = pattern.sub(repl, cleaned)
+        if cleaned != message:
+            record.msg, record.args = cleaned, ()
+        return True
 
 
 @asynccontextmanager

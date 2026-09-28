@@ -71,6 +71,7 @@ _EMOJI_RE = re.compile(
     "\U0000FE0F\U00002700-\U000027BF\u2B50\u2764\u26A0\u26A1\u2705\u261D\u26C4]"
 )
 _ALNUM_RE = re.compile(r"[a-zA-Z0-9]")
+_WORD_CHAR_RE = re.compile(r"[a-zA-Z0-9ऀ-ॿ]")
 _URL_ONLY_RE = re.compile(r"^\s*((?:https?://|www\.)\S+|\s+)*$")
 _TOKEN_SPLIT_RE = re.compile(r"[^\w\u0900-\u097F]+", re.UNICODE)
 
@@ -113,6 +114,39 @@ _INQUIRY_WORDS = [
     "interest", "want to know", "details", "brochure", "is this",
     "is it", "emi", "offer", "discount", "deal",
 ]
+# Price / location questions as people actually write them: English,
+# Hinglish (romanised Hindi) and Devanagari.
+_PRICE_QUESTION_RE = re.compile(
+    r"\b(?:price|prices|rate|rates|cost|costing|kimat|keemat|daam|dam|budget|"
+    r"kitne|kitna|kitni|kitney|how much|price list|emi|payment plan)\b|"
+    r"रेट|कीमत|दाम|कितन[ाीे]|प्राइस",
+    re.IGNORECASE)
+_LOCATION_QUESTION_RE = re.compile(
+    r"\b(?:location|locations|lokesan|lokeshan|address|kaha|kahan|kaha pe|kahan par|"
+    r"kidhar|where|site visit|map|pin location)\b|कहाँ|कहां|लोकेशन|पता|एड्रेस",
+    re.IGNORECASE)
+_ASK_RE = re.compile(
+    r"\?|\b(?:batao|batayo|bataye|bataiye|batay|btao|bolo|bataoge|share|send|"
+    r"please|pls|plz|chahiye|want|need|interested|details do|detail do|contact)\b|"
+    r"बताओ|बताइए|बताएं|बताये|चाहिए|भेजो",
+    re.IGNORECASE)
+# A comment that ADVERTISES an offer (a competing broker/seller dropping a
+# number) rather than asking about one: not a lead.
+_PROMO_CALL_RE = re.compile(
+    r"\b(?:call kare|call karein|call kre|call karo|call karen|call now|"
+    r"contact kare|contact karein|sampark kare|sampark karein|whatsapp kare|"
+    r"for booking|booking open|book now|dm for|inbox for)\b|संपर्क कर|कॉल कर",
+    re.IGNORECASE)
+_PROMO_OFFER_RE = re.compile(
+    r"\b(?:sasta|saste|sasti|sale|for sale|bikau|available|best price|lowest price|"
+    r"prime location|offer|discount|project|hamare|hamara|our|we have|we are|"
+    r"lene ke liye|lene k liye|kharidne ke liye|resale|investment)\b|बिकाऊ|उपलब्ध|हमारे",
+    re.IGNORECASE)
+_BUYER_NEED_RE = re.compile(
+    r"\b(?:chahiye|want|need|looking for|require|interested|mujhe|muje|hame|"
+    r"lena hai|leni hai|kharidna)\b|चाहिए|मुझे|लेना है",
+    re.IGNORECASE)
+
 _URGENCY_WORDS = [
     "urgent", "asap", "immediately", "as soon as", "soon", "quickly",
     "jaldi", "jldi", "early", "hurry", "today", "this week",
@@ -169,7 +203,30 @@ def is_emoji_only(text: str) -> bool:
     return not _ALNUM_RE.search(stripped) and stripped.strip() == ""
 
 
-def rule_based_classify(text: Optional[str], author_name: str = "") -> Dict[str, Any]:
+def _name_key(name: Optional[str]) -> str:
+    """Comparable form of a display name (case, spaces, punctuation ignored)."""
+    return re.sub(r"[\W_]+", "", (name or "").lower())
+
+
+def is_page_owner_comment(author_name: Optional[str], page_name: Optional[str]) -> bool:
+    """True when the comment was written by the page/profile that owns the
+    post (its replies to customers and its own listings are never leads)."""
+    a, p = _name_key(author_name), _name_key(page_name)
+    return bool(a and p and (a == p or (len(p) >= 6 and a.startswith(p))))
+
+
+def is_promotional_comment(text: str) -> bool:
+    """A comment advertising an offer with a number to call (typically a
+    competing broker/seller), as opposed to someone asking about the post."""
+    if not _PHONE_RE.search(text):
+        return False
+    if "?" in text or _BUYER_NEED_RE.search(text):
+        return False
+    return bool(_PROMO_CALL_RE.search(text) and _PROMO_OFFER_RE.search(text))
+
+
+def rule_based_classify(text: Optional[str], author_name: str = "",
+                        page_name: str = "") -> Dict[str, Any]:
     """Stage 1 — deterministic filter returning the canonical analysis shape."""
     empty = {
         "is_useful": True,
@@ -196,6 +253,14 @@ def rule_based_classify(text: Optional[str], author_name: str = "") -> Dict[str,
     raw = text.strip()
     lower = raw.lower()
 
+    if is_page_owner_comment(author_name, page_name):
+        return {**empty, "is_useful": False, "lead_type": "none",
+                "reason": "Comment by the page itself (reply or own listing)"}
+    if is_promotional_comment(raw):
+        return {**empty, "is_useful": False, "lead_type": "broker", "spam_score": 0.6,
+                "reason": "Promotional comment advertising an offer (not a buyer)",
+                "buyer": {**empty["buyer"], "intent": "selling"}}
+
     from app.admin.settings import get_bool_cached
     ignore_emoji = get_bool_cached("ci.ignore_emoji_only")
     ignore_spam = get_bool_cached("ci.ignore_spam")
@@ -210,7 +275,9 @@ def rule_based_classify(text: Optional[str], author_name: str = "") -> Dict[str,
         for pattern in SPAM_PATTERNS:
             if pattern.search(lower):
                 return {**empty, "is_useful": False, "reason": "Spam pattern detected", "spam_score": 1.0}
-    if ignore_low_value and len(_ALNUM_RE.findall(raw)) < 3:
+    # letters/digits in any script we serve — Latin AND Devanagari, so a
+    # comment written only in Hindi is not mistaken for an empty one
+    if ignore_low_value and len(_WORD_CHAR_RE.findall(raw)) < 3:
         return {**empty, "is_useful": False, "reason": "Too short to be meaningful", "spam_score": 0.3}
     tokens = [t for t in _TOKEN_SPLIT_RE.split(lower) if t]
     if ignore_low_value and tokens and all(t in GRATITUDE_WORDS for t in tokens):
@@ -259,6 +326,18 @@ def _rule_extraction(analysis: Dict[str, Any], text: str, lower: str) -> Dict[st
         analysis["buyer"]["urgency"] = urg_words[0]
     if req_words or urg_words or budget_m or city_m:
         analysis["buyer"]["intent"] = "buying"
+    # explicit questions about the offer: "price kya hai", "rate batao",
+    # "location kaha hai", "रेट कितनी है" — real inquiries from prospects
+    price_q = _PRICE_QUESTION_RE.search(text)
+    location_q = _LOCATION_QUESTION_RE.search(text)
+    if price_q or location_q:
+        analysis["buyer"]["intent"] = "pricing" if price_q else "inquiry"
+        analysis["lead_type"] = analysis["lead_type"] or "inquiry"
+        analysis["priority"] = "medium"
+        asked = bool(_ASK_RE.search(text)) or len(text.split()) <= 6
+        analysis["confidence_score"] = max(analysis["confidence_score"], 0.7 if asked else 0.6)
+        analysis["reason"] = ("Asks about the price" if price_q
+                              else "Asks about the location / address")
     if phone_m or email_m or url_m:
         analysis["lead_type"] = "buyer"
         analysis["priority"] = "high"
@@ -517,8 +596,11 @@ def _parse_gemini_result(raw: Any) -> Dict[str, Any]:
 def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
                        post_caption: str = "", organization_id: Optional[str] = None,
                        user_id: Optional[str] = None, search_id: Optional[str] = None,
-                       business_category: str = "", allow_ai: bool = True) -> Dict[str, Any]:
+                       business_category: str = "", allow_ai: bool = True,
+                       page_name: str = "") -> Dict[str, Any]:
     """Two-stage analysis for one comment with prompt versioning and usage tracking. Never raises.
+    ``page_name`` lets the rule stage drop the page's own comments before any
+    AI call.
 
     Behavior is admin-configurable: ``ai.enabled`` turns the Gemini stage on
     or off, ``ai.rule_fallback`` decides whether rule analysis is used when
@@ -529,7 +611,7 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
 
     ai_enabled = get_bool_cached("ai.enabled")
     rule_fallback = get_bool_cached("ai.rule_fallback")
-    rule = rule_based_classify(comment_text, author_name)
+    rule = rule_based_classify(comment_text, author_name, page_name)
     if not rule["is_useful"]:
         return {**rule, "analyzed_by": "rules"}
     if not ai_enabled or not allow_ai:
@@ -735,7 +817,9 @@ def extract_display_signals(text: Optional[str], ai_analysis: Optional[Dict[str,
         add("location")
     if detect["urgency"] and (buyer.get("urgency") or any(w in lower for w in _URGENCY_WORDS)):
         add("urgency")
-    if "?" in text or any(w in lower for w in _INQUIRY_WORDS):
+    if ("?" in text or any(w in lower for w in _INQUIRY_WORDS)
+            or intent in ("pricing", "inquiry")
+            or _PRICE_QUESTION_RE.search(text) or _LOCATION_QUESTION_RE.search(text)):
         add("inquiry")
     if _CONTACT_REQUEST_RE.search(lower):
         add("contact_request")
@@ -781,7 +865,10 @@ def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None) -> Dict[
         "confidence": analysis.get("confidence_score") or 0.0,
         "lead_score": score,
         "signal_score": signal_score,
-        "is_lead": bool(signals) and score >= min_lead_score,
+        # a comment judged not useful (the page's own reply, a promotion,
+        # spam, filler) is never a lead, whatever words or numbers it contains
+        "is_lead": bool(analysis.get("is_useful")) and bool(signals)
+                   and score >= min_lead_score,
         "reason": analysis.get("reason"),
     }
 
@@ -852,7 +939,9 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
         .limit(max_comments)
     )
 
-    if comment_refs:
+    # an explicit (even empty) list means the keyword filter ran: analyze
+    # exactly the matched comments — none when nothing matched
+    if comment_refs is not None:
         ref_set = set(comment_refs)
         all_count = len(comments)
         comments = [c for c in comments if str(c["_id"]) in ref_set]
@@ -869,7 +958,7 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
         "filtered_out": filtered_out,
         "keyword_filter": filter_summary or
         ({"enabled": True, "status": "completed", "matched": len(comments),
-          "not_matched": filtered_out} if comment_refs else None),
+          "not_matched": filtered_out} if comment_refs is not None else None),
         "by_priority": {}, "by_intent": {},
     }
 
@@ -903,7 +992,8 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
             doc.get("text"), doc.get("author_name") or "", caption,
             organization_id=str(org_id) if org_id else None,
             user_id=str(owner_user_id) if owner_user_id else None,
-            search_id=run_id or doc.get("search_run_id"), allow_ai=ai_allowed)
+            search_id=run_id or doc.get("search_run_id"), allow_ai=ai_allowed,
+            page_name=(page_doc or {}).get("page_name") or post_doc.get("page_name") or "")
         if analysis.get("analyzed_by") == "gemini":
             ai_calls_used += 1
             if org_id and ai_token_cost:

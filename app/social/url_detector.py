@@ -207,6 +207,13 @@ def detect_social_url(raw_url: str):
     platform = _platform_of_host(parts.netloc)
     if not platform:
         raise UrlError("unsupported", UNSUPPORTED_MSG)
+    # a space inside the address (e.g. ".../KOTA PROPERTY") is a typed page
+    # name, not a link — no profile/page URL contains one, so the scrape
+    # could only come back empty
+    if re.search(r"\s", parts.path.strip()):
+        raise UrlError("invalid", "That link contains a space, so it is not a real page "
+                                  "address. Open the page and copy its link from the "
+                                  "browser's address bar or the Share button.")
     canonical = _NORMALIZERS[platform](parts)
     logger.info(f"[URL SEARCH] URL received: {raw_url} | detected platform: {platform} | "
                 f"canonical: {canonical}")

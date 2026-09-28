@@ -24,6 +24,8 @@ _SECRET_PATTERNS = [
     (re.compile(r'(PANEL_ADMIN_PASSWORD_HASH["\s:=]+)\S+', re.I), r'\1********'),
     (re.compile(r'(SUPERADMIN_PASSWORD["\s:=]+)\S+', re.I), r'\1********'),
     (re.compile(r'(Authorization["\s:=]+Bearer\s+)\S+', re.I), r'\1********'),
+    # API keys passed as a URL query parameter (e.g. Gemini's ?key=...)
+    (re.compile(r'([?&](?:key|api_key|apikey|access_token)=)[^&\s"\']+', re.I), r'\1********'),
     (re.compile(r'(password["\s:=]+)\S+', re.I), r'\1********'),
     (re.compile(r'(token["\s:=]+)\S+', re.I), r'\1********'),
     (re.compile(r'(mongodb(\+srv)?://[^:]+:)[^@]+(@)', re.I), r'\1********\2'),
