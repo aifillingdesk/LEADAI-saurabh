@@ -40,6 +40,7 @@ class UpdateUserRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=80)
     role: Optional[str] = Field(None, pattern="^(viewer|manager)$")  # the one Super Admin is SUPERADMIN_* only
     password: Optional[str] = Field(None, min_length=8, max_length=128)
+    enabled: Optional[bool] = None
 
 
 class ChangePasswordRequest(BaseModel):

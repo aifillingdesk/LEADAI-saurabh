@@ -690,8 +690,8 @@
   /** Server CSV report URL (redacted + audited server side) for the table's current filters. */
   function reportUrl(kind, f) {
     f = f || {};
-    var status = /^(awaiting|refunded)$/.test(f.status || '') ? '' : f.status;
-    return '/api/super-admin/reports/' + kind + '.csv' + qs({ organization_id: f.organization_id, from: f.from, to: f.to, status: status, category: f.category, action: f.action });
+    // status aliases (awaiting, pending, refunded) are understood by the report endpoint
+    return '/api/super-admin/reports/' + kind + '.csv' + qs({ organization_id: f.organization_id, from: f.from, to: f.to, status: f.status, category: f.category, action: f.action });
   }
   function adminLink(route, label) {
     return '<a class="btn btn-secondary btn-sm" href="/admin#/' + esc(route) + '" target="_blank" rel="noopener">' + esc(label || 'Open in platform console') + ' ↗</a>';
@@ -843,7 +843,7 @@
         var out = await api('/api/admin/organizations', { method: 'POST', body: body });
         return out.organization;
       } });
-    if (res) { toast('Organization created' + (res.owner_id ? ' — set-password link emailed to the owner' : '')); go('#/organizations/' + (res.id || res._id)); if (after) after(); }
+    if (res) { toast('Organization created' + (res.owner_email_delivery === 'sent' ? ' — set-password link emailed to the owner' : res.owner_email_delivery ? ' — email is not configured: the owner can use “Forgot password” to set a password' : res.owner_id ? ' — the existing account was added as owner' : '')); go('#/organizations/' + (res.id || res._id)); if (after) after(); }
   }
 
   async function editOrgModal(org, after) {
@@ -938,8 +938,9 @@
         { label: 'Activate', run: async function (ids) {
           var r = await confirmDialog({ title: 'Activate ' + ids.length + ' organizations', message: 'Members regain access.', confirmLabel: 'Activate all', danger: false });
           if (!r) return false;
-          for (var i = 0; i < ids.length; i++) await api('/api/super-admin/organizations/' + ids[i] + '/status', { method: 'PATCH', body: { status: 'active', reason: r.reason } });
-          toast(ids.length + ' organizations activated');
+          var fails = 0;
+          for (var i = 0; i < ids.length; i++) { try { await api('/api/super-admin/organizations/' + ids[i] + '/status', { method: 'PATCH', body: { status: 'active', reason: r.reason } }); } catch (e) { fails++; } }
+          toast((ids.length - fails) + ' organizations activated' + (fails ? ', ' + fails + ' skipped (e.g. no active subscription)' : ''), fails ? 'warning' : 'success');
         } }
       ],
       empty: { title: 'No organizations', desc: 'Nothing matches these filters.' }
@@ -1176,8 +1177,9 @@
         for (var i = 0; i < ids.length; i++) { try { await api('/api/super-admin/users/' + ids[i] + '/status', { method: 'PATCH', body: { status: 'suspended', reason: r.reason } }); } catch (e) { fails++; } }
         toast((ids.length - fails) + ' suspended' + (fails ? ', ' + fails + ' skipped (protected or self)' : ''), fails ? 'warning' : 'success');
       } }, { label: 'Activate', run: async function (ids) {
-        for (var i = 0; i < ids.length; i++) await api('/api/super-admin/users/' + ids[i] + '/status', { method: 'PATCH', body: { status: 'active' } });
-        toast(ids.length + ' users activated');
+        var fails = 0;
+        for (var i = 0; i < ids.length; i++) { try { await api('/api/super-admin/users/' + ids[i] + '/status', { method: 'PATCH', body: { status: 'active' } }); } catch (e) { fails++; } }
+        toast((ids.length - fails) + ' users activated' + (fails ? ', ' + fails + ' skipped' : ''), fails ? 'warning' : 'success');
       } }],
       empty: { title: 'No users found' }
     });
@@ -1225,7 +1227,7 @@
             return '<li><div><a class="sa-link" href="#/organizations/' + esc(m.organization_id) + '">' + esc(m.organization_name) + '</a><div class="sa-small sa-muted">' + esc(roleLabel(m.role)) + '</div></div><span class="when">' + pill(m.status) + ' ' + pill(m.organization_status) + '</span></li>';
           }).join('') + '</ul>' : emptyState('No memberships')) + '</div></div>';
       } else if (key === 'searches') searchesList(el, { user_id: id });
-      else if (key === 'leads') { el.innerHTML = '<div class="alert alert-info"><div class="alert-body">Leads are owned by organizations. Showing leads of this user\'s organizations.</div></div><div id="ulL" class="sa-section"></div>'; leadsList($('#ulL', el), { organization_id: ((u.memberships || [])[0] || {}).organization_id || '' }); }
+      else if (key === 'leads') { el.innerHTML = '<div class="alert alert-info"><div class="alert-body">Leads are owned by organizations. Showing leads found by this user\'s searches or assigned to them.</div></div><div id="ulL" class="sa-section"></div>'; leadsList($('#ulL', el), { user_id: id }); }
       else if (key === 'sessions') sessionsList(el, { user_id: id });
       else if (key === 'activity') auditList(el, { user_id: id });
     });
@@ -1293,6 +1295,8 @@
       body.innerHTML = '<dl class="sa-kv"><dt>Company</dt><dd>' + esc(r.company) + '</dd><dt>Name</dt><dd>' + esc(r.name) + '</dd><dt>Email</dt><dd>' + esc(r.email) + '</dd><dt>Phone</dt><dd>' + esc(r.phone || '—') + '</dd>' +
         '<dt>Requested</dt><dd>' + esc(fmtDT(r.created_at)) + '</dd><dt>Status</dt><dd>' + pill(r.status) + (r.status === 'converted' ? ' <span class="sa-small sa-muted">converted automatically when the subscription was confirmed</span>' : '') + '</dd>' +
         (r.message ? '<dt>Message</dt><dd>' + esc(r.message) + '</dd>' : '') +
+        (r.industry ? '<dt>Industry</dt><dd>' + esc(r.industry) + '</dd>' : '') + (r.requested_plan ? '<dt>Interested in plan</dt><dd>' + esc(r.requested_plan) + '</dd>' : '') +
+        '<dt>Terms accepted</dt><dd>' + esc(r.terms_accepted_at ? fmtDT(r.terms_accepted_at) : '—') + '</dd>' +
         '<dt>Organization</dt><dd><a class="sa-link" href="#/organizations/' + esc(r.organization_id) + '">Open organization →</a></dd></dl>' +
         '<div class="sa-grid sa-kpis sa-section">' + kpi('Searches', fmtN((r.usage || {}).searches)) + kpi('Leads', fmtN((r.usage || {}).leads)) +
         kpi('Tokens used', fmtN(t.used || 0), t.allocated ? 'of ' + fmtN(t.allocated) : '') + kpi('Time left', d.is_demo ? (d.expired ? 'Expired' : d.days_remaining + ' days') : '—', d.expires_at ? 'until ' + fmtDate(d.expires_at) : '') + '</div>' +
@@ -1415,7 +1419,8 @@
           description: fd.get('description'), is_public: !!fd.get('is_public'), is_default: !!fd.get('is_default'), is_trial: !!fd.get('is_trial'),
           features: fd.getAll('feature'), limits: {} };
         if (!out.name) throw new Error('Name is required.');
-        schema.limit_keys.forEach(function (k) { var v = fd.get('limit:' + k); if (v !== '' && v != null) out.limits[k] = parseInt(v, 10); });
+        out.limits_unset = [];
+        schema.limit_keys.forEach(function (k) { var v = fd.get('limit:' + k); if (v !== '' && v != null) out.limits[k] = parseInt(v, 10); else if (lim[k] != null) out.limits_unset.push(k); });
         if (!plan) { if (fd.get('slug')) out.slug = String(fd.get('slug')).trim().toLowerCase(); return api('/api/super-admin/plans', { method: 'POST', body: out }); }
         return api('/api/super-admin/plans/' + encodeURIComponent(plan._id || plan.id), { method: 'PATCH', body: out });
       } });
@@ -1949,7 +1954,8 @@
       if (curs.length <= 1) return chart('Revenue (collected)' + (curs.length ? ' · ' + curs[0] : ''), rev, href, { money: true, currency: curs[0] || rev.currency });
       return curs.map(function (c) { return chart('Revenue (collected) · ' + c, byCur[c], href, { money: true, currency: c }); }).join('');
     }
-    var fromTo = qs({ from: labels[0], to: labels[labels.length - 1] }).replace('?', '');
+    // drill-down range = the analysed range (bucket labels are YYYY-MM / week starts)
+    var fromTo = qs({ from: String(a.from || '').slice(0, 10), to: String(a.to || '').slice(0, 10) }).replace('?', '');
     var b = a.business, p = a.product, snap = a.snapshot;
     root.innerHTML = header('Analytics', 'Business and product metrics · ' + fmtDate(a.from) + ' – ' + fmtDate(a.to) + ' · per ' + (UNIT_NAME[unit] || UNIT_NAME.day)[0] + ' (UTC' + (unit === 'week' ? ', weeks start Monday' : '') + ')' + (q.org ? ' · organization ' + q.org : ' · all organizations'),
       '<button type="button" class="btn btn-secondary btn-sm" id="anTable">Table view</button>') +
@@ -2647,6 +2653,27 @@
       '<div class="sa-card"><h3>Storage</h3><dl class="sa-kv"><dt>Exports</dt><dd>' + fmtN(i.storage.exports) + '</dd><dt>Website media files</dt><dd>' + fmtN(i.storage.media_files) + '</dd></dl></div>' +
       '<div class="sa-card"><h3>Database <a class="sa-link" href="/admin#/database" target="_blank" rel="noopener">Details ↗</a></h3><dl class="sa-kv"><dt>Connection</dt><dd>' + yes(i.database.connected, 'Connected', 'Unreachable') + '</dd><dt>Ping latency</dt><dd>' + esc(i.database.latency_ms == null ? '—' : i.database.latency_ms + ' ms') + '</dd></dl></div></div>' +
       '<p class="sa-small sa-muted sa-section">Secrets are edited only in the locked environment panel of the platform console (<a href="/admin#/environment" target="_blank" rel="noopener">Environment ↗</a>).</p>';
+    // environment-only variables that still have a value stored in the app
+    try {
+      var lo = await api('/api/super-admin/config/legacy-overrides');
+      if (lo.names && lo.names.length) {
+        var box = document.createElement('div');
+        box.className = 'alert alert-warning sa-section';
+        box.innerHTML = '<div class="alert-body"><div class="alert-title">Stored secrets to move to the environment</div>' +
+          esc(lo.message) + '<ul style="margin:8px 0 0">' + lo.names.map(function (n) {
+            return '<li><span class="sa-mono">' + esc(n) + '</span> <button type="button" class="btn btn-secondary btn-sm" data-legacy="' + esc(n) + '">Remove stored copy</button></li>';
+          }).join('') + '</ul></div>';
+        root.insertBefore(box, root.children[1] || null);
+        $$('[data-legacy]', box).forEach(function (b) {
+          b.onclick = async function () {
+            var n = b.getAttribute('data-legacy');
+            if (!(await confirmDialog({ title: 'Remove stored ' + n + '?', message: 'Only do this after ' + n + ' is set in the hosting environment' + (n === 'SESSION_SECRET' ? ' with the SAME value (otherwise everyone is signed out once).' : '.'), confirmLabel: 'Remove' }))) return;
+            try { await busy(b, function () { return api('/api/super-admin/config/legacy-overrides/' + encodeURIComponent(n), { method: 'DELETE' }); }); toast('Removed'); viewIntegrations(root); }
+            catch (err) { toast(err.message, 'error'); }
+          };
+        });
+      }
+    } catch (e) { /* the status cards above still render */ }
   }
 
   async function viewHealth(root) {
@@ -2979,7 +3006,7 @@
   async function refreshCounts() {
     try { setCount('demo', (await api('/api/super-admin/demo-requests?status=pending&limit=1')).total || 0); } catch (e) {}
     try { setCount('queue', (await api('/api/super-admin/subscriptions/queue?limit=1')).total || 0); } catch (e) {}
-    try { setCount('support', (await api('/api/super-admin/support/tickets?status=open&limit=1')).total || 0); } catch (e) {}
+    try { setCount('support', (await api('/api/super-admin/support/tickets?status=active&limit=1')).total || 0); } catch (e) {}
   }
   function renderBell() {
     var pop = $('#saBellPop'), items = S.bell || [];
@@ -3090,6 +3117,9 @@
     $('#saBell').onclick = function (e) { e.stopPropagation(); renderBell(); var bp = $('#saBellPop'); togglePop(this, bp); if (!bp.hidden) { var f = $('.sa-pop-item', bp); if (f) f.focus(); } };
     $('#saHealth').onclick = function () { go('#/health'); };
     wireSearch();
+    // "Skip to content" must move focus, not navigate (its #hash is not a route)
+    var skip = document.querySelector('.skip-link');
+    if (skip) skip.addEventListener('click', function (e) { e.preventDefault(); var m = document.getElementById('view'); if (m) { m.setAttribute('tabindex', '-1'); m.focus(); } });
     window.addEventListener('hashchange', function () {
       document.body.classList.remove('sa-nav-open'); $('#saBurger').setAttribute('aria-expanded', 'false');
       route().then(function () { var h = $('#view h1'); if (h && !$('.sa-overlay,.sa-drawer-wrap') && !(document.activeElement || document.body).closest('#view')) h.focus({ preventScroll: true }); });

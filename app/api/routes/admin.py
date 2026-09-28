@@ -16,6 +16,7 @@ only masked hints (``apify.token.masked``) are exposed.
 import json
 import logging
 import os
+import asyncio
 import re
 import secrets
 import time
@@ -1846,6 +1847,32 @@ def _page_platform(page: dict) -> str:
     return "facebook"
 
 
+@router.get("/pages/{social_page_id}", dependencies=[Depends(require_viewer)])
+async def get_admin_page(social_page_id: str):
+    """One collected page (platform staff; cross-organization by design)."""
+    from bson import ObjectId
+    if not ObjectId.is_valid(social_page_id):
+        raise HTTPException(status_code=400, detail="Invalid id")
+    db = await _db()
+    doc = await db.facebook_pages.find_one({"_id": ObjectId(social_page_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Page not found")
+    return _serialize_oid(doc)
+
+
+@router.get("/posts/{post_id}", dependencies=[Depends(require_viewer)])
+async def get_admin_post(post_id: str):
+    """One collected post (platform staff; cross-organization by design)."""
+    from bson import ObjectId
+    if not ObjectId.is_valid(post_id):
+        raise HTTPException(status_code=400, detail="Invalid id")
+    db = await _db()
+    doc = await db.facebook_posts.find_one({"_id": ObjectId(post_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return _serialize_oid(doc)
+
+
 @router.get("/posts", dependencies=[Depends(require_viewer)])
 async def list_admin_posts(
     platform: Optional[str] = Query(None),
@@ -2356,6 +2383,8 @@ async def update_user(user_id: str, body: UpdateUserRequest):
         update["role"] = body.role
     if body.password is not None:
         update["password_hash"] = hash_password(body.password)
+    if body.enabled is not None:
+        update["enabled"] = bool(body.enabled)
     if update:
         await db["admin_users"].update_one({"_id": oid},
                                            {"$set": {**update, "updated_at": utcnow()}})
@@ -2430,31 +2459,35 @@ async def revoke_sessions(admin: dict = Depends(require_super)):
 
 @router.post("/security/change-password")
 async def change_password(body: ChangePasswordRequest,
-                          admin: dict = Depends(require_super)):
-    """Change the signed-in account's password. For the env admin this
-    creates a managed override record (the .env password stays valid as a
-    recovery fallback)."""
+                          admin: dict = Depends(require_viewer)):
+    """Platform staff change their OWN password (current password required).
+    The Super Admin's password lives in the environment (SUPERADMIN_PASSWORD)
+    and cannot be changed here."""
     from app.auth.crypto import hash_password
-    password = body.new_password
+    from app.auth.service import _verify_and_migrate_password
+    from app.auth.superadmin import is_superadmin_email
+    email = (admin.get("email") or "").strip().lower()
+    if is_superadmin_email(email):
+        raise HTTPException(status_code=409, detail=(
+            "The Super Admin password is set by SUPERADMIN_PASSWORD in the hosting "
+            "environment and cannot be changed in the app."))
     db = await _db()
-    email = admin["email"]
+    coll = "admin_users"
     record = await db["admin_users"].find_one({"email": email})
-    doc = {
-        "email": email,
-        "name": record.get("name") if record else admin["name"],
-        "role": record.get("role") if record else "super_admin",
-        "enabled": True,
-        "password_hash": hash_password(password),
-        "updated_at": utcnow(),
-    }
-    if record:
-        await db["admin_users"].update_one(
-            {"_id": record["_id"]},
-            {"$set": {"password_hash": doc["password_hash"],
-                      "updated_at": utcnow()}})
-    else:
-        doc["created_at"] = utcnow()
-        await db["admin_users"].insert_one(doc)
+    if not record:
+        coll = "users"
+        record = await db["users"].find_one({"email": email, "is_platform_admin": True})
+    if not record:
+        raise HTTPException(status_code=404, detail="Account not found")
+    ok, _ = _verify_and_migrate_password(body.old_password,
+                                         (record.get("password_hash") or "").strip())
+    if not ok:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    from app.lifecycle.demo import validate_password
+    validate_password(body.new_password)
+    await db[coll].update_one({"_id": record["_id"]}, {"$set": {
+        "password_hash": hash_password(body.new_password), "password_changed_at": utcnow(),
+        "updated_at": utcnow()}})
     await a.aaudit("security.change_password", "security", user=admin,
                    details={"email": email})
     return {"success": True,
@@ -2537,13 +2570,22 @@ class CreateOrgRequest(_PydanticBaseModel):
     name: str
     slug: Optional[str] = None
     owner_email: Optional[str] = None
-    plan_id: str = "starter"
+    plan_id: Optional[str] = None  # None = no plan yet ("assign later")
+    website: Optional[str] = None
 
 
 class UpdateOrgRequest(_PydanticBaseModel):
     name: Optional[str] = None
     plan_id: Optional[str] = None
     status: Optional[str] = None
+    website: Optional[str] = None
+
+
+def _org_website(value: Optional[str]) -> Optional[str]:
+    value = (value or "").strip()
+    if value and not re.match(r"^https?://[^\s<>\"']+$", value, re.I):
+        raise HTTPException(status_code=422, detail="Website must be an http(s) URL")
+    return value[:300] or None
 
 
 class SuspendOrgRequest(_PydanticBaseModel):
@@ -2685,6 +2727,7 @@ async def create_organization(body: CreateOrgRequest, request: Request):
         "slug": slug,
         "status": "active",
         "plan_id": plan["slug"] if plan else None,
+        "website": _org_website(body.website),
         "admin_portal_enabled": True,
         "timezone": "UTC",
         "currency": "USD",
@@ -2724,7 +2767,8 @@ async def create_organization(body: CreateOrgRequest, request: Request):
                 "user_id": user_id, "token_hash": _hashlib.sha256(token.encode()).hexdigest(),
                 "expires_at": utcnow() + _td(hours=72), "used_at": None,
                 "purpose": "account_setup", "created_at": utcnow()})
-            send_email(owner_email, f"Your LeadAI workspace {name_clean} is ready",
+            doc["owner_email_delivery"] = await asyncio.to_thread(
+                send_email, owner_email, f"Your LeadAI workspace {name_clean} is ready",
                        f"Hi,\n\nA LeadAI workspace for {name_clean} was created for you.\n"
                        f"Set your password here (valid for 72 hours, single use):\n"
                        f"{absolute_url('/reset-password?token=' + token)}\n\n— The LeadAI team",
@@ -2819,9 +2863,19 @@ async def update_organization(org_id: str, body: UpdateOrgRequest):
     if body.name is not None:
         updates["name"] = body.name.strip()
     if body.plan_id is not None:
-        updates["plan_id"] = body.plan_id.strip()
+        from app.billing.plans import get_plan_by_slug_or_id
+        plan = await get_plan_by_slug_or_id(body.plan_id.strip(), db=db)
+        if not plan:
+            raise HTTPException(status_code=422, detail="Unknown plan")
+        updates["plan_id"] = plan["slug"]
     if body.status is not None:
-        updates["status"] = body.status.strip()
+        status = body.status.strip()
+        if status not in ("active", "demo", "trial", "pending", "suspended", "disabled",
+                          "cancelled", "archived"):
+            raise HTTPException(status_code=422, detail="Invalid status")
+        updates["status"] = status
+    if body.website is not None:
+        updates["website"] = _org_website(body.website)
 
     if updates:
         updates["updated_at"] = utcnow()
@@ -3081,6 +3135,7 @@ class PlanCreateRequest(_PydanticBaseModel):
     is_public: bool = True
     is_default: bool = False
     is_trial: bool = False
+    status: str = "active"  # active | inactive | archived (validated by create_plan)
 
 
 class PlanUpdateRequest(_PydanticBaseModel):

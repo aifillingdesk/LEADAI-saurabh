@@ -87,10 +87,22 @@ _ORG_SETTING_DEFAULTS: Dict[str, bool] = {"notify_on_leads": False}
 ALWAYS_DELIVERED = frozenset({
     "security_event", "payment_status", "payment_failed", "payment_received",
     "subscription_activated", "subscription_awaiting_approval", "subscription_cancelled",
-    "organization_suspended", "user_suspended", "demo_expired", "system_error",
+    "organization_suspended", "organization_reactivated", "user_suspended", "demo_expired",
+    "system_error",
 })
 _USAGE_TYPES = frozenset(t for t, k in ORG_SETTING_FOR_TYPE.items()
                          if k == "notify_usage_warnings")
+
+
+def _admin_portal_open(organization_id: Optional[str]) -> bool:
+    try:
+        from bson import ObjectId
+        db = get_sync_db()
+        org = db.organizations.find_one({"_id": ObjectId(str(organization_id))},
+                                        {"admin_portal_enabled": 1, "status": 1}) if db is not None else None
+        return bool(org) and (bool(org.get("admin_portal_enabled")) or org.get("status") == "active")
+    except Exception:
+        return True
 
 
 def _org_settings(organization_id: Optional[str]) -> Dict[str, Any]:
@@ -163,6 +175,10 @@ def notify_org_admins(organization_id: str, ntype: str, title: str,
     settings = _org_settings(organization_id)
     if not org_allows(organization_id, ntype, kw.get("severity", "info"), settings):
         return False
+    if str(kw.get("link") or "").startswith("/org-admin") and not _admin_portal_open(organization_id):
+        # demo / pending organizations have no Admin portal yet: link the
+        # User portal (billing is where they act on these notices)
+        kw["link"] = "/dashboard#billing"
     _insert(_doc("org_admin", ntype, title, message,
                  organization_id=organization_id, **kw))
     if email and org_email_enabled(organization_id, settings):

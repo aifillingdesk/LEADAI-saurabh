@@ -569,7 +569,8 @@ function renderPipelineMeta(data) {
 async function pollSearchRun(runId, onCancelRequested) {
   let cancelled = false;
   let failures = 0;
-  if (onCancelRequested) onCancelRequested(() => { cancelled = true; });
+  // setCancelFlag(false) when the cancel request itself failed
+  if (onCancelRequested) onCancelRequested((v = true) => { cancelled = v; });
   while (true) {
     const res = await api(`/api/search/${encodeURIComponent(runId)}`);
     if (!res.ok) {
@@ -605,7 +606,10 @@ async function pollSearchRun(runId, onCancelRequested) {
         }
         await sleep(1500);
       }
-      return { status: "cancelled" };
+      // the run did not stop in time: keep following its real status
+      cancelled = false;
+      toast("The search is still stopping — status will update when it ends", "info");
+      continue;
     }
     await sleep(1500);
   }
@@ -979,17 +983,23 @@ async function handleUrlSearch(event) {
     saveMemory("runId", runId);
     if (btnText) btnText.textContent = "Search running…";
     refreshSummary();  // tokens were charged — update the meter right away
-    cancelBtn.classList.remove("hidden");
+    cancelBtn.classList.toggle("hidden", !can("search.cancel"));
     cancelBtn.disabled = false;
     cancelBtn.textContent = "✕ Cancel search";
 
     const run = await pollSearchRun(runId, (setCancelFlag) => {
-      cancelBtn.onclick = () => {
+      cancelBtn.onclick = async () => {
         setCancelFlag(true);
         cancelBtn.disabled = true;
         cancelBtn.textContent = "Cancelling…";
-        api(`/api/search/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
         toast("Cancelling search…", "info");
+        const r = await api(`/api/search/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+        if (!r.ok) {  // not cancelled: say so and keep following the run
+          setCancelFlag(false);
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = "✕ Cancel search";
+          toast(errText(r.data, "Could not cancel the search"), "error");
+        }
       };
     });
     cancelBtn.classList.add("hidden");
@@ -1061,11 +1071,17 @@ async function resumeRunningSearch() {
   startElapsed();
   try {
     const result = await pollSearchRun(run.run_id, (setCancelFlag) => {
-      cancelBtn.onclick = () => {
+      cancelBtn.onclick = async () => {
         setCancelFlag(true);
         cancelBtn.disabled = true;
         cancelBtn.textContent = "Cancelling…";
-        api(`/api/search/${encodeURIComponent(run.run_id)}/cancel`, { method: "POST" });
+        const r = await api(`/api/search/${encodeURIComponent(run.run_id)}/cancel`, { method: "POST" });
+        if (!r.ok) {
+          setCancelFlag(false);
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = "✕ Cancel search";
+          toast(errText(r.data, "Could not cancel the search"), "error");
+        }
       };
     });
     $("urlSearchSpinner").classList.add("hidden");
@@ -1149,7 +1165,9 @@ async function renderPagesScreen() {
   clearTimeout(_pagesTimer);
   if (!memory.runId) { $("pagesGrid").innerHTML = ""; $("pagesListEmpty").classList.remove("hidden"); return; }
   setBadge("Viewing pages", "status-idle");
-  const category = $("pagesCategoryFilter").value;
+  const catSel = $("pagesCategoryFilter");
+  if (catSel.dataset.run !== String(memory.runId || "")) catSel.value = "";  // new search: no stale category
+  const category = catSel.value;
   const contact = $("pagesContactOnly").checked;
   const params = new URLSearchParams({ run_id: memory.runId, limit: "200" });
   if (category) params.set("category", category);
@@ -1177,9 +1195,11 @@ async function renderPagesScreen() {
   empty.classList.add("hidden");
   $("view-pages").querySelectorAll(".btn-export").forEach((b) => b.classList.toggle("hidden", !can("exports.create")));
 
-  // populate category filter once
+  // category filter options belong to the search they were built from
   const sel = $("pagesCategoryFilter");
-  if (sel.options.length <= 1) {
+  if (sel.dataset.run !== String(memory.runId || "")) {
+    while (sel.options.length > 1) sel.remove(1);
+    sel.dataset.run = String(memory.runId || "");
     const cats = [...new Set(data.pages.map((p) => p.category).filter(Boolean))].sort();
     cats.forEach((c) => {
       const opt = document.createElement("option");
@@ -1296,7 +1316,9 @@ async function openPage(pageId, event) {
   }
   if (!can("search.create")) { toast("You have view-only access — ask your admin to collect posts.", "error"); return; }
   const caps = searchCaps();
-  const maxPosts = Math.min(20, caps.posts_per_search || 20);
+  // the user's own "Posts" setting from the search form, within the plan cap
+  const wanted = parseInt(($("urlSearchLimit") || {}).value, 10) || 20;
+  const maxPosts = Math.min(wanted, caps.posts_per_search || wanted);
   toast("Analyzing real posts for " + (page.page_name || "this page") + "…", "info");
   const postRes = await api(`/api/pages/${encodeURIComponent(pageId)}/posts?max_posts=${maxPosts}`, { method: "POST" });
   if (!postRes.ok) {
@@ -1334,7 +1356,7 @@ async function renderPostsScreen() {
   const tbody = $("postsGrid");
   const empty = $("postsListEmpty");
   if (!tbody.children.length) { empty.classList.add("hidden"); tbody.innerHTML = skeletonRows(3); }
-  const res = await api(`/api/pages/${encodeURIComponent(memory.pageId)}/posts`);
+  const res = await api(`/api/pages/${encodeURIComponent(memory.pageId)}/posts?limit=200`);
   if (!res.ok) {
     RETRY.posts = renderPostsScreen;
     empty.classList.add("hidden");
@@ -2206,8 +2228,15 @@ async function loadWorkspaceData() {
   if (wsName) wsName.textContent = org.display_name || org.name || "Workspace";
   if ($("wsNameInput")) $("wsNameInput").value = org.name || "";
   if ($("wsWebsiteInput")) $("wsWebsiteInput").value = org.website || "";
-  if ($("wsTimezoneInput")) $("wsTimezoneInput").value = org.timezone || "UTC";
-  if ($("wsCurrencyInput")) $("wsCurrencyInput").value = org.currency || "USD";
+  // a stored value that is not in the short list is added, never blanked
+  const selectValue = (id, value) => {
+    const el = $(id);
+    if (!el) return;
+    if (value && ![...el.options].some((o) => o.value === value)) el.add(new Option(value, value));
+    el.value = value;
+  };
+  selectValue("wsTimezoneInput", org.timezone || "UTC");
+  selectValue("wsCurrencyInput", org.currency || "USD");
   if ($("wsCompanyName")) $("wsCompanyName").value = (org.branding && org.branding.company_name) || org.display_name || "";
 }
 

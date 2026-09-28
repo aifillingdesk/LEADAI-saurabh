@@ -651,7 +651,16 @@ async def url_search_report(run_id: str, request: Request,
 
     leads = [c for c in comments if c.get("is_lead")]
     page["activity_status"] = page.get("activity_status") or _activity_status(page.get("latest_post_date"))
+    # Apify cost of this run = the recorded actor runs (app/connectors/apify_connector.py)
+    cost = 0.0
+    async for j in db.apify_jobs.find({"search_run_id": run_id, "organization_id": run.get("organization_id")},
+                                      {"usage_usd": 1}):
+        try:
+            cost += float(j.get("usage_usd") or 0)
+        except (TypeError, ValueError):
+            pass
     return {
+        "search": {"cost_usd": round(cost, 4) if cost else None, "status": run.get("status")},
         "run_id": run_id,
         "status": run.get("status"),
         "message": run.get("message"),

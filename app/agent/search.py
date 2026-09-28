@@ -635,6 +635,9 @@ def collect_page_posts(page_id: str, max_posts: int = 20,
         "posts_started_at": utcnow(), "updated_at": utcnow()}})
 
     owner = ownership_from(page)
+    from app.connectors.apify_connector import set_run_context
+    set_run_context(organization_id=owner.get("organization_id"), user_id=owner.get("user_id"),
+                    search_run_id=run_id, platform=page.get("platform") or "facebook")
     connector = ApifyConnector()
     # route by platform: Facebook keeps the existing actor+mapping, all other
     # platforms (Instagram/YouTube/LinkedIn) use their own scraper
@@ -771,6 +774,9 @@ def collect_post_comments(post_id: str, max_comments: int = 200,
 
     from app.social.scrapers import get_scraper
     platform = post.get("platform") or "facebook"
+    from app.connectors.apify_connector import set_run_context
+    set_run_context(organization_id=post.get("organization_id"), user_id=post.get("user_id"),
+                    search_run_id=post.get("search_run_id"), platform=platform)
     if not platform_enabled(platform):
         message = (f"Scraping {platform} is currently disabled by the "
                    "administrator.")

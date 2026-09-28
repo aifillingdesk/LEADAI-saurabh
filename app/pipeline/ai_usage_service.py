@@ -193,10 +193,18 @@ def get_ai_overview_metrics(time_range: str = "30d", organization_id: Optional[s
             {"$sort": {"_id": 1}}
         ]
         trend_res = list(db.ai_requests.aggregate(trend_pipeline))
-        requests_over_time = [
-            {"date": t["_id"], "requests": t["count"], "success": t["success"], "cost": round(t["cost"], 4), "latency": round(t.get("avg_latency") or 0, 1)}
-            for t in trend_res
-        ]
+        by_day = {t["_id"]: t for t in trend_res}
+        # every day of the range, zero-filled, so the chart's days are real days
+        requests_over_time = []
+        day = range_start.date() if hasattr(range_start, "date") else None
+        today = datetime.now(timezone.utc).date()
+        while day is not None and day <= today:
+            t = by_day.get(day.isoformat())
+            requests_over_time.append(
+                {"date": day.isoformat(), "requests": t["count"], "success": t["success"],
+                 "cost": round(t["cost"] or 0, 4), "latency": round(t.get("avg_latency") or 0, 1)}
+                if t else {"date": day.isoformat(), "requests": 0, "success": 0, "cost": 0.0, "latency": 0.0})
+            day += timedelta(days=1)
 
         # Usage by model
         model_pipeline = [

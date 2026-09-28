@@ -88,6 +88,12 @@ async def _transition(db, sub: Dict[str, Any], target: str, *, actor: str,
     return await db.subscriptions.find_one({"_id": sub["_id"]})
 
 
+def _status_link(sub: Dict[str, Any]) -> str:
+    """The checkout status page needs the checkout reference."""
+    sid = sub.get("checkout_session_id")
+    return f"/billing/status?session={sid}" if sid else "/dashboard#billing"
+
+
 async def _payment_event(db, sub: Dict[str, Any], event: str, **data) -> None:
     await db.payment_events.insert_one({
         "organization_id": sub.get("organization_id"), "subscription_id": str(sub["_id"]),
@@ -191,7 +197,7 @@ async def record_payment_verified(subscription_id: str, *, provider: str,
                         data={"subscription_id": str(sub["_id"])})
     notify_org_admins(org_id, "payment_status", "Payment received",
                       "Your payment was received and is awaiting confirmation by our team.",
-                      severity="info", link="/billing/status")
+                      severity="info", link=_status_link(sub))
     return _clean_sub(sub)
 
 
@@ -216,7 +222,7 @@ async def record_payment_failed(subscription_id: str, *, provider: str, reason: 
                         f"Org {sub.get('organization_id')}: {reason}", severity="danger",
                         link="/superadmin#payments")
     notify_org_admins(sub.get("organization_id"), "payment_status", "Payment failed",
-                      reason, severity="danger", link="/billing/status")
+                      reason, severity="danger", link=_status_link(sub))
 
 
 async def confirm_subscription(subscription_id: str, *, actor: Dict[str, Any],
@@ -275,7 +281,7 @@ async def confirm_subscription(subscription_id: str, *, actor: Dict[str, Any],
                         severity="success", link="/superadmin#subscriptions")
     notify_org_admins(s_org_id, "subscription_activated", "Your subscription is active",
                       f"Welcome to {plan['name']}! Your Admin portal is now enabled.",
-                      severity="success", link="/org-admin")
+                      severity="success", link="/org-admin", email=True)
     return await get_organization_subscription(s_org_id, db=db)
 
 
@@ -319,6 +325,27 @@ async def set_subscription_status(subscription_id: str, target: str, *,
                 from app.events.notifications import notify_super_admins
                 notify_super_admins("organization_suspended", "Organization suspended",
                                     f"Org {org_id}: {reason}", severity="warning")
+    # the customer always learns what happened to their subscription
+    from app.events.notifications import notify_org_admins, notify_super_admins
+    refund = target == CANCELLED and was in OPEN_STATUSES
+    texts = {
+        CANCELLED: ("Your subscription request was not confirmed" if was in OPEN_STATUSES
+                    else "Your subscription was cancelled"),
+        SUSPENDED: "Your subscription is suspended",
+        EXPIRED: "Your subscription has expired",
+        ACTIVE: "Your subscription is active again",
+    }
+    if target in texts:
+        msg = (reason or "Contact LeadAI support for details.") + (
+            " Any payment already made will be refunded." if refund else "")
+        notify_org_admins(org_id, "subscription_cancelled" if target != ACTIVE else "subscription_activated",
+                          texts[target], msg, severity="success" if target == ACTIVE else "warning",
+                          email=True, link="/dashboard#billing")
+    if refund:
+        notify_super_admins("payment_failed", "Refund required",
+                            f"Pending subscription {subscription_id} of org {org_id} was rejected after "
+                            "payment — issue the refund.", severity="warning",
+                            link="/superadmin#/payments")
     return _clean_sub(sub)
 
 
@@ -606,6 +633,16 @@ async def change_subscription_plan(
         plan_name=target_plan["name"],
         db=db,
     )
+    # the new plan starts a new period: grant its tokens and tell the org
+    monthly_tokens = int((target_plan.get("limits") or {}).get("monthly_tokens") or 0)
+    if monthly_tokens > 0:
+        from app.billing.tokens import allocate
+        allocate(s_org_id, monthly_tokens, source="plan", actor="plan_change",
+                 reason=f"Plan changed to {target_plan['name']}", expires_at=period_end, reset=True)
+    from app.events.notifications import notify_org_admins
+    notify_org_admins(s_org_id, "subscription_activated", "Your plan was changed",
+                      f"You are now on {target_plan['name']}.", severity="success",
+                      link="/org-admin#subscription")
 
     return await get_organization_subscription(s_org_id, db=db)
 

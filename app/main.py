@@ -168,7 +168,27 @@ async def lifespan(app: FastAPI):
                 logger.info("Cleaned up %d stale running jobs on startup", res.modified_count)
     except Exception as e:
         logger.warning("Failed to reconcile stale running jobs on startup: %s", e)
+    # environment-only variables with a leftover in-app value: tell the
+    # Super Admin once per start (names only)
+    try:
+        from app.admin.envvars import legacy_locked_overrides
+        _legacy = legacy_locked_overrides()
+        if _legacy:
+            logger.warning("Stored in-app values for environment-only variables: %s — move them to "
+                           "the environment and remove them in Super Admin → Integrations.", ", ".join(_legacy))
+            from app.events.notifications import notify_super_admins
+            notify_super_admins("security_event", "Move stored secrets to the environment",
+                                "These are environment-only now but still have a value stored in the app: "
+                                + ", ".join(_legacy) + ". Copy them to the hosting environment, then remove "
+                                "the stored copies (Integrations).", severity="warning",
+                                link="/superadmin#/integrations")
+    except Exception as e:
+        logger.debug("legacy override check failed: %s", e)
+    # time-driven lifecycle: billing periods, cancellations, demo expiry
+    from app.lifecycle.maintenance import start_background_sweeper
+    sweeper = start_background_sweeper()
     yield
+    sweeper.cancel()
     # ── Graceful shutdown ──────────────────────────────────────────────
     # Cancel in-flight background tasks so they can update MongoDB status
     # before the process exits.  Daemon threads (UrlSearchThread) are killed
@@ -526,7 +546,13 @@ async def auth_gate(request: Request, call_next):
                 {"success": False, "error": "unauthorized",
                  "message": "Sign in required"},
                 status_code=401)
-        target = "/login?admin=1" if admin_area else "/login"
+        if admin_area:
+            target = "/login?admin=1"
+        else:
+            # come back to the page that was asked for after signing in
+            from urllib.parse import quote
+            back = path + (("?" + request.url.query) if request.url.query else "")
+            target = "/login" if path in ("/", "/dashboard") else "/login?next=" + quote(back, safe="")
         return RedirectResponse(target, status_code=303)
     return await _call_as(request, call_next, user)
 

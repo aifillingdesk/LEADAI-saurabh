@@ -77,6 +77,11 @@ SETTING_DEFAULTS: Dict[str, Any] = {
     # Business context: industry used for organizations that chose none
     # (a key of app/pipeline/business_context.py; "general" = any business)
     "business.default_industry": "general",
+
+    # Lifecycle automation (app/lifecycle/maintenance.py): preview-only until
+    # the Super Admin reviews the pending changes and turns it on
+    "lifecycle.auto_apply": False,
+    "lifecycle.preview_notified": False,
     "ai.model": settings.gemini_model or "gemini-2.5-flash",
 
     # Lead scoring — components of the deterministic comment_lead_score

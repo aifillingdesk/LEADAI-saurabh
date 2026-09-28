@@ -112,8 +112,11 @@ async def create_invitation(
     doc["id"] = str(res.inserted_id)
     doc["invite_url"] = f"/invite/{raw_token}"
     if send:
+        import asyncio
         from app.events.email import absolute_url, send_email
-        send_email(clean_email, f"You're invited to join {organization_name or 'a team'} on LeadAI",
+        # SMTP is blocking: keep it off the event loop
+        doc["email_delivery"] = await asyncio.to_thread(
+            send_email, clean_email, f"You're invited to join {organization_name or 'a team'} on LeadAI",
                    f"Hi,\n\n{inviter_name or 'A teammate'} invited you to join "
                    f"{organization_name or 'their organization'} on LeadAI as {clean_role}.\n\n"
                    f"Accept the invitation and create your password here "

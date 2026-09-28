@@ -102,6 +102,7 @@
         </div>
 
         <form class="auth-form" id="signupForm" novalidate>
+          <div class="field-hint" id="planNote" hidden style="margin-bottom:10px"></div>
           <div class="auth-row">
             <div class="form-group">
               <label class="form-label" for="name">Full name</label>
@@ -210,6 +211,9 @@
   var qs = new URLSearchParams(location.search);
   if (qs.get("email") && UI.isEmail(qs.get("email"))) f.email.value = qs.get("email");
   if (qs.get("company")) f.company.value = qs.get("company").slice(0, 200);
+  // plan chosen on the pricing page: shown here and kept on the demo request
+  var chosenPlan = (qs.get("plan") || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+  if (chosenPlan) { var pn = $("planNote"); pn.textContent = "Interested in the " + chosenPlan + " plan — you start with a free demo, and choose your plan after approval."; pn.hidden = false; }
 
   function validators() {
     return {
@@ -277,7 +281,9 @@
         industry: ($("industry") && $("industry").value) || undefined,
         phone: f.phone.value.trim() || null,
         password: f.password.value,
-        message: f.message.value.trim() || null
+        message: f.message.value.trim() || null,
+        plan: chosenPlan || undefined,
+        accepted_terms: f.terms.checked
       }
     });
 

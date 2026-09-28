@@ -162,10 +162,16 @@ async def update_plan(db, plan_id: str, body: Dict[str, Any], *,
     for key in ("is_public", "is_default", "is_trial"):
         if body.get(key) is not None:
             updates[key] = bool(body[key])
-    if not updates:
+    # explicit removal of limits (an unset limit means "not limited")
+    from app.billing.plans import PLAN_LIMIT_KEYS
+    unset = {f"limits.{k}": "" for k in (body.get("limits_unset") or [])
+             if k in PLAN_LIMIT_KEYS and k not in (body.get("limits") or {})}
+    if not updates and not unset:
         return _clean(plan)
     updates["updated_at"] = utcnow()
-    await db.plans.update_one({"_id": plan["_id"]}, {"$set": updates})
+    await db.plans.update_one({"_id": plan["_id"]}, {"$set": updates, **({"$unset": unset} if unset else {})})
+    for k in unset:
+        updates[k] = None  # recorded in the audit "after"
     invalidate_plan_cache()
     before = {k: plan.get(k.split(".")[0]) if "." not in k else (plan.get("limits") or {}).get(k.split(".", 1)[1])
               for k in updates if k != "updated_at"}

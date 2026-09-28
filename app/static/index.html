@@ -147,7 +147,6 @@
             <button type="button" role="menuitem" class="menu-item hidden" id="menuWorkspace" onclick="openWorkspaceModal()">Workspace settings</button>
             <button type="button" role="menuitem" class="menu-item hidden" id="menuTeam" onclick="openTeamModal()">Team members</button>
             <a role="menuitem" class="menu-item hidden" id="menuAdminPortal" href="/org-admin">Admin portal <svg class="ico ico-sm" aria-hidden="true"><use href="#i-external"/></svg></a>
-            <a role="menuitem" class="menu-item" href="/docs" target="_blank" rel="noopener">API docs <svg class="ico ico-sm" aria-hidden="true"><use href="#i-external"/></svg></a>
             <button type="button" role="menuitem" class="menu-item menu-item-danger" onclick="logout()">Sign out</button>
           </div>
         </div>
@@ -358,15 +357,15 @@
                   <div class="filter-panel-body">
                     <div class="filter-mode-row" role="radiogroup" aria-label="Comment filter mode" id="urlFilterModes">
                       <label class="filter-radio"><input type="radio" name="filterMode" value="all" checked><span>All comments</span></label>
-                      <label class="filter-radio"><input type="radio" name="filterMode" value="preset"><span>Saved rule / preset</span></label>
+                      <label class="filter-radio"><input type="radio" name="filterMode" value="preset"><span>Preset</span></label>
                       <label class="filter-radio"><input type="radio" name="filterMode" value="custom"><span>Custom keywords</span></label>
                     </div>
                     <div class="filter-field hidden" id="urlFilterPresetField">
-                      <label class="field-label" for="urlFilterPreset">Rule / preset</label>
+                      <label class="field-label" for="urlFilterPreset">Preset</label>
                       <select id="urlFilterPreset" class="form-input">
                         <option value="">Loading…</option>
                       </select>
-                      <span class="field-hint">Saved admin rules are labelled “Rule”, built-in shortcuts “Preset”</span>
+                      <span class="field-hint">Built-in intent presets and business categories. Your organization's own lead keywords apply automatically when you choose “All comments”.</span>
                     </div>
                     <div class="filter-custom hidden" id="urlFilterCustomField">
                       <div class="maxposts-field">

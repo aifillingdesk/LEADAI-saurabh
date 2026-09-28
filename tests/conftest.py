@@ -69,7 +69,8 @@ def _in_memory_mongo(request, monkeypatch):
 
 TEST_SUPERADMIN_PASSWORD = "Test-SuperAdmin-Pass-2026"
 _CREDENTIAL_FIELDS = ("superadmin_email", "superadmin_password", "panel_admin_email",
-                      "panel_admin_password_hash", "admin_email", "admin_password_hash")
+                      "panel_admin_password_hash", "admin_email", "admin_password_hash",
+                      "gemini_api_key", "apify_api_token")
 
 
 @pytest.fixture(autouse=True)
@@ -79,8 +80,11 @@ def _restore_credential_settings():
     from app.config import get_settings
     s = get_settings()
     saved = {k: getattr(s, k) for k in _CREDENTIAL_FIELDS}
-    # tests never depend on the developer's own .env Super Admin
+    # tests never depend on the developer's own .env Super Admin, and never
+    # call the real Gemini / Apify APIs with the developer's keys (a test
+    # that needs them patches the network boundary explicitly)
     s.superadmin_email, s.superadmin_password = "", ""
+    s.gemini_api_key, s.apify_api_token = "", ""
     try:
         from app.admin import envvars
         envvars._CACHE.clear()

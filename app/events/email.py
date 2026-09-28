@@ -9,6 +9,7 @@ Super Admin can see exactly what would have been delivered.
 Never put a plaintext password in an email — only one-time links.
 """
 import logging
+import re
 import smtplib
 from email.message import EmailMessage
 from typing import Optional
@@ -38,11 +39,22 @@ def absolute_url(path: str) -> str:
     return f"{public_base_url()}{path}"
 
 
+_SECRET_LINK_RE = re.compile(r"(token=|/invite/)[A-Za-z0-9_\-]{8,}")
+
+
+def redact_links(body: str) -> str:
+    """Body with single-use tokens (reset / invitation links) removed: the
+    outbox is a log, never a way to obtain a live link."""
+    return _SECRET_LINK_RE.sub(lambda m: m.group(1) + "[redacted]", body or "")
+
+
 def send_email(to: str, subject: str, body: str, *, kind: str = "generic",
                organization_id: Optional[str] = None) -> str:
-    """Queue (and send when SMTP is configured). Returns the final status."""
+    """Queue (and send when SMTP is configured). Returns the final status.
+    The stored outbox copy has its one-time links redacted; the email itself
+    is sent with the full body."""
     doc = {
-        "to": to.strip().lower(), "subject": subject, "body": body, "kind": kind,
+        "to": to.strip().lower(), "subject": subject, "body": redact_links(body), "kind": kind,
         "organization_id": organization_id, "status": "queued",
         "created_at": utcnow(), "sent_at": None, "error": None,
     }

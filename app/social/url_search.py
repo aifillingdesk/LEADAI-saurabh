@@ -106,6 +106,8 @@ def run_url_search(run_id: str, initial_url: str, max_posts: int = 20,
     owner: Dict[str, Any] = {k: v for k, v in (
         ("organization_id", organization_id), ("user_id", user_id),
         ("created_by", created_by)) if v}
+    from app.connectors.apify_connector import set_run_context
+    set_run_context(organization_id=organization_id, user_id=user_id, search_run_id=run_id)
 
     def audit_run(action: str, category: str, success: bool = True, **details):
         pipeline_audit(action, category, owner, success=success,
@@ -130,6 +132,8 @@ def run_url_search(run_id: str, initial_url: str, max_posts: int = 20,
     # ── 1. validate the URL ────────────────────────────────────────────────
     try:
         platform, canonical_url = detect_social_url(initial_url)
+        set_run_context(organization_id=organization_id, user_id=user_id,
+                        search_run_id=run_id, platform=platform)
     except UrlError as e:
         progress(status="error", error=e.message, phase="url_invalid")
         return {"status": "error", "error": e.message,
@@ -554,7 +558,20 @@ class UrlSearchThread(threading.Thread):
                 db.search_history.update_one({"run_id": self.run_id}, {"$set": {
                     "status": "error", "error": f"Internal error: {e}",
                     "updated_at": utcnow()}})
-            from app.events.notifications import notify_search_finished
+            from app.events.notifications import (notify_search_finished, notify_super_admins,
+                                                  notify_user)
             notify_search_finished({"organization_id": self.organization_id, "user_id": self.user_id,
                                     "created_by": self.created_by}, self.run_id, success=False,
                                    error=f"Internal error: {e}")
+            # the person who ran it (owners/admins already got the org notice)
+            member = db.organization_members.find_one(
+                {"organization_id": str(self.organization_id), "user_id": str(self.user_id)},
+                {"role": 1}) if db is not None and self.user_id else None
+            if self.user_id and (member or {}).get("role") not in ("owner", "admin"):
+                notify_user(str(self.user_id), "search_failed", "Your search failed",
+                            "Something went wrong while running your search. Please try again.",
+                            organization_id=self.organization_id, severity="danger",
+                            link=f"/dashboard#history")
+            notify_super_admins("apify_failure", "Search worker crashed",
+                                f"Run {self.run_id} (org {self.organization_id}): {str(e)[:300]}",
+                                severity="danger", link=f"/superadmin#/ops/chain/{self.run_id}")

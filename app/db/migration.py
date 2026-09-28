@@ -131,6 +131,22 @@ def migrate_to_multi_tenant(db) -> Dict[str, Any]:
                 logger.warning("[Migration] Error backfilling '%s': %s", col_name, col_err)
                 report["backfilled"][col_name] = 0
 
+        # leads analysed before ai_comments carried created_at: use the
+        # analysis time so lead dates / counts / dated exports include them
+        try:
+            fixed = db.ai_comments.update_many(
+                {"created_at": {"$exists": False}, "analyzed_at": {"$exists": True}},
+                [{"$set": {"created_at": "$analyzed_at"}}]).modified_count
+            report["backfilled"]["ai_comments.created_at"] = fixed
+        except Exception as e:  # mongomock / old servers without pipeline updates
+            fixed = 0
+            for d in db.ai_comments.find({"created_at": {"$exists": False},
+                                          "analyzed_at": {"$exists": True}}, {"analyzed_at": 1}):
+                db.ai_comments.update_one({"_id": d["_id"]}, {"$set": {"created_at": d["analyzed_at"]}})
+                fixed += 1
+            report["backfilled"]["ai_comments.created_at"] = fixed
+            logger.debug("[Migration] created_at backfill used the fallback path: %s", e)
+
         return report
     except Exception as e:
         logger.exception("[Migration] Unexpected error during multi-tenant migration: %s", e)

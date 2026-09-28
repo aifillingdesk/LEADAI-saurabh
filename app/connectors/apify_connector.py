@@ -30,6 +30,51 @@ from typing import Any, Dict, List, Optional
 from apify_client.errors import ApifyApiError, ApifyClientError
 
 from app.config import get_settings
+import contextvars
+import uuid
+
+# Tenant context of the pipeline step that is calling Apify (set by the
+# URL search / post / comment collectors) so every actor run is recorded in
+# ``apify_jobs`` for the organization's "Actor runs" view.
+_RUN_CONTEXT: "contextvars.ContextVar[Optional[Dict[str, Any]]]" = contextvars.ContextVar(
+    "apify_run_context", default=None)
+
+
+def set_run_context(**ctx: Any) -> None:
+    """Tag the Apify runs of the current thread / task with tenant context
+    (organization_id, user_id, search_run_id, platform)."""
+    _RUN_CONTEXT.set({k: (str(v) if v is not None else None) for k, v in ctx.items()})
+
+
+def _record_actor_run(actor_id: str, label: str, started: float, run: Any = None,
+                      error: Optional["ScrapeError"] = None) -> None:
+    """Best-effort ``apify_jobs`` record of one actor run (never raises)."""
+    ctx = _RUN_CONTEXT.get()
+    if not ctx or not ctx.get("organization_id"):
+        return
+    try:
+        from app.db.models import utcnow
+        from app.db.mongo import get_sync_db
+        db = get_sync_db()
+        if db is None:
+            return
+        finished = time.time()
+        run_id = _rget(run, "id") if run is not None else None
+        db.apify_jobs.insert_one({
+            "job_id": run_id or f"local-{uuid.uuid4().hex}",
+            "organization_id": ctx.get("organization_id"), "user_id": ctx.get("user_id"),
+            "search_run_id": ctx.get("search_run_id"), "platform": ctx.get("platform"),
+            "actor_id": actor_id, "label": label, "run_id": run_id,
+            "dataset_id": _rget(run, "defaultDatasetId") if run is not None else None,
+            "status": ("failed" if error is not None
+                       else str(_rget(run, "status") or "succeeded").lower()),
+            "error": str(error)[:500] if error is not None else None,
+            "error_type": getattr(error, "error_type", None),
+            "usage_usd": _rget(run, "usageUsd") if run is not None else None,
+            "duration_seconds": round(finished - started, 1),
+            "created_at": utcnow(), "finished_at": utcnow()})
+    except Exception as e:  # recording must never break scraping
+        logger.debug("apify job record failed: %s", e)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -277,6 +322,7 @@ class ApifyConnector:
         """
         client = self._get_client()
         last_error: Optional[ScrapeError] = None
+        started = time.time()
         for attempt in range(attempts):
             _log_request(label, actor_id, run_input)
             try:
@@ -289,9 +335,12 @@ class ApifyConnector:
                         client, actor_id, run_input, label, should_abort)
             except Exception as e:
                 if isinstance(e, ScrapeError) and e.error_type == "CANCELLED":
+                    _record_actor_run(actor_id, label, started, error=e)
                     raise
                 billing = _explain_error(e)
                 if billing:
+                    _record_actor_run(actor_id, label, started,
+                                      error=ScrapeError("BILLING", billing, actor_id=actor_id))
                     raise ApifyError(billing)
                 if isinstance(e, ApifyApiError):
                     last_error = _classify_api_error(e, actor_id=actor_id)
@@ -316,8 +365,10 @@ class ApifyConnector:
                 "status": _rget(run, "status"),
                 "usageUsd": _rget(run, "usageUsd"),
             }
+            _record_actor_run(actor_id, label, started, run=run)
             return run
         assert last_error is not None
+        _record_actor_run(actor_id, label, started, error=last_error)
         raise last_error
 
     def _call_actor_polling(self, client: Any, actor_id: str,

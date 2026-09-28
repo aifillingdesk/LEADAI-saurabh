@@ -586,11 +586,17 @@ class TestAuthHardening:
 
     def test_password_reset_flow_single_use(self, world):
         client, db, ids, orgs, cookie = world
-        r = client.post("/api/auth/password/forgot", json={"email": "user1@a.test"})
+        from unittest.mock import patch
+        from app.events import email as email_mod
+        sent = []
+        real = email_mod.send_email
+        with patch.object(email_mod, "send_email", side_effect=lambda *a, **k: sent.append(a) or real(*a, **k)),              patch("app.api.routes.auth.send_email", side_effect=lambda *a, **k: sent.append(a) or real(*a, **k), create=True):
+            r = client.post("/api/auth/password/forgot", json={"email": "user1@a.test"})
         assert r.status_code == 200
         mail = db.email_outbox.find_one({"kind": "password_reset"})
-        token = mail["body"].split("token=")[1].split()[0]
-        assert "Str0ng" not in mail["body"]
+        # the stored outbox copy never holds a live link
+        assert "token=[redacted]" in mail["body"] and "Str0ng" not in mail["body"]
+        token = sent[-1][2].split("token=")[1].split()[0]
         r = client.post("/api/auth/password/reset", json={"token": token, "new_password": "N3wPassword"})
         assert r.status_code == 200
         r = client.post("/api/auth/password/reset", json={"token": token, "new_password": "An0therPass"})

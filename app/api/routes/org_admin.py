@@ -45,6 +45,7 @@ sessions/password (/api/auth/*).
   POST /support/tickets/{id}/messages, POST /support/tickets/{id}/status
   GET/PATCH /profile                  own name + notification preferences
 """
+import asyncio
 import logging
 import re
 import secrets
@@ -671,6 +672,18 @@ async def reset_user_access(user_id: str, request: Request, body: Optional[Reset
         raise HTTPException(status_code=404, detail="Team member not found")
     if record.get("status", "active") != "active":
         raise HTTPException(status_code=409, detail="This account is not active")
+    # A password is global to the account: an org Admin may reset it only
+    # for people who belong to THIS organization alone — never for platform
+    # staff or someone who is also a member (maybe owner) of another org.
+    other_org = await db.organization_members.find_one(
+        {"user_id": str(user_id), "organization_id": {"$ne": ctx.organization_id},
+         "status": {"$nin": ["removed", "inactive"]}}, {"_id": 1})
+    if record.get("is_platform_admin") or other_org:
+        security_event_from_request(request, "admin_reset_refused_multi_org", "medium", ctx=ctx,
+                                    details={"target_user_id": str(user_id)})
+        raise HTTPException(status_code=409, detail=(
+            "This person also belongs to another organization, so only they (Forgot password) "
+            "or LeadAI support can reset their password."))
     token = secrets.token_urlsafe(32)
     now = utcnow()
     await db.password_resets.update_many({"user_id": str(user_id), "used_at": None},
@@ -681,7 +694,7 @@ async def reset_user_access(user_id: str, request: Request, body: Optional[Reset
         "requested_ip": request_meta(request)["ip"], "requested_by": ctx.email,
         "organization_id": ctx.organization_id, "created_at": now})
     link = absolute_url(f"/reset-password?token={token}")
-    delivery = send_email(record["email"], f"Reset your LeadAI access — {ctx.organization_name}",
+    delivery = await asyncio.to_thread(send_email, record["email"], f"Reset your LeadAI access — {ctx.organization_name}",
                f"Hi {record.get('name') or ''},\n\nAn administrator of {ctx.organization_name} "
                f"asked us to reset your access. Use this link to choose a new password "
                f"(valid for {_RESET_TOKEN_TTL_MIN} minutes, single use):\n{link}\n\n"
@@ -1642,8 +1655,12 @@ async def export_csv(
     q: Optional[str] = None, status: Optional[str] = None, platform: Optional[str] = None,
     assignee: Optional[str] = None, run_id: Optional[str] = None,
     date_from: Optional[str] = Query(None, alias="from"), date_to: Optional[str] = Query(None, alias="to"),
+    quality: Optional[str] = None, priority: Optional[str] = None,
+    min_score: Optional[int] = Query(None, ge=0, le=100), user_id: Optional[str] = None,
+    page_id: Optional[str] = None, post_id: Optional[str] = None,
     ctx: TenantContext = Depends(require_portal(P.EXPORTS_CREATE)),
 ):
+    """CSV of what the matching table shows: the same filters apply."""
     from app.api.routes.search import _csv_response
     if kind not in EXPORT_KINDS:
         raise HTTPException(status_code=404, detail="Unknown export")
@@ -1703,7 +1720,8 @@ async def export_csv(
                          if tok.get("allocated") else 0})
     elif kind == "leads":
         query = _lead_filters(ctx, q=q, status=status, platform=platform, assignee=assignee,
-                              run_id=run_id, date_from=date_from, date_to=date_to)
+                              run_id=run_id, date_from=date_from, date_to=date_to,
+                              quality=quality, priority=priority, min_score=min_score)
         docs = [d async for d in db.ai_comments.find(query).sort("lead_score", -1).limit(_EXPORT_MAX)]
         users = await _user_map(db, [d.get("assigned_user_id") for d in docs] + [d.get("user_id") for d in docs])
         for d in docs:
@@ -1711,19 +1729,27 @@ async def export_csv(
             r["text"] = d.get("comment_text") or ""
             rows.append(r)
     elif kind == "searches":
+        st = ({"status": {"$in": ["error", "failed"]}} if status in ("error", "failed")
+              else {"status": status} if status else {})
         query = _and(scope_query(ctx, {}, **_OWN), {"intent.platform": platform} if platform else {},
-                     {"status": status} if status else {}, _date_filter("created_at", date_from, date_to))
+                     st, _date_filter("created_at", date_from, date_to),
+                     {"user_id": str(user_id)} if user_id else {},
+                     {"$or": [{"query": _regex(q)}, {"run_id": _regex(q)}]} if q else {})
         runs = [r async for r in db.search_history.find(query).sort("created_at", -1).limit(_EXPORT_MAX)]
         leads = await _count_by(db, "ai_comments", _and(oq, {"is_lead": True}), "search_run_id")
         users = await _user_map(db, [r.get("user_id") for r in runs])
         rows = [_run_row(r, users, leads) for r in runs]
     elif kind == "posts":
         query = _and(scope_query(ctx, {}, **_OWN), {"platform": platform} if platform else {},
-                     {"search_run_id": run_id} if run_id else {})
+                     {"search_run_id": run_id} if run_id else {},
+                     {"page_ref": page_id} if page_id else {},
+                     {"$or": [{f: _regex(q)} for f in _DATA["posts"][1]]} if q else {})
         rows = [d async for d in db.facebook_posts.find(query).sort("_id", -1).limit(_EXPORT_MAX)]
     elif kind == "comments":
         query = _and(scope_query(ctx, {}, **_OWN), {"platform": platform} if platform else {},
-                     {"search_run_id": run_id} if run_id else {})
+                     {"search_run_id": run_id} if run_id else {},
+                     {"post_ref": post_id} if post_id else {},
+                     {"$or": [{f: _regex(q)} for f in _DATA["comments"][1]]} if q else {})
         docs = [d async for d in db.facebook_comments.find(query).sort("_id", -1).limit(_EXPORT_MAX)]
         refs = [str(d["_id"]) for d in docs]
         ai = {}
@@ -1736,7 +1762,10 @@ async def export_csv(
             rows.append({**d, "is_lead": bool(a.get("is_lead")), "lead_score": a.get("lead_score")})
 
     filters = {k: v for k, v in {"q": q, "status": status, "platform": platform, "assignee": assignee,
-                                 "run_id": run_id, "from": date_from, "to": date_to}.items() if v}
+                                 "run_id": run_id, "from": date_from, "to": date_to,
+                                 "quality": quality, "priority": priority, "min_score": min_score,
+                                 "user_id": user_id, "page_id": page_id, "post_id": post_id}.items()
+               if v not in (None, "")}
     try:
         await db.exports.insert_one(stamp(ctx, {
             "scope": kind, "format": "csv", "status": "completed", "rows": len(rows),

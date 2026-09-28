@@ -458,12 +458,12 @@ class TestSessionsAndAccess:
         reset = db.password_resets.find_one({"user_id": ids["member"], "used_at": None})
         assert reset and reset["purpose"] == "admin_reset" and "token_hash" in reset
         mail = db.email_outbox.find_one({"to": "user@acme.test", "kind": "password_reset"})
-        assert mail and "reset-password?token=" in mail["body"]
+        # neither the stored outbox copy nor the outbox API holds a live link
+        assert mail and "reset-password?token=[redacted]" in mail["body"]
         out = client.get("/api/super-admin/email-outbox?q=user@acme.test", cookies=c["super"]).json()
         body = out["items"][0]["body"]
-        assert "token=••••" in body
-        raw_token = mail["body"].split("token=")[1].split()[0]
-        assert raw_token not in body
+        raw_token = r.json()["reset_url"].split("token=")[1]
+        assert raw_token not in body and raw_token not in mail["body"]
         assert db.audit_logs.find_one({"action": "user.access_reset", "resource_id": ids["member"]})
 
     def test_org_archive_is_soft_and_needs_reason(self, world):

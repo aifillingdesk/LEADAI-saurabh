@@ -301,7 +301,9 @@ def verify_saas_user_login(email: str, password: str, scope: str = "site") -> tu
         ok, _ = _verify_and_migrate_password(password or "", (user_record.get("password_hash") or "").strip())
         return None, ("Demo pending approval" if ok else "Invalid email or password")
     if user_record.get("status") == "rejected":
-        return None, "Invalid email or password"
+        # told only with the right password (like pending), so not an oracle
+        ok, _ = _verify_and_migrate_password(password or "", (user_record.get("password_hash") or "").strip())
+        return None, ("Demo request was not approved" if ok else "Invalid email or password")
     if user_record.get("status") in ("suspended", "disabled", "deactivated"):
         return None, "Account is suspended"
 
@@ -504,6 +506,13 @@ def _secret() -> str:
         return override
     if settings.session_secret:
         return settings.session_secret
+    # upgrade path: a secret stored in the app before SESSION_SECRET became
+    # environment-only keeps existing sessions valid (it can no longer be
+    # changed in the app); move it to the environment to silence this
+    from app.admin.envvars import legacy_override_value
+    legacy = legacy_override_value("SESSION_SECRET")
+    if legacy:
+        return legacy
     if _FALLBACK_SECRET is None:
         _FALLBACK_SECRET = secrets.token_urlsafe(48)
         logger.critical(

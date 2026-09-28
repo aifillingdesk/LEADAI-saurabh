@@ -128,11 +128,23 @@ def adjust(organization_id: str, delta: int, *, actor: str, reason: str) -> Dict
     q: Dict[str, Any] = {"organization_id": org_id}
     if delta < 0:
         q["remaining"] = {"$gte": -delta}
-    res = db[BALANCES].update_one(q, {"$inc": {"allocated": delta, "remaining": delta},
-                                      "$set": {"updated_at": utcnow()}})
+    update: Dict[str, Any] = {"$inc": {"allocated": delta, "remaining": delta},
+                              "$set": {"updated_at": utcnow()}}
+    before = db[BALANCES].find_one({"organization_id": org_id}) or {}
+    exp = _aware(before.get("expires_at"))
+    if delta > 0 and exp and exp < datetime.now(timezone.utc):
+        # a top-up of an expired balance is meant to be usable
+        update["$set"]["expires_at"] = None
+    res = db[BALANCES].update_one(q, update)
     if res.matched_count == 0:
         raise HTTPException(status_code=400, detail="Adjustment would make the balance negative")
     bal = get_balance(org_id) or {}
+    if delta > 0:
+        # re-arm the usage warnings that no longer apply after the top-up
+        allocated = bal.get("allocated") or 0
+        pct = (bal.get("used", 0) * 100 / allocated) if allocated else 0
+        db[BALANCES].update_one({"organization_id": org_id},
+                                {"$pull": {"notified_thresholds": {"$gt": pct}}})
     _ledger(db, org_id, "adjust", delta, reason=reason, actor=actor,
             balance_after=bal.get("remaining"))
     return bal
@@ -160,6 +172,7 @@ def consume(organization_id: str, amount: int, *, user_id: Optional[str] = None,
         {"$inc": {"remaining": -amount, "used": amount}, "$set": {"updated_at": utcnow()}})
     if res.modified_count == 0:
         fresh = db[BALANCES].find_one({"organization_id": org_id}) or {}
+        _notify_exhausted(db, org_id, fresh)
         raise TokensExhaustedException(amount, int(fresh.get("remaining", 0)))
     bal = get_balance(org_id) or {}
     _ledger(db, org_id, "consume", amount, user_id=user_id, reason=reason,
@@ -182,6 +195,26 @@ def refund(organization_id: str, amount: int, *, reason: str,
         bal = get_balance(org_id) or {}
         _ledger(db, org_id, "refund", amount, reason=reason, reference=reference,
                 balance_after=bal.get("remaining"))
+
+
+def _notify_exhausted(db, org_id: str, bal: Dict[str, Any]) -> None:
+    """A request refused for lack of tokens counts as "limit reached" even
+    below 100% usage (e.g. 91/100 used, action costs 10) — alert once."""
+    res = db[BALANCES].update_one(
+        {"organization_id": org_id, "notified_thresholds": {"$ne": 100}},
+        {"$addToSet": {"notified_thresholds": 100}})
+    if not res.modified_count:
+        return
+    try:
+        from app.events.notifications import notify_org_admins, notify_super_admins
+        msg = (f"{bal.get('remaining', 0)} tokens left — not enough for the requested action. "
+               "Top up or upgrade to continue.")
+        notify_org_admins(org_id, "usage_threshold", "Token limit reached", msg, severity="danger",
+                          link="/org-admin#subscription", data={"percent": 100})
+        notify_super_admins("high_token_usage", "Token limit reached", f"Organization {org_id}: {msg}",
+                            severity="warning", data={"organization_id": org_id})
+    except Exception:
+        pass
 
 
 def _org_thresholds(db, org_id: str):

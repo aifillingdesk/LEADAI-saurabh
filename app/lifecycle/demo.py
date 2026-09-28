@@ -60,7 +60,8 @@ def validate_password(pw: str) -> None:
 def create_demo_request(*, name: str, email: str, password: str, company: str,
                         phone: Optional[str] = None, message: Optional[str] = None,
                         ip: Optional[str] = None, source: str = "website",
-                        industry: Optional[str] = None) -> Dict[str, Any]:
+                        industry: Optional[str] = None, requested_plan: Optional[str] = None,
+                        accepted_terms: bool = False) -> Dict[str, Any]:
     db = _db()
     email = (email or "").strip().lower()
     name = (name or "").strip()
@@ -112,6 +113,8 @@ def create_demo_request(*, name: str, email: str, password: str, company: str,
         "organization_id": org_id, "user_id": user_id, "name": name, "email": email,
         "phone": (phone or "").strip() or None, "company": company,
         "industry": industry,
+        "requested_plan": re.sub(r"[^a-z0-9_-]", "", (requested_plan or "").lower())[:40] or None,
+        "terms_accepted_at": utcnow() if accepted_terms else None,
         "message": (message or "").strip()[:2000] or None,
         "status": "pending", "source": source, "ip": ip,
         "requested_config": cfg,
@@ -128,9 +131,9 @@ def create_demo_request(*, name: str, email: str, password: str, company: str,
     audit("demo.requested", "lifecycle", user=who, ip=ip, organization_id=org_id,
           resource_type="demo_request", resource_id=req_id)
     notify_super_admins("registration", "New registration", f"{name} <{email}> from {company}",
-                        link="/superadmin#demos", data={"demo_request_id": req_id})
+                        link="/superadmin#/demo", data={"demo_request_id": req_id})
     notify_super_admins("demo_requested", "New demo request", f"{company} — {name} <{email}>",
-                        severity="warning", link="/superadmin#demos",
+                        severity="warning", link="/superadmin#/demo",
                         data={"demo_request_id": req_id})
     send_email(email, "We received your LeadAI demo request",
                f"Hi {name},\n\nThanks for requesting a LeadAI demo for {company}. "
@@ -210,7 +213,7 @@ def approve(req_id: str, *, actor: str, overrides: Optional[Dict[str, Any]] = No
           details={"tokens": cfg["tokens"], "expires_at": expires.isoformat()})
     notify_super_admins("demo_approved", "Demo approved",
                         f"{doc['company']} ({doc['email']}) by {actor}", severity="success",
-                        link="/superadmin#demos", data={"demo_request_id": req_id})
+                        link="/superadmin#/demo", data={"demo_request_id": req_id})
     notify_user(user_id, "demo_approved", "Your demo is ready",
                 f"You have {cfg['tokens']} tokens for {cfg['duration_days']} days.",
                 organization_id=org_id, severity="success", link="/dashboard")
@@ -235,6 +238,9 @@ def reject(req_id: str, *, actor: str, reason: str = "", ip: Optional[str] = Non
     audit("demo.rejected", "lifecycle", user=actor, ip=ip,
           organization_id=doc["organization_id"], resource_type="demo_request",
           resource_id=req_id, details={"reason": reason})
+    notify_super_admins("demo_rejected", "Demo rejected",
+                        f"{doc['company']} ({doc['email']}) by {actor}",
+                        link="/superadmin#/demo", data={"demo_request_id": req_id})
     send_email(doc["email"], "Your LeadAI demo request",
                f"Hi {doc['name']},\n\nThank you for your interest in LeadAI. We are unable "
                f"to approve your demo request at this time."
@@ -259,8 +265,12 @@ def extend(req_id: str, *, actor: str, days: int = 0, extra_tokens: int = 0,
         from datetime import timezone
         current = current.replace(tzinfo=timezone.utc)
     new_exp = max(current, now) + timedelta(days=days)
-    db.organizations.update_one({"_id": org["_id"]}, {"$set": {
-        "demo.expires_at": new_exp, "status": "demo", "updated_at": now}})
+    ext: Dict[str, Any] = {"demo.expires_at": new_exp, "demo.expired_notified": False,
+                           "demo.expiring_notified": False, "updated_at": now}
+    if org.get("status") in ("demo", "cancelled"):
+        # an extension revives an expired demo, never a suspension
+        ext["status"] = "demo"
+    db.organizations.update_one({"_id": org["_id"]}, {"$set": ext})
     if extra_tokens > 0:
         tokens.allocate(doc["organization_id"], extra_tokens, source="demo", actor=actor,
                         reason="Demo extended", expires_at=new_exp)
@@ -285,12 +295,24 @@ def cancel(req_id: str, *, actor: str, reason: str = "", ip: Optional[str] = Non
     doc = _load(req_id)
     _require(doc, ("pending", "approved", "extended"))
     now = utcnow()
+    was_pending = doc.get("status") == "pending"
     db.organizations.update_one({"_id": ObjectId(doc["organization_id"])},
                                 {"$set": {"status": "cancelled", "updated_at": now}})
+    if was_pending:
+        # never approved: the account must not stay "awaiting approval"
+        db.users.update_one({"_id": ObjectId(doc["user_id"]), "status": "pending_approval"},
+                            {"$set": {"status": "rejected", "updated_at": now}})
     _transition(doc, "cancelled", actor, {"cancelled_at": now}, reason)
     audit("demo.cancelled", "lifecycle", user=actor, ip=ip,
           organization_id=doc["organization_id"], resource_type="demo_request",
           resource_id=req_id, details={"reason": reason})
+    send_email(doc["email"], "Your LeadAI demo",
+               f"Hi {doc['name']},\n\nYour LeadAI demo for {doc['company']} has been "
+               + ("closed before approval." if was_pending else "ended.")
+               + (f"\n\nReason: {reason}" if reason else "")
+               + "\n\nReply to this email or use the contact page if you have questions."
+               "\n\n— The LeadAI team",
+               kind="demo_cancelled", organization_id=doc["organization_id"])
     return get_request(req_id)
 
 

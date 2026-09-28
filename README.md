@@ -2054,9 +2054,25 @@ After a deploy, `https://<your-app>/health` must show
 - Session cookies (httpOnly, SameSite, configurable secure flag)
 - Per-IP brute-force throttle (5 failed attempts → lockout)
 - Session epoch for revocation (increment to invalidate all cookies)
-- Environment variable lock/unlock with password
-- Audit logging of all admin actions (toggleable)
+- Environment variable lock/unlock with password; `SUPERADMIN_*`, `SESSION_SECRET`, `SMTP_HOST/USER/PASSWORD` and `STRIPE_SECRET_KEY/WEBHOOK_SECRET` are **environment-only** (no in-app override can replace them)
+- An org Admin can reset only the passwords of people who belong to that organization alone (never platform staff or members of other organizations); platform staff change their own password only with the current one
+- One-time reset / invitation links are never stored: the `email_outbox` log keeps a redacted copy
+- Only an org owner/admin can turn on the shared workspace (data visibility)
+- Audit logging of all admin actions
 - Security headers: CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy
+
+### Lifecycle automation (`app/lifecycle/maintenance.py`)
+
+A background sweep (every 15 minutes, started with the app) keeps time-driven state in sync across all portals:
+
+| Event | What happens |
+| --- | --- |
+| Subscription with *cancel at period end* reaches its period end | Subscription `cancelled`, organization `cancelled`; org admins (email) and Super Admin notified |
+| Period ended 3+ days ago without renewal | Subscription `past_due`; org admins (email) and Super Admin notified once; the Super Admin can *Extend* (which also extends the plan tokens and makes it active again) |
+| Stripe `invoice.paid` renewal (`billing_reason = subscription_cycle`) | Next period starts, the plan's monthly tokens are re-granted, invoice recorded, org admins notified |
+| Demo ends within 2 days / has ended | `demo_expiring` / `demo_expired` sent once (in-app + email) |
+
+Other synchronization rules: *Activate* on a suspended organization restores its previous state (a demo stays a demo; only an organization with an active subscription becomes `active`); plan changes grant the new plan's tokens; token top-ups re-arm usage warnings (and revive an expired balance); a request refused for lack of tokens raises the "limit reached" alert; cancelling a pending demo also closes the account; extending a demo never lifts a suspension; every Super Admin subscription decision (reject after payment → refund alert, suspend, resume, expire, cancel) is sent to the organization's admins.
 
 ---
 

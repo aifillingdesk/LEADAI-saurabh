@@ -240,6 +240,11 @@ SETTINGS: List[SettingSpec] = [
        label="Gemini model", placeholder="gemini-2.5-flash"),
     _s("ai.temperature", "ai", "Gemini engine", "float",
        label="Temperature", min=0, max=2),
+    _s("lifecycle.auto_apply", "security", "Lifecycle automation", "bool",
+       label="Apply billing-period / demo-expiry changes automatically",
+       description="Off = preview only (Super Admin → Subscriptions → Lifecycle automation)."),
+    _s("lifecycle.preview_notified", "security", "Lifecycle automation", "bool",
+       label="Pending-changes notice sent", description="Internal: the review notice was sent."),
     _s("business.default_industry", "ai", "Business context", "str",
        label="Default industry key",
        description="Industry used for organizations that chose none "

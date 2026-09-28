@@ -67,15 +67,20 @@ NOTIFICATION_PREFERENCES = {
     "email_notifications": {"label": "Email me notifications", "default": True,
                             "hint": "Master switch for email; in-app notifications always appear"},
     "search_completed": {"label": "Search completed or failed", "default": True,
-                         "types": ("search_completed", "search_failed")},
+                         "types": ("search_completed", "search_failed", "job_completed",
+                                   "job_failed", "leads_found", "new_leads")},
     "lead_assigned": {"label": "A lead is assigned to me", "default": True,
                       "types": ("lead_assigned",)},
     "usage_warnings": {"label": "Token, usage & demo warnings", "default": True,
                        "types": ("high_token_usage", "tokens_low", "demo_expiring",
-                                 "demo_expired", "quota_warning")},
-    "weekly_summary": {"label": "Weekly summary email", "default": True, "types": ("weekly_summary",)},
+                                 "demo_expired", "quota_warning", "usage_threshold",
+                                 "usage_warning")},
+    # stored for compatibility; nothing is sent under these yet, so they are
+    # not offered in the portals ("hidden")
+    "weekly_summary": {"label": "Weekly summary email", "default": True, "types": ("weekly_summary",),
+                       "hidden": True},
     "product_updates": {"label": "Product news & tips", "default": False,
-                        "types": ("product_update",)},
+                        "types": ("product_update",), "hidden": True},
 }
 PREF_FIELD = "notification_preferences"
 
@@ -232,7 +237,7 @@ async def _profile_payload(db, ctx: TenantContext) -> Dict[str, Any]:
         "password_changed_at": _iso(user.get("password_changed_at")),
         "notification_preferences": merge_notification_prefs(user.get(PREF_FIELD)),
         "notification_options": [{"key": k, "label": m["label"], "hint": m.get("hint", "")}
-                                 for k, m in NOTIFICATION_PREFERENCES.items()],
+                                 for k, m in NOTIFICATION_PREFERENCES.items() if not m.get("hidden")],
         "editable_fields": ["name", "phone", "notification_preferences"],
         "impersonated": bool(ctx.impersonated_by),
     }

@@ -13,6 +13,7 @@ LeadAI Authentication & Session Routes.
   POST /api/auth/password/reset         set a new password with a reset token
 """
 import hashlib
+import asyncio
 import logging
 import re
 import secrets
@@ -86,6 +87,8 @@ class SignupRequest(BaseModel):
     phone: Optional[str] = None
     message: Optional[str] = None
     industry: Optional[str] = None
+    plan: Optional[str] = None             # plan chosen on the pricing page (interest only)
+    accepted_terms: Optional[bool] = None  # Terms & Privacy consent from the form
 
 
 class SwitchOrgRequest(BaseModel):
@@ -130,10 +133,11 @@ async def signup(body: SignupRequest, request: Request):
     from app.lifecycle.demo import create_demo_request
     company = (body.company or body.organization_name or "").strip()
     name = (body.name or body.email.split("@")[0]).strip()
-    res = create_demo_request(name=name, email=body.email, password=body.password,
+    res = await asyncio.to_thread(create_demo_request, name=name, email=body.email, password=body.password,
                               company=company, phone=body.phone,
                               message=body.message, ip=ip, source="signup",
-                              industry=body.industry)
+                              industry=body.industry, requested_plan=body.plan,
+                              accepted_terms=bool(body.accepted_terms))
     return {
         "success": True,
         "status": res["status"],
@@ -448,7 +452,7 @@ async def forgot_password(body: ForgotRequest, request: Request):
         "expires_at": now + timedelta(minutes=_RESET_TOKEN_TTL_MIN), "used_at": None,
         "requested_ip": ip, "created_at": now})
     link = absolute_url(f"/reset-password?token={token}")
-    send_email(email, "Reset your LeadAI password",
+    await asyncio.to_thread(send_email, email, "Reset your LeadAI password",
                f"Hi {record.get('name') or ''},\n\nUse this link to choose a new password "
                f"(valid for {_RESET_TOKEN_TTL_MIN} minutes, single use):\n{link}\n\n"
                "If you didn't ask for this, you can ignore this email.", kind="password_reset")

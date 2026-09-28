@@ -15,7 +15,7 @@ Secrets are never returned by the API — only masked hints.
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.config import Settings, get_settings
 from app.db.mongo import get_async_db, get_sync_db
@@ -116,7 +116,7 @@ ENVVAR_REGISTRY: list[EnvVarDef] = [
     {"name": "ADMIN_PANEL_PASSWORD_HASH", "kind": "str", "secret": True, "restart": False,
      "settings_attr": "admin_panel_password_hash", "default": "",
      "group": "Security", "description": "Deprecated and ignored."},
-    {"name": "SESSION_SECRET", "kind": "str", "secret": True, "restart": False,
+    {"name": "SESSION_SECRET", "kind": "str", "secret": True, "restart": False, "locked": True,
      "settings_attr": "session_secret", "default": "",
      "group": "Security", "description": "Secret signing session cookies. "
                                         "Changing it invalidates all active "
@@ -166,13 +166,13 @@ ENVVAR_REGISTRY: list[EnvVarDef] = [
      "group": "Security", "description": "Enable /docs and /redoc endpoints. "
                                         "Disable in production. Requires restart."},
     # Stripe / Billing
-    {"name": "STRIPE_SECRET_KEY", "kind": "str", "secret": True, "restart": False,
+    {"name": "STRIPE_SECRET_KEY", "kind": "str", "secret": True, "restart": False, "locked": True,
      "settings_attr": "stripe_secret_key", "default": "",
      "group": "Billing", "description": "Stripe secret API key for billing."},
     {"name": "STRIPE_PUBLISHABLE_KEY", "kind": "str", "secret": False, "restart": False,
      "settings_attr": "stripe_publishable_key", "default": "",
      "group": "Billing", "description": "Stripe publishable key for frontend checkout."},
-    {"name": "STRIPE_WEBHOOK_SECRET", "kind": "str", "secret": True, "restart": False,
+    {"name": "STRIPE_WEBHOOK_SECRET", "kind": "str", "secret": True, "restart": False, "locked": True,
      "settings_attr": "stripe_webhook_secret", "default": "",
      "group": "Billing", "description": "Stripe webhook signing secret."},
     {"name": "BILLING_WEBHOOK_SECRET", "kind": "str", "secret": True, "restart": False,
@@ -194,17 +194,17 @@ ENVVAR_REGISTRY: list[EnvVarDef] = [
      "settings_attr": None, "env_only": True, "default": "",
      "group": "Server", "description": "Public origin used in emailed links, e.g. "
                                       "https://app.example.com"},
-    {"name": "SMTP_HOST", "kind": "str", "secret": False, "restart": False,
+    {"name": "SMTP_HOST", "kind": "str", "secret": False, "restart": False, "locked": True,
      "settings_attr": None, "env_only": True, "default": "",
      "group": "Email", "description": "SMTP server. Empty = emails stay in the "
                                      "outbox (visible to Super Admin)."},
     {"name": "SMTP_PORT", "kind": "int", "secret": False, "restart": False,
      "settings_attr": None, "env_only": True, "default": 587,
      "group": "Email", "description": "SMTP port (STARTTLS)."},
-    {"name": "SMTP_USER", "kind": "str", "secret": False, "restart": False,
+    {"name": "SMTP_USER", "kind": "str", "secret": False, "restart": False, "locked": True,
      "settings_attr": None, "env_only": True, "default": "",
      "group": "Email", "description": "SMTP username."},
-    {"name": "SMTP_PASSWORD", "kind": "str", "secret": True, "restart": False,
+    {"name": "SMTP_PASSWORD", "kind": "str", "secret": True, "restart": False, "locked": True,
      "settings_attr": None, "env_only": True, "default": "",
      "group": "Email", "description": "SMTP password."},
     {"name": "SMTP_FROM", "kind": "str", "secret": False, "restart": False,
@@ -216,7 +216,8 @@ _REGISTRY: Dict[str, EnvVarDef] = {e["name"]: e for e in ENVVAR_REGISTRY}
 
 _SECRET_NAMES = {e["name"] for e in ENVVAR_REGISTRY if e.get("secret")}
 
-# Environment-only values (the permanent Super Admin): readable from the
+# Environment-only values (the permanent Super Admin, the session signing
+# secret and the SMTP / Stripe credentials): readable from the
 # process environment / .env alone — no DB override may set or shadow them.
 _LOCKED_NAMES = {e["name"] for e in ENVVAR_REGISTRY if e.get("locked")}
 
@@ -376,8 +377,36 @@ async def aset_envvar_override(name: str, value: Any, by: str = "admin") -> bool
         return False
 
 
-def delete_envvar_override(name: str) -> bool:
-    if name in _LOCKED_NAMES:
+def legacy_locked_overrides() -> List[str]:
+    """Names of now environment-only variables that still have an in-app
+    override stored from before they were locked (values never returned)."""
+    try:
+        db = get_sync_db()
+        if db is None:
+            return []
+        return sorted(d["_id"] for d in db[COLLECTION].find(
+            {"_id": {"$in": sorted(_LOCKED_NAMES)}}, {"_id": 1}))
+    except Exception:
+        return []
+
+
+def legacy_override_value(name: str) -> Optional[str]:
+    """Read-only access to a stored override of a locked variable (used only
+    as a fallback so an upgrade does not sign everyone out)."""
+    if name not in _LOCKED_NAMES:
+        return None
+    try:
+        doc = _sync_override(name)
+        value = (doc or {}).get("value")
+        return str(value) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+def delete_envvar_override(name: str, *, allow_locked: bool = False) -> bool:
+    """Remove an override. Locked (environment-only) variables can only have
+    a leftover override removed (``allow_locked``) — never set."""
+    if name in _LOCKED_NAMES and not allow_locked:
         return False
     if name == "APIFY_API_TOKEN":
         try:

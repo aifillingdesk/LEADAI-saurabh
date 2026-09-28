@@ -1013,6 +1013,10 @@ class TestItem7AuditAndSecrets:
         cms_page = db.website_pages.find_one()
         if cms_page:
             values["page_id"] = str(cms_page["_id"])
+        any_page = db.facebook_pages.find_one()
+        values.setdefault("social_page_id", str(any_page["_id"]) if any_page else str(ObjectId()))
+        any_post = db.facebook_posts.find_one()
+        values.setdefault("post_id", str(any_post["_id"]) if any_post else str(ObjectId()))
         problems, skipped, mongomock_gaps, not_ok, called = [], [], [], [], 0
         for method, path in _all_routes():
             if method != "GET" or not path.startswith(("/api/super-admin/", "/api/admin/",
@@ -1176,7 +1180,8 @@ def test_item8_full_journey(env):
     token = r.json()["invite_url"].rsplit("/", 1)[1]
     mail = db.email_outbox.find_one({"kind": "invitation", "to": "sam@example.com"}) or \
         db.email_outbox.find_one({"kind": "invitation"})
-    assert f"/invite/{token}" in mail["body"] and "password:" not in mail["body"].lower()
+    assert "/invite/[redacted]" in mail["body"] and token not in mail["body"]
+    assert "password:" not in mail["body"].lower()
     # invited user registers and runs a search
     client.cookies.clear()
     assert client.get(f"/api/invitations/{token}").status_code == 200

@@ -59,6 +59,7 @@ blocks every other role from /api/super-admin/*). Every mutation writes an
 audit event. No endpoint returns passwords, hashes, tokens, API keys or
 session identifiers.
 """
+import asyncio
 import csv
 import io
 import json
@@ -346,7 +347,7 @@ async def reset_user_access(user_id: str, body: ResetAccessBody, request: Reques
         "expires_at": now + timedelta(minutes=_RESET_TOKEN_TTL_MIN), "used_at": None,
         "purpose": "admin_reset", "requested_by": ctx.email, "created_at": now})
     reset_url = absolute_url('/reset-password?token=' + token)
-    delivery = send_email(user["email"], "Reset your LeadAI password",
+    delivery = await asyncio.to_thread(send_email, user["email"], "Reset your LeadAI password",
                f"Hi {user.get('name') or ''},\n\nOur support team issued a password reset for your "
                f"account. Use this link to choose a new password (valid for {_RESET_TOKEN_TTL_MIN} "
                f"minutes, single use):\n{reset_url}\n\n"
@@ -607,8 +608,9 @@ class ExtendBody(BaseModel):
 @router.post("/subscriptions/{sub_id}/extend")
 async def extend_subscription(sub_id: str, body: ExtendBody, request: Request,
                               ctx: TenantContext = Depends(SUPER)):
-    """Push the current period end (and trial end) out by N days. Never
-    changes the status."""
+    """Push the current period end (and trial end) out by N days. The plan
+    tokens' expiry moves with it, and an overdue (past_due) subscription is
+    live again for the extended period."""
     db = _db()
     if not 1 <= body.days <= 365:
         raise HTTPException(status_code=422, detail="days must be between 1 and 365")
@@ -624,9 +626,21 @@ async def extend_subscription(sub_id: str, body: ExtendBody, request: Request,
     if sub.get("status") == "trialing" or sub.get("trial_end"):
         t = _as_dt(sub.get("trial_end")) or now
         updates["trial_end"] = max(t, now) + timedelta(days=body.days)
+    new_status = "active" if sub.get("status") == "past_due" else sub.get("status")
+    if new_status != sub.get("status"):
+        updates.update({"status": new_status, "past_due_notified": False})
     await db.subscriptions.update_one({"_id": sub["_id"]}, {"$set": updates, "$push": {"status_history": {
-        "from": sub.get("status"), "to": sub.get("status"), "at": now, "by": ctx.email,
+        "from": sub.get("status"), "to": new_status, "at": now, "by": ctx.email,
         "note": f"extended {body.days}d: {body.reason.strip()[:200]}"}}})
+    # plan tokens live as long as the period they belong to
+    await db.token_balances.update_one(
+        {"organization_id": str(sub.get("organization_id")), "source": "plan",
+         "$or": [{"expires_at": None}, {"expires_at": {"$lt": new_end}}]},
+        {"$set": {"expires_at": new_end, "updated_at": now}})
+    from app.events.notifications import notify_org_admins
+    notify_org_admins(str(sub.get("organization_id")), "subscription_extended",
+                      "Subscription extended", f"Your subscription now runs until {new_end:%d %b %Y}.",
+                      severity="success", link="/org-admin#subscription")
     await aaudit("subscription.extended", "billing", user=ctx.audit_user(),
                  organization_id=sub.get("organization_id"), resource_type="subscription",
                  resource_id=str(sub["_id"]),
@@ -905,6 +919,7 @@ async def search_chain(run_id: str, ctx: TenantContext = Depends(SUPER)):
 
 @router.get("/leads")
 async def list_leads(organization_id: Optional[str] = None, run_id: Optional[str] = None,
+                     user_id: Optional[str] = None,
                      quality: Optional[str] = None, platform: Optional[str] = None,
                      q: Optional[str] = None, page: int = Query(1, ge=1),
                      limit: int = Query(25, ge=1, le=200), sort: str = "-created_at",
@@ -917,6 +932,8 @@ async def list_leads(organization_id: Optional[str] = None, run_id: Optional[str
         query["organization_id"] = organization_id
     if run_id:
         query["search_run_id"] = run_id
+    if user_id:  # leads from this user's searches, or assigned to them
+        query["$and"] = [{"$or": [{"user_id": user_id}, {"assigned_user_id": user_id}]}]
     if quality:
         query["lead_quality"] = quality
     if platform:
@@ -1765,8 +1782,9 @@ async def export_report(kind: str, request: Request, organization_id: Optional[s
         columns = ["id", "organization_id", "organization_name", "plan_id", "status", "billing_cycle",
                    "amount", "currency", "started_at", "current_period_end", "created_at"]
         q = {**org, **_range_q("created_at", start, end)}
-        if status:
-            q["status"] = status
+        if status:  # same aliases as the Subscriptions list
+            q["status"] = {"awaiting": "pending_admin_confirmation",
+                           "pending": {"$in": ["pending_payment", "payment_received"]}}.get(status, status)
         docs = [d async for d in db.subscriptions.find(q).sort("created_at", -1).limit(cap)]
         names = await _org_names(db, [d.get("organization_id") for d in docs])
         for d in docs:
@@ -1777,7 +1795,9 @@ async def export_report(kind: str, request: Request, organization_id: Optional[s
         columns = ["id", "organization_id", "organization_name", "subscription_id", "amount", "amount_paid",
                    "currency", "status", "provider", "verified_via", "refund_required", "created_at"]
         q = {**org, **_range_q("created_at", start, end)}
-        if status:
+        if status == "refunded":  # same alias as the Payments list
+            q["$or"] = [{"status": "refunded"}, {"refund_required": True}]
+        elif status:
             q["status"] = status
         docs = [d async for d in db.payments.find(q).sort("created_at", -1).limit(cap)]
         names = await _org_names(db, [d.get("organization_id") for d in docs])
@@ -2161,3 +2181,95 @@ async def delete_industry(key: str, request: Request, ctx: TenantContext = Depen
     await aaudit("industry.deleted", "settings", user=ctx.audit_user(), resource_type="industry",
                  resource_id=key, details={"name": current["name"]}, **_meta(request))
     return {"success": True}
+
+
+# ── Legacy in-app overrides of environment-only variables ─────────────────
+
+@router.get("/config/legacy-overrides")
+async def legacy_overrides(ctx: TenantContext = Depends(SUPER)):
+    """Environment-only variables that still have a value stored in the app
+    (from before they were locked). Names only — never values."""
+    from app.admin.envvars import legacy_locked_overrides
+    names = await asyncio.to_thread(legacy_locked_overrides)
+    return {"success": True, "names": names,
+            "message": ("Copy each value into the hosting environment (e.g. Render → Environment), "
+                        "then remove the stored copy here.") if names else "None"}
+
+
+@router.delete("/config/legacy-overrides/{name}")
+async def remove_legacy_override(name: str, request: Request, ctx: TenantContext = Depends(SUPER)):
+    from app.admin import envvars as ev
+    if name not in await asyncio.to_thread(ev.legacy_locked_overrides):
+        raise HTTPException(status_code=404, detail="No stored value for this variable")
+    ok = await asyncio.to_thread(ev.delete_envvar_override, name, allow_locked=True)
+    if not ok:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    await aaudit("env.legacy_override_removed", "security", user=ctx.audit_user(),
+                 resource_type="envvar", resource_id=name, details={"name": name}, **_meta(request))
+    return {"success": True, "message": f"Stored {name} removed; the environment value is used now."}
+
+
+# ── Lifecycle automation (billing periods, demo expiry) ─────────────────────
+
+class LifecycleBody(BaseModel):
+    auto_apply: Optional[bool] = None
+    run_now: bool = False
+
+
+@router.get("/lifecycle")
+async def lifecycle_status(ctx: TenantContext = Depends(SUPER)):
+    """Automation mode and the changes a sweep would make right now."""
+    from app.admin.settings import get_bool
+    from app.db.mongo import get_sync_db
+    from app.lifecycle.maintenance import AUTO_APPLY_SETTING, run_lifecycle_sweep
+    planned: List[Dict[str, Any]] = []
+    counts = await asyncio.to_thread(run_lifecycle_sweep, get_sync_db(), dry_run=True, planned=planned)
+    return {"success": True, "auto_apply": get_bool(AUTO_APPLY_SETTING), "counts": counts,
+            "pending": planned[:500]}
+
+
+@router.post("/lifecycle")
+async def lifecycle_update(body: LifecycleBody, request: Request, ctx: TenantContext = Depends(SUPER)):
+    """Turn automation on/off and/or apply the pending changes now."""
+    from app.admin.settings import get_bool, set_setting
+    from app.db.mongo import get_sync_db
+    from app.lifecycle.maintenance import AUTO_APPLY_SETTING, run_lifecycle_sweep
+    if body.auto_apply is not None:
+        await asyncio.to_thread(set_setting, AUTO_APPLY_SETTING, bool(body.auto_apply), ctx.email)
+    applied = None
+    if body.run_now:
+        applied = await asyncio.to_thread(run_lifecycle_sweep, get_sync_db())
+    await aaudit("lifecycle.automation_updated", "billing", user=ctx.audit_user(),
+                 details={"auto_apply": body.auto_apply, "run_now": body.run_now, "applied": applied},
+                 **_meta(request))
+    return {"success": True, "auto_apply": get_bool(AUTO_APPLY_SETTING), "applied": applied}
+
+
+class RenewBody(BaseModel):
+    reason: str = ""
+    amount: Optional[float] = None
+
+
+@router.post("/subscriptions/{sub_id}/renew")
+async def renew_subscription_manually(sub_id: str, body: RenewBody, request: Request,
+                                      ctx: TenantContext = Depends(SUPER)):
+    """Record a renewal paid outside the online provider (mock / invoice /
+    bank transfer): starts the next period, re-grants the plan's tokens,
+    records the invoice and notifies the organization."""
+    from app.db.mongo import get_sync_db
+    from app.lifecycle.maintenance import renew_subscription
+    if not body.reason.strip():
+        raise HTTPException(status_code=422, detail="A reason / payment reference is required")
+    db = _db()
+    sub = await _sub_or_404(db, sub_id)
+    if sub.get("status") not in ("active", "past_due"):
+        raise HTTPException(status_code=409, detail="Only an active or overdue subscription can be renewed")
+    out = await asyncio.to_thread(renew_subscription, get_sync_db(), sub, source="manual",
+                                  actor=ctx.email, amount=body.amount)
+    if not out.get("renewed"):
+        raise HTTPException(status_code=409, detail="The current period has not ended yet — nothing to renew")
+    await aaudit("subscription.renewed_manually", "billing", user=ctx.audit_user(),
+                 organization_id=sub.get("organization_id"), resource_type="subscription",
+                 resource_id=str(sub["_id"]), details={"reason": body.reason[:300], "amount": body.amount},
+                 **_meta(request))
+    return {"success": True, "current_period_end": out["current_period_end"].isoformat()}

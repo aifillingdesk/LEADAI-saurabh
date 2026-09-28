@@ -816,7 +816,7 @@
           <div class="oa-field span-2"><label for="f-description">Description</label><textarea class="form-textarea" id="f-description" name="description" maxlength="500" rows="3" ${ro}>${esc(org.description || '')}</textarea><span class="oa-hint">Shown to your team. Max 500 characters.</span></div>
         </div>${editable ? '<div class="oa-form-foot"><button type="submit" class="btn btn-primary">Save profile</button></div>' : readonlyNote()}</form>`;
       } else if (tab === 'branding') {
-        body = `<div class="oa-note">${ico('info')}<span>This branding applies inside your organization's workspace. The public LeadAI website and global branding are managed by LeadAI.</span></div>
+        body = `<div class="oa-note">${ico('info')}<span>Your display name and colours apply to your organization's Admin portal. The public LeadAI website and global branding are managed by LeadAI.</span></div>
         <form class="oa-card oa-form" data-form novalidate><div class="oa-form-grid">
           ${fld('company_name', 'Company display name', b.company_name || org.name, 'text', ro, 'maxlength="120"')}
           ${fld('logo_url', 'Organization logo URL', org.logo_url, 'url', ro, 'placeholder="https://…/logo.png"')}
@@ -836,9 +836,9 @@
             ${fld('default_comments_per_post', 'Comments per post', s.default_comments_per_post || '', 'number', ro, `min="1" ${maxComments ? 'max="' + maxComments + '"' : ''} placeholder="${attr(maxComments ? Math.min(maxComments, caps.default_comments_per_post || maxComments) : (caps.default_comments_per_post || ''))}"`, maxComments ? 'Plan maximum: ' + maxComments : '')}
           </div></div>
           <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Lead settings</div><a class="oa-link oa-small" href="#rules">Lead keywords →</a></div><div class="oa-form-grid">
-            ${fld('min_lead_score', 'Minimum lead score', s.min_lead_score == null ? '' : s.min_lead_score, 'number', ro, 'min="0" max="100" placeholder="0"', 'Leads below this score are de-emphasised.')}
+            ${fld('min_lead_score', 'Minimum lead score', s.min_lead_score == null ? '' : s.min_lead_score, 'number', ro, 'min="0" max="100" placeholder="0"', 'Comments scoring below this are not counted as leads in new searches (0 = platform default).')}
             <div class="oa-field"><label for="f-lead_assignment">Lead assignment</label><select class="form-select" id="f-lead_assignment" name="lead_assignment" ${ro}>${selectOpts([['manual', 'Manual (Admin assigns)'], ['creator', 'Whoever ran the search'], ['round_robin', 'Round robin']], s.lead_assignment === 'search_owner' ? 'creator' : (s.lead_assignment || 'manual'))}</select><span class="oa-hint">Applies to new leads. Round robin rotates across active members who can view leads (viewers are skipped).</span></div>
-          </div>${switchRow('auto_export', 'Auto-export leads', 'Prepare a CSV automatically when a search completes.', s.auto_export, !editable)}</div>
+          </div></div>
           <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Notifications</div></div>
             ${switchRow('email_notifications', 'Email notifications', 'Send organization alerts by email as well as in-app.', s.email_notifications !== false, !editable)}
             ${switchRow('notify_on_leads', 'New leads', 'Notify admins when searches find new leads.', s.notify_on_leads, !editable)}
@@ -889,7 +889,7 @@
           payload = { company_name: f.company_name.value.trim(), logo_url: f.logo_url.value.trim(), primary_color: f.primary_color.value.trim(), accent_color: f.accent_color.value.trim() };
         } else {
           const settings = {};
-          ['auto_export', 'email_notifications', 'notify_on_leads', 'notify_job_completion', 'notify_lead_assigned', 'notify_usage_warnings', 'shared_workspace'].forEach(k => { settings[k] = f[k].checked; });
+          ['email_notifications', 'notify_on_leads', 'notify_job_completion', 'notify_lead_assigned', 'notify_usage_warnings', 'shared_workspace'].forEach(k => { settings[k] = f[k].checked; });
           ['default_posts_per_search', 'default_comments_per_post', 'min_lead_score', 'usage_warning_percent', 'invite_expiry_days'].forEach(k => {
             const val = f[k].value.trim(); if (val !== '') settings[k] = Number(val);
           });
@@ -1009,7 +1009,8 @@
         t = dataTable(host, {
           url: '/api/org-admin/invitations', caption: 'Invitations', defaults: { status: 'pending' }, initial: v.query,
           filters: [{ name: 'q', label: 'Search', placeholder: 'Search email' },
-            { name: 'status', label: 'Status', type: 'select', all: 'All', options: [['pending', 'Pending'], ['accepted', 'Accepted'], ['expired', 'Expired'], ['cancelled', 'Revoked']] }],
+            // "all" is an explicit value: an empty status means "pending" to the API
+            { name: 'status', label: 'Status', type: 'select', options: [['all', 'All'], ['pending', 'Pending'], ['accepted', 'Accepted'], ['expired', 'Expired'], ['cancelled', 'Revoked']] }],
           columns: [
             { label: 'Email', render: r => `<b>${esc(r.email)}</b>` }, { label: 'Role', render: r => roleTag(r.role) },
             { label: 'Status', render: r => pill(r.status === 'cancelled' ? 'cancelled' : r.status, r.status === 'cancelled' ? 'revoked' : r.status) },
@@ -1102,9 +1103,9 @@
         const defaults = new Set(r.defaults); rp[r.role] = {};
         catalogKeys.forEach(k => { const on = $(`input[data-role="${r.role}"][data-perm="${k}"]`, host).checked; if (on !== defaults.has(k)) rp[r.role][k] = on; });
       });
-      busy(e.currentTarget, true, 'Saving…');
+      const btn = e.currentTarget; busy(btn, true, 'Saving…');
       try { await api('/api/organizations/current', { method: 'PATCH', body: { role_permissions: rp } }); toast('Role permissions saved. Affected members get the new permissions on their next request.', 'success'); renderRoles(host, v); }
-      catch (err) { toast(err.message, 'error'); busy(e.currentTarget, false); }
+      catch (err) { toast(err.message, 'error'); busy(btn, false); }
     };
     $$('[data-reset]', host).forEach(b => b.onclick = async () => {
       if (!(await confirmDialog('Reset to defaults?', 'This role goes back to LeadAI\'s default permissions.', { confirm: 'Reset' }))) return;
@@ -1331,7 +1332,7 @@
     { label: 'Scraped', render: r => r.comments_status ? pill(r.comments_status) : '<span class="oa-muted">—</span>' },
     { label: '', render: r => `<div class="oa-actions" style="justify-content:flex-end">${r.url ? extLink(r.url, 'Open') : ''}<a class="btn btn-secondary btn-sm" href="#comments?post_id=${attr(r.id)}">Comments</a></div>` },
   ], [['published', 'Recently published'], ['comments', 'Most comments'], ['likes', 'Most likes'], ['oldest', 'Oldest first']], null,
-  (q, p) => '/api/org-admin/exports/posts.csv' + qs({ platform: p.platform, run_id: p.run_id }));
+  (q, p) => '/api/org-admin/exports/posts.csv' + qs({ platform: p.platform, run_id: p.run_id, page_id: p.page_id, q: p.q }));
   ROUTES.comments = dataView('comments', 'Comments', 'Comments collected and analysed for leads.', [
     { label: 'Author', render: r => `<b>${esc(r.author || 'Unknown')}</b>` },
     { label: 'Comment', cls: 'oa-trunc', render: r => `<span title="${attr(r.text)}">${esc(r.text || '')}</span>` },
@@ -1339,7 +1340,7 @@
     { label: 'Lead', render: r => r.is_lead ? `${scoreTag(r.lead_score)} <a class="oa-link oa-small" href="#lead/${attr(r.lead_id)}">Open lead</a>` : (r.analysed ? '<span class="oa-muted oa-small">Not a lead</span>' : '<span class="oa-muted oa-small">Not analysed</span>') },
     { label: 'Published', render: r => esc(r.published ? fmtDate(r.published) : '—') },
   ], [['published', 'Recently published'], ['reactions', 'Most reactions'], ['oldest', 'Oldest first']], null,
-  (q, p) => '/api/org-admin/exports/comments.csv' + qs({ platform: p.platform, run_id: p.run_id }));
+  (q, p) => '/api/org-admin/exports/comments.csv' + qs({ platform: p.platform, run_id: p.run_id, post_id: p.post_id, q: p.q }));
 
   // ── Leads ──────────────────────────────────────────────────────────
   ROUTES.leads = {
@@ -1887,7 +1888,7 @@
         </div><h2 class="oa-section-title" style="margin:24px 0 12px">Your tickets</h2><div data-host></div>`;
       const t = dataTable($('[data-host]', v.el), {
         url: '/api/org-admin/support/tickets', caption: 'Support tickets',
-        filters: [{ name: 'q', label: 'Search', placeholder: 'Search subject' }, { name: 'status', label: 'Status', type: 'select', all: 'All statuses', options: [['open', 'Open'], ['in_progress', 'In progress'], ['waiting', 'Waiting on you'], ['resolved', 'Resolved'], ['closed', 'Closed']] }],
+        filters: [{ name: 'q', label: 'Search', placeholder: 'Search subject' }, { name: 'status', label: 'Status', type: 'select', all: 'All statuses', options: [['open', 'Open'], ['waiting', 'Waiting on you'], ['resolved', 'Resolved'], ['closed', 'Closed']] }],
         columns: [{ label: '#', render: r => `<span class="oa-mono">#${esc(r.number)}</span>` }, { label: 'Subject', render: r => `<b>${esc(r.subject)}</b>${r.last_reply_from_staff ? ' <span class="badge badge-info">Support replied</span>' : ''}` },
           { label: 'Category', render: r => esc(label(r.category)) }, { label: 'Priority', render: r => esc(label(r.priority)) }, { label: 'Status', render: r => pill(r.status) },
           { label: 'Opened by', render: r => esc(r.created_by || '') }, { label: 'Updated', render: r => timeTag(r.updated_at) }],
@@ -1940,9 +1941,9 @@
       catch (err) { toast(err.message, 'error'); busy(btn, false); }
     };
     $('[data-toggle]', v.el).onclick = async (e) => {
-      busy(e.currentTarget, true);
+      const btn = e.currentTarget; busy(btn, true);
       try { await api(`/api/org-admin/support/tickets/${encodeURIComponent(id)}/status`, { method: 'POST', body: { status: closed ? 'open' : 'closed' } }); toast(closed ? 'Ticket reopened.' : 'Ticket closed.', 'success'); route(); }
-      catch (err) { toast(err.message, 'error'); busy(e.currentTarget, false); }
+      catch (err) { toast(err.message, 'error'); busy(btn, false); }
     };
   }
 
@@ -1977,8 +1978,6 @@
             ${switchRow('lead_assigned', 'Lead activity', 'When leads are assigned or change status.', prefs.lead_assigned, imp)}
             ${switchRow('search_completed', 'Search results', 'When searches finish or fail.', prefs.search_completed, imp)}
             ${switchRow('usage_warnings', 'Usage warnings', 'When the organization nears its limits.', prefs.usage_warnings, imp)}
-            ${switchRow('weekly_summary', 'Weekly summary', 'A weekly email with your organization\'s results.', prefs.weekly_summary, imp)}
-            ${switchRow('product_updates', 'Product updates', 'News about new LeadAI features.', prefs.product_updates, imp)}
             ${imp ? '' : '<div class="oa-form-foot" style="margin-top:10px"><button type="submit" class="btn btn-primary btn-sm">Save preferences</button></div>'}</form>
         </div>`;
       if (imp) return;
@@ -2075,7 +2074,11 @@
     $('#oa-menu-name').textContent = nm; $('#oa-menu-email').textContent = me.email;
   }
   function refreshBrand() {
-    const o = S.ctx.organization; const name = (S.org && S.org.name) || o.name;
+    const o = S.ctx.organization; const b = (S.org && S.org.branding) || o.branding || {};
+    const name = b.company_name || (S.org && S.org.name) || o.name;
+    // the organization's brand colours tint accents (fills keep their contrast-safe tokens)
+    const root = document.documentElement.style;
+    ['primary', 'accent'].forEach(k => { const c = b[k + '_color']; if (/^#[0-9a-f]{6}$/i.test(c || '')) root.setProperty('--' + k, c); else root.removeProperty('--' + k); });
     $('#oa-org-name').textContent = name; $('#oa-crumb-org').textContent = name + ' · Admin';
     const logo = safeUrl((S.org && S.org.logo_url) || o.logo_url);
     const img = $('#oa-org-logo');
@@ -2133,6 +2136,9 @@
     wireShell();
     refreshBell(); setInterval(() => { if (!document.hidden) refreshBell(); }, 60000);
     window.addEventListener('hashchange', route);
+    // "Skip to content" must move focus, not navigate (its #hash is not a route)
+    const skip = document.querySelector('.skip-link');
+    if (skip) skip.addEventListener('click', (e) => { e.preventDefault(); const m = document.getElementById('oa-content'); if (m) { m.setAttribute('tabindex', '-1'); m.focus(); } });
     if (!location.hash) history.replaceState(null, '', '#dashboard');
     route();
   }

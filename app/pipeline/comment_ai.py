@@ -308,6 +308,14 @@ def rule_based_classify(text: Optional[str], author_name: str = "",
     if ignore_low_value and tokens and all(t in GRATITUDE_WORDS for t in tokens):
         return {**empty, "is_useful": False, "reason": "Gracious filler comment",
                 "sentiment": "positive"}
+    # a compliment on the product itself ("nice car", "beautiful villa",
+    # "awesome suv") names the product but asks for nothing: not a lead
+    if ignore_low_value and tokens and any(t in GRATITUDE_WORDS for t in tokens) and all(
+            t in GRATITUDE_WORDS or t in _terms(requirement_terms)
+            for t in tokens if t not in GENERIC_REQUIREMENT_TERMS) and not any(
+            t in GENERIC_REQUIREMENT_TERMS for t in tokens):
+        return {**empty, "is_useful": False, "reason": "Compliment without a request",
+                "sentiment": "positive"}
 
     analysis = {**empty, "is_useful": True,
                 "reason": "Comment may contain lead information",
@@ -871,7 +879,8 @@ def should_display_comment(text: Optional[str], ai_analysis: Optional[Dict[str, 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None,
-                  requirement_terms: Optional[List[str]] = None) -> Dict[str, Any]:
+                  requirement_terms: Optional[List[str]] = None,
+                  org_min_score: int = 0) -> Dict[str, Any]:
     """Nested AI extraction → flat, display-ready fields."""
     from app.admin.settings import get_bool_cached, get_int_cached
     contact = analysis.get("contact") if isinstance(analysis.get("contact"), dict) else {}
@@ -884,7 +893,8 @@ def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None,
     quality = analysis.get("lead_quality")
     if get_bool_cached("scoring.derive_quality") and not quality and signal_score > 0:
         quality = derive_quality_from_score(signal_score) or quality
-    min_lead_score = get_int_cached("ci.min_lead_score", 0)
+    # the stricter of the platform minimum and the organization's own
+    min_lead_score = max(get_int_cached("ci.min_lead_score", 0), int(org_min_score or 0))
     return {
         "phone": phone,
         "email": contact.get("email"),
@@ -1024,6 +1034,14 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
     biz_text = bc.context_prompt_text(biz)
     req_terms = _order_terms(bc.requirement_terms_for(biz, db))
     summary["industry"] = biz["industry_key"]
+    org_min_score = 0
+    if org_id:
+        try:
+            org_doc = db.organizations.find_one({"_id": ObjectId(str(org_id))},
+                                                {"settings.min_lead_score": 1}) or {}
+            org_min_score = int((org_doc.get("settings") or {}).get("min_lead_score") or 0)
+        except Exception:
+            org_min_score = 0
 
     for doc in comments:
         # Enforce per-job AI call budget (0 = unlimited)
@@ -1050,7 +1068,7 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
                     # out of tokens: finish the batch with rules only
                     ai_allowed = False
                     summary["ai_blocked"] = "tokens_exhausted"
-        flat = _flat_extract(analysis, doc.get("text"), req_terms)
+        flat = _flat_extract(analysis, doc.get("text"), req_terms, org_min_score)
         update = {
             "comment_ref": str(doc["_id"]),
             "comment_id": doc.get("comment_id"),
@@ -1073,7 +1091,12 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
             **flat,
         }
         try:
-            res = db.ai_comments.update_one({"comment_ref": str(doc["_id"])}, {"$set": update}, upsert=True)
+            # created_at = first analysis (re-analysis keeps it); every lead
+            # date, 30-day count and dated export relies on it
+            res = db.ai_comments.update_one({"comment_ref": str(doc["_id"])},
+                                            {"$set": update,
+                                             "$setOnInsert": {"created_at": update["analyzed_at"]}},
+                                            upsert=True)
         except Exception as e:
             logger.warning(f"[CommentAI] Failed to persist analysis: {e}")
             summary["errors"] += 1

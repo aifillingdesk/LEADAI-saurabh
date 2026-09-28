@@ -489,7 +489,26 @@ async def update_organization_status(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
     before = org.get("status")
-    updates: Dict[str, Any] = {"status": body.status, "updated_at": utcnow()}
+    new_status = body.status
+    if new_status == "active" and before != "active":
+        # "Activate" restores what the org was before it was suspended: a
+        # demo stays a demo (with its expiry) and only an organization with
+        # an ACTIVE subscription becomes a paid, active organization.
+        has_sub = await db.subscriptions.find_one(
+            {"organization_id": org_id, "status": {"$in": ["active", "trialing"]}}, {"_id": 1})
+        previous = org.get("status_before_suspension")
+        if not has_sub:
+            if previous in ("demo", "trial", "pending"):
+                new_status = previous
+            elif (org.get("metadata") or {}).get("demo_request_id") or org.get("demo"):
+                new_status = "demo"
+            else:
+                raise HTTPException(status_code=409, detail=(
+                    "This organization has no active subscription. Confirm or extend a "
+                    "subscription first (Subscriptions), or approve a demo."))
+    updates: Dict[str, Any] = {"status": new_status, "updated_at": utcnow()}
+    if new_status in ("suspended", "disabled") and before not in ("suspended", "disabled"):
+        updates["status_before_suspension"] = before
     if body.status == "archived":
         updates.update({"archived_at": utcnow(), "archived_by": ctx.email,
                         "archive_reason": body.reason.strip()[:300]})
@@ -507,18 +526,28 @@ async def update_organization_status(
 
     await _audit.aaudit(f"organization.{body.status}", "platform", user=ctx.audit_user(),
                         organization_id=org_id, resource_type="organization",
-                        resource_id=org_id, details={"before": before, "after": body.status,
-                                                     "new_status": body.status,
+                        resource_id=org_id, details={"before": before, "after": new_status,
+                                                     "new_status": new_status,
                                                      "reason": body.reason[:300],
                                                      "sessions_revoked": revoked},
                         **_audit.request_meta(request))
+    from app.events.notifications import notify_org_admins, notify_super_admins
     if body.status == "suspended":
-        from app.events.notifications import notify_super_admins
         notify_super_admins("organization_suspended", "Organization suspended",
                             f"{org.get('name') or org_id} suspended by {ctx.email}",
                             severity="warning", link="/superadmin#/organizations/" + org_id)
+    # the organization's own admins learn about access changes (email too:
+    # a suspended admin can no longer sign in to read an in-app notice)
+    if new_status in ("suspended", "disabled", "cancelled", "archived"):
+        notify_org_admins(org_id, "organization_suspended", "Your organization's access was suspended",
+                          body.reason.strip()[:300] or "Contact LeadAI support for details.",
+                          severity="warning", email=True, link="/")
+    elif before in ("suspended", "disabled") and new_status in ("active", "demo", "trial"):
+        notify_org_admins(org_id, "organization_reactivated", "Your organization is active again",
+                          "Access to LeadAI has been restored.", email=True, link="/")
 
-    return {"success": True, "message": f"Organization status updated to {body.status}"}
+    return {"success": True, "status": new_status,
+            "message": f"Organization status updated to {new_status}"}
 
 
 # ── User Management ─────────────────────────────────────────────────────────

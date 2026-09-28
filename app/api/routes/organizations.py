@@ -271,6 +271,10 @@ async def update_current_organization(body: UpdateOrgProfileRequest, request: Re
         updates["branding.company_name"] = body.company_name.strip()[:120]
     if body.settings:
         clean_settings = _validate_settings(body.settings)
+        # sharing every member's data is an Admin decision, not something a
+        # manager with a delegated "settings.manage" may grant themselves
+        if "shared_workspace" in clean_settings and ctx.org_role not in ("owner", "admin"):
+            raise HTTPException(status_code=403, detail="Only an organization Admin can change data visibility")
         _check_search_defaults(ctx.tenant_id, clean_settings)
         for k, v in clean_settings.items():
             updates[f"settings.{k}"] = v
@@ -343,7 +347,11 @@ async def invite_team_member(body: InviteMemberRequest, request: Request,
                  details={"email": body.email, "role": role}, **request_meta(request))
     return {"success": True, "invitation": _clean_doc(invitation),
             "invite_url": invitation.get("invite_url"),
-            "message": f"Invitation emailed to {body.email}"}
+            "email_delivery": invitation.get("email_delivery"),
+            "message": (f"Invitation emailed to {body.email}"
+                        if invitation.get("email_delivery") == "sent" else
+                        f"Invitation created for {body.email}. Email is not configured — "
+                        "share the invitation link with them.")}
 
 
 @router.delete("/organizations/current/invitations/{invitation_id}")
@@ -374,8 +382,9 @@ async def resend_team_invitation(invitation_id: str, request: Request,
         oid = ObjectId(invitation_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid invitation id")
+    # expired invitations can be re-sent as well (a fresh link)
     existing = await db.organization_invitations.find_one(
-        {"_id": oid, "organization_id": ctx.tenant_id, "status": "pending"})
+        {"_id": oid, "organization_id": ctx.tenant_id, "status": {"$in": ["pending", "expired"]}})
     if not existing:
         await _log_foreign_invitation_probe(db, request, ctx, oid)
         raise HTTPException(status_code=404, detail="Pending invitation not found")
@@ -392,7 +401,10 @@ async def resend_team_invitation(invitation_id: str, request: Request,
                  **request_meta(request))
     return {"success": True, "invitation": _clean_doc(new_invitation),
             "invite_url": new_invitation.get("invite_url"),
-            "message": f"Invitation resent to {existing['email']}"}
+            "email_delivery": new_invitation.get("email_delivery"),
+            "message": (f"Invitation resent to {existing['email']}"
+                        if new_invitation.get("email_delivery") == "sent" else
+                        f"New invitation link created for {existing['email']} — share it with them.")}
 
 
 @router.patch("/organizations/current/members/{member_user_id}")

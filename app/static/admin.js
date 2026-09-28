@@ -226,7 +226,7 @@ function qualityBadge(q) {
 }
 
 function leadStatusBadge(s) {
-  const map = { new: "amber", contacted: "amber", qualified: "green", converted: "green", ignored: "gray" };
+  const map = { new: "amber", contacted: "amber", qualified: "green", follow_up: "amber", converted: "green", lost: "gray", disqualified: "gray", archived: "gray", ignored: "gray" };
   return `<span class="adm-badge ${map[s] || "gray"}">${esc(s || "—")}</span>`;
 }
 
@@ -1045,7 +1045,8 @@ function navigate(view, params = null) {
   let target = null;
   if (paramType) {
     if (base === "jobs" && paramType === "details") target = () => viewJobDetail(paramValue);
-    else if (base === "leads" && paramType === "details") target = () => viewLeadDetail(paramValue);
+    // the leads table renders underneath, so closing the dossier never leaves a blank view
+    else if (base === "leads" && paramType === "details") target = async () => { await viewLeads(); return viewLeadDetail(paramValue); };
     else if (base === "platforms" && paramType === "details") target = () => viewPlatformDetail(paramValue);
     else if (base === "organizations" && (paramType === "details" || paramType === "")) target = () => viewOrgDetail(paramValue);
     else target = viewNotFound;
@@ -1709,7 +1710,7 @@ async function viewLeads() {
   });
   const data = await api(`/api/admin/leads?${qs}`);
   const role = state.user.role;
-  const statuses = ["new", "contacted", "qualified", "converted", "ignored"];
+  const statuses = LEAD_STATUSES;
   const s = data.summary || {};
   const platEntries = Object.entries(s.by_platform || {}).slice(0, 3);
   root.innerHTML = `
@@ -1829,12 +1830,22 @@ async function viewLeads() {
     () => bulk("delete"), "Delete Forever");
 }
 
+// mirrors app/pipeline/lead_lifecycle.py (the backend enforces transitions)
+const LEAD_STATUSES = ["new", "contacted", "qualified", "follow_up", "converted", "lost", "disqualified", "archived"];
+const LEAD_TRANSITIONS = {
+  new: ["contacted", "qualified", "follow_up", "disqualified", "lost", "archived"],
+  contacted: ["qualified", "follow_up", "lost", "archived"],
+  qualified: ["follow_up", "converted", "lost", "archived"],
+  follow_up: ["contacted", "qualified", "converted", "lost", "archived"],
+  converted: ["archived"], lost: ["archived"], disqualified: ["archived"], archived: [],
+};
 /* ──────────────────────────────── LEAD DETAIL ─────────────────────── */
 async function viewLeadDetail(leadId) {
   const data = await api(`/api/admin/leads/${encodeURIComponent(leadId)}`);
   const lead = data.lead;
   const role = state.user.role;
-  const statuses = ["new", "contacted", "qualified", "converted", "ignored"];
+  const cur = lead.lead_status || "new";
+  const statuses = [cur].concat(LEAD_TRANSITIONS[cur] || []);
   const contactValues = [lead.phone, lead.whatsapp, lead.email].filter(Boolean);
   const contactLinks = (v, kind) => {
     const href = kind === "phone"
@@ -1852,7 +1863,7 @@ async function viewLeadDetail(leadId) {
       <dt>Post</dt><dd>${lead.post_url ? `<a href="${esc(lead.post_url)}" target="_blank" rel="noopener">open post ↗</a>` : "—"}</dd>
       <dt>Lead score</dt><dd>${scorePill(lead.lead_score)}${lead.signal_score !== undefined ? ` <span class="adm-hint">signal ${esc(lead.signal_score)}</span>` : ""}</dd>
       <dt>Quality</dt><dd>${qualityBadge(lead.lead_quality)}</dd>
-      <dt>Priority</dt><dd><span class="adm-badge gray plain">${esc(lead.priority || "—")}</span></dd>
+      <dt>Priority</dt><dd><span class="adm-badge gray plain">${esc(lead.lead_priority || lead.priority || "—")}</span></dd>
       <dt>Confidence</dt><dd>${lead.confidence !== undefined ? `${(Number(lead.confidence) * 100).toFixed(0)}%` : "—"}</dd>
       <dt>Intent</dt><dd>${esc(lead.intent || "—")}</dd>
       ${lead.budget ? `<dt>Budget</dt><dd>${esc(lead.budget)}</dd>` : ""}
@@ -2146,7 +2157,8 @@ async function viewPlatforms() {
         for (const u of updates) {
           if (!u.value) { toast(`Actor ${u.key} cannot be empty`, "error"); return; }
           await api(`/api/admin/platforms/${encodeURIComponent(btn.dataset.p)}/actor`,
-            { method: "POST", body: { key: u.key, actor_id: u.value } });
+            // the backend picks the setting by kind (actor.<platform>.<kind>)
+            { method: "POST", body: { kind: String(u.key).split(".").pop(), actor_id: u.value } });
         }
         toast("Actors updated — next scrape uses the new actor ids", "ok");
         viewPlatforms();
@@ -2244,7 +2256,7 @@ async function viewPages() {
   const hashParams = new URLSearchParams(location.hash.split("?")[1] || "");
   if (hashParams.has("run")) f.run = hashParams.get("run") || "";
   const qs = qsOf({
-    platform: f.platform, q: f.q, run: f.run,
+    platform: f.platform, q: f.q, run_id: f.run,
     contact: f.contact ? "true" : "",
     offset: state.filters.pagesOffset || 0, limit: 25,
   });
@@ -2304,7 +2316,7 @@ async function viewPages() {
   $$("[data-page]", root).forEach((row) => {
     row.onclick = async () => {
       try {
-        const page = await api(`/api/pages/${row.dataset.page}`);
+        const page = await api(`/api/admin/pages/${encodeURIComponent(row.dataset.page)}`);
         openPageDetail(page);
       } catch(e) { toast("Failed to load page details", "error"); }
     };
@@ -2337,7 +2349,7 @@ async function viewPosts() {
   const hashParams = new URLSearchParams(location.hash.split("?")[1] || "");
   if (hashParams.has("run")) f.run = hashParams.get("run") || "";
   const qs = qsOf({
-    platform: f.platform, q: f.q, run: f.run,
+    platform: f.platform, q: f.q, run_id: f.run,
     offset: state.filters.postsOffset || 0, limit: 25,
   });
   const data = await api(`/api/admin/posts?${qs}`);
@@ -2388,7 +2400,7 @@ async function viewPosts() {
   $$("[data-post]", root).forEach((row) => {
     row.onclick = async () => {
       try {
-        const post = await api(`/api/posts/${row.dataset.post}`);
+        const post = await api(`/api/admin/posts/${encodeURIComponent(row.dataset.post)}`);
         openPostDetail(post);
       } catch(e) { toast("Failed to load post details", "error"); }
     };
@@ -2896,7 +2908,7 @@ async function viewAI() {
         toast(`${AI_TOGGLES[el.dataset.setting].label} → ${el.checked ? "on" : "off"}`, "ok");
       } catch (err) { toast(err.message, "error"); el.checked = !el.checked; }
     }));
-    $$("input[data-setting]", root).forEach((input) => {
+    $$("input[type=number][data-setting]", root).forEach((input) => {
       let timer;
       const commit = async () => {
         const key = input.dataset.setting;
@@ -2970,7 +2982,7 @@ async function viewScoring() {
   if (role !== "viewer") {
     const all = [...SCORING_GROUPS.flatMap(([, keys]) => keys), ...Object.entries(SCORING_TOGGLES)];
     const metaOf = (key) => Object.fromEntries(all)[key];
-    $$("input[data-setting]", root).forEach((input) => {
+    $$("input[type=number][data-setting]", root).forEach((input) => {
       let timer;
       const commit = async () => {
         const key = input.dataset.setting;
@@ -4684,17 +4696,17 @@ async function viewSubscriptions() {
   function bindActions() {
     // Change Plan
     $$("[data-change-plan]", root).forEach(btn => {
-      btn.onclick = () => {
+      btn.onclick = async () => {
         const subId = btn.dataset.changePlan;
+        // the real plan catalog (custom / renamed plans included)
+        let plans = [];
+        try { plans = ((await api("/api/admin/plans")).plans || []).filter((p) => (p.status || "active") === "active"); }
+        catch (err) { toast(err.message, "error"); return; }
         openModal("Admin Change Plan", `
           <div class="adm-field">
-            <label>Select Target Plan</label>
+            <label for="targetPlanSlug">Select Target Plan</label>
             <select class="adm-input" id="targetPlanSlug">
-              <option value="free">Free</option>
-              <option value="starter">Starter</option>
-              <option value="pro">Professional</option>
-              <option value="business">Business</option>
-              <option value="enterprise">Enterprise</option>
+              ${plans.map((p) => `<option value="${esc(p.slug)}">${esc(p.name || p.slug)}</option>`).join("")}
             </select>
           </div>
         `, `
@@ -4732,7 +4744,7 @@ async function viewSubscriptions() {
           const days = parseInt($("#extendDays").value, 10) || 14;
           try {
             await api(`/api/admin/subscriptions/${encodeURIComponent(subId)}/extend-trial`, {
-              method: "POST", body: { days }
+              method: "POST", body: { extra_days: days }
             });
             toast(`Trial extended by ${days} days`, "ok");
             closeModal();
@@ -4773,7 +4785,7 @@ async function viewSubscriptions() {
           const reason = $("#grantReason").value.trim() || "Admin grant";
           try {
             await api(`/api/admin/organizations/${encodeURIComponent(orgId)}/grant-credits`, {
-              method: "POST", body: { metric, quantity, reason }
+              method: "POST", body: { metric, credits: quantity, reason }
             });
             toast(`Granted ${quantity} credits`, "ok");
             closeModal();
@@ -4908,8 +4920,9 @@ async function viewUsers() {
             ` : `
               <button class="adm-btn small ok" data-activate-user data-id="${esc(u._id)}">Activate</button>
             `}
+            ${u.user_type === "customer" || u.env_account ? "" : `
             <button class="adm-btn small ghost" data-edit data-id="${esc(u._id)}" data-name="${esc(u.name)}" data-email="${esc(u.email)}" data-role="${esc(u.role)}" data-enabled="${u.enabled}">${icon("edit", 12)} Edit</button>
-            <button class="adm-btn small danger" data-delete data-id="${esc(u._id)}" data-email="${esc(u.email)}">Delete</button>
+            <button class="adm-btn small danger" data-delete data-id="${esc(u._id)}" data-email="${esc(u.email)}">Delete</button>`}
           ` : "") : `<span class="adm-badge gray plain">you</span>`}
         </td>
       </tr>`).join("");
@@ -5087,11 +5100,16 @@ async function viewSecurity() {
       <div class="adm-kv">
         <div class="adm-kv-row"><dt>Signed in as</dt><dd>${esc(data.me.email)} <span class="adm-badge ${data.me.role === "super_admin" ? "gold" : "green"}">${esc(data.me.role)}</span></dd></div>
       </div>
+      ${isSuper ? `<p class="adm-muted" style="max-width:520px">The Super Admin password is set by <code>SUPERADMIN_PASSWORD</code> in the hosting environment and cannot be changed here.</p>` : `
       <div class="adm-field" style="margin-bottom:12px;max-width:420px">
-        <label>New password for your account</label>
-        <input class="adm-input" id="secPassword" type="password" placeholder="8+ characters" ${isSuper ? "" : "disabled"}>
+        <label for="secOldPassword">Current password</label>
+        <input class="adm-input" id="secOldPassword" type="password" autocomplete="current-password">
       </div>
-      <button class="adm-btn primary" id="changePassword" ${isSuper ? "" : "disabled"}>${icon("key", 14)} Change password</button>
+      <div class="adm-field" style="margin-bottom:12px;max-width:420px">
+        <label for="secPassword">New password</label>
+        <input class="adm-input" id="secPassword" type="password" placeholder="8+ characters" autocomplete="new-password">
+      </div>
+      <button class="adm-btn primary" id="changePassword">${icon("key", 14)} Change password</button>`}
     </div>`;
   if (role !== "viewer") {
     $$(".adm-switch input", root).forEach((el) => el.addEventListener("change", async () => {
@@ -5121,13 +5139,14 @@ async function viewSecurity() {
       "Revoke all sessions", "Every admin cookie becomes invalid. You will need to sign in again.",
       async () => { await api("/api/admin/security/revoke-sessions", { method: "POST" }); toast("All sessions revoked", "ok"); },
       "Revoke");
-    $("#changePassword").onclick = async () => {
-      const pw = $("#secPassword").value.trim();
+    if ($("#changePassword")) $("#changePassword").onclick = async () => {
+      const old = $("#secOldPassword").value, pw = $("#secPassword").value.trim();
+      if (!old) { toast("Enter your current password", "warn"); return; }
       if (pw.length < 8) { toast("Password must be at least 8 characters", "warn"); return; }
       try {
-        await api("/api/admin/security/change-password", { method: "POST", body: { password: pw } });
+        await api("/api/admin/security/change-password", { method: "POST", body: { old_password: old, new_password: pw } });
         toast("Password updated — sign in again with the new password", "ok");
-        $("#secPassword").value = "";
+        $("#secPassword").value = ""; $("#secOldPassword").value = "";
       } catch (err) { toast(err.message, "error"); }
     };
   }
@@ -5590,7 +5609,8 @@ function bindSettEvents(root) {
       confirmModal("Reset group", `Reset ${keys.length} setting${keys.length === 1 ? "" : "s"} to their defaults? A revision is recorded.`,
         async () => {
           try {
-            const res = await api("/api/admin/settings/reset", { method: "POST", body: { section: SETT.activeTab, keys } });
+            // keys only: sending the section would reset the whole tab
+            const res = await api("/api/admin/settings/reset", { method: "POST", body: { keys } });
             toast(`${res.reset.length} setting${res.reset.length === 1 ? "" : "s"} reset`, "ok");
             await reloadSett();
           } catch (err) { toast(err.message, "error"); }

@@ -297,6 +297,16 @@ async def _handle_webhook_event(event_type: str, event: Dict[str, Any], provider
                 "subscription_id": str(sub["_id"]), "event": "invoice_paid",
                 "data": {"invoice": obj.get("id"), "amount_paid": obj.get("amount_paid")},
                 "created_at": utcnow()})
+            # a renewal (not the first invoice, which checkout already
+            # covers) starts the next period and re-grants the plan tokens
+            if obj.get("billing_reason") == "subscription_cycle" and                     sub.get("status") in ("active", "past_due"):
+                import asyncio
+                from app.db.mongo import get_sync_db
+                from app.lifecycle.maintenance import renew_subscription
+                paid = obj.get("amount_paid")
+                await asyncio.to_thread(
+                    renew_subscription, get_sync_db(), sub, source="stripe_invoice",
+                    amount=(paid / 100) if isinstance(paid, (int, float)) else None)
     elif event_type == "customer.subscription.deleted":
         sub = await _sub_from_metadata(obj, db)
         if sub:
