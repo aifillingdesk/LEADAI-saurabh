@@ -325,6 +325,14 @@ def mark_converted(organization_id: str, *, actor: str, subscription_id: str) ->
         return
     _transition(doc, "converted", actor, {"converted_at": utcnow(),
                                           "subscription_id": subscription_id})
+    if doc.get("user_id"):
+        try:
+            db.users.update_one(
+                {"_id": ObjectId(doc["user_id"]), "status": "pending_approval"},
+                {"$set": {"status": "active", "updated_at": utcnow()}}
+            )
+        except Exception:
+            pass
     audit("demo.converted", "lifecycle", user=actor, organization_id=str(organization_id),
           resource_type="demo_request", resource_id=str(doc["_id"]),
           details={"subscription_id": subscription_id})

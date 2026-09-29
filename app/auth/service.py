@@ -631,6 +631,7 @@ def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "email": user.get("email", ""),
         "name": user.get("name", ""),
         "role": user.get("role", ""),
+        "scope": user.get("scope", "site"),
         "organization_id": user.get("organization_id", ""),
         "organization_name": user.get("organization_name", "Default Organization"),
         "organization_slug": user.get("organization_slug", "default-org"),

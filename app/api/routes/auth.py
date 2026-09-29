@@ -171,11 +171,26 @@ async def login(body: LoginRequest, request: Request, response: Response):
     user = None
     auth_error = None
     if body.scope == "admin":
+        # 1. Check env-var super-admin credentials first.
         user = verify_admin_login(email, body.password)
         if user is None:
+            # 2. Check DB-backed platform admins (is_platform_admin flag).
             saas_user, err = verify_saas_user_login(email, body.password, scope="admin")
             if saas_user and saas_user.get("is_platform_admin"):
                 user = saas_user
+            else:
+                # 3. Fall through: org-admin users reach the login page via
+                #    /login?admin=1 which sends scope="admin".  They are NOT
+                #    platform admins, so we re-try with scope="site" so they
+                #    can access the org-admin portal normally.
+                if err in (None, "Invalid email or password", "Not a platform account"):
+                    site_user, site_err = verify_saas_user_login(email, body.password, scope="site")
+                    if site_user:
+                        user = site_user
+                    elif site_err and site_err != "Invalid email or password":
+                        auth_error = site_err
+                elif err:
+                    auth_error = err
     else:
         # Admins and users are database accounts only (RBAC + invitations).
         saas_user, err = verify_saas_user_login(email, body.password, scope="site")

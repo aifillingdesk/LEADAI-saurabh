@@ -547,6 +547,16 @@ async def auth_gate(request: Request, call_next):
                  "message": "Sign in required"},
                 status_code=401)
         if admin_area:
+            # If a signed-in site user (org owner / admin / customer) visits /admin, gracefully route them
+            if scope == "site" and portal_path == "/admin":
+                from app.auth.tenant import resolve_tenant_context
+                try:
+                    ctx = resolve_tenant_context(user)
+                    if ctx.org_role in ("owner", "admin"):
+                        return RedirectResponse("/org-admin", status_code=303)
+                    return RedirectResponse("/dashboard", status_code=303)
+                except Exception:
+                    pass
             target = "/login?admin=1"
         else:
             # come back to the page that was asked for after signing in

@@ -16,8 +16,9 @@
 :root:root {
   /* Surfaces */
   --bg: var(--bg-primary);
-  --bg-grad: radial-gradient(120% 140% at 10% -10%, var(--ambient-2) 0%, var(--bg-primary) 38%),
-             radial-gradient(100% 120% at 100% 0%, var(--ambient) 0%, transparent 45%);
+  --bg-grad: radial-gradient(ellipse 80% 60% at 0% 0%, var(--ambient-2) 0%, transparent 50%),
+             radial-gradient(ellipse 60% 50% at 100% 0%, var(--ambient) 0%, transparent 50%),
+             var(--bg-primary);
   --surface: var(--bg-elevated);
   --surface-2: color-mix(in srgb, var(--bg-elevated) 96%, var(--primary));
   --border-soft: var(--border-subtle);

@@ -728,6 +728,10 @@ async function boot() {
       "admin");
     return;
   }
+  if (!state.user.is_platform_admin && !state.user.platform_role) {
+    location.href = (state.user.org_role === "owner" || state.user.org_role === "admin") ? "/org-admin" : "/dashboard";
+    return;
+  }
   await cfgP;
   renderShell();
   const name = state.user.name || state.user.email;

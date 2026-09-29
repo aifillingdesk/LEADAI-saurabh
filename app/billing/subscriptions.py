@@ -257,6 +257,14 @@ async def confirm_subscription(subscription_id: str, *, actor: Dict[str, Any],
     await db.organizations.update_one({"_id": ObjectId(s_org_id)}, {"$set": {
         "status": "active", "plan_id": plan["slug"], "subscription_id": sub_id,
         "admin_portal_enabled": True, "activated_at": now, "updated_at": now}})
+    member_user_ids = [m["user_id"] async for m in db.organization_members.find({"organization_id": s_org_id})]
+    if member_user_ids:
+        user_oids = [ObjectId(uid) for uid in member_user_ids if ObjectId.is_valid(uid)]
+        if user_oids:
+            await db.users.update_many(
+                {"_id": {"$in": user_oids}, "status": "pending_approval"},
+                {"$set": {"status": "active", "updated_at": now}}
+            )
     from app.billing.invoices import create_invoice_record
     await create_invoice_record(organization_id=s_org_id, subscription_id=sub_id,
                                 amount=sub.get("amount", 0.0), currency=sub.get("currency"),

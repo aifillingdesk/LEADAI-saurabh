@@ -727,11 +727,25 @@
 
     // Where to go after sign-in: ?next= wins, then by account type.
     function destinationFor(user) {
-      if (nextPath) return nextPath;
       const isPlatformAdmin = !!(user.is_platform_admin || user.platform_role);
+      const isOrgAdmin = user.org_role === "owner" || user.org_role === "admin";
+
+      if (nextPath) {
+        // If a non-platform customer had ?next=/admin, redirect to /org-admin
+        if ((nextPath === "/admin" || nextPath.startsWith("/admin/") || nextPath.startsWith("/admin?")) && !isPlatformAdmin) {
+          return isOrgAdmin ? "/org-admin" : "/dashboard";
+        }
+        return nextPath;
+      }
+
       if (user.platform_role === "super_admin") return "/superadmin";
       if (isPlatformAdmin) return "/admin";
-      if (loginScope === "admin") return "/admin"; // legacy admin accounts on ?admin=1
+
+      // Org-admin users signed in via ?admin=1 go to the org-admin portal.
+      if (loginScope === "admin" || isAdminLogin) {
+        return "/org-admin";
+      }
+
       return "/dashboard";
     }
 
