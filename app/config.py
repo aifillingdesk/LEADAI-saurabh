@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     linkedin_actor_id: str = "harvestapi/linkedin-company"
     linkedin_posts_actor_id: str = "harvestapi/linkedin-company-posts"
     # Max comments collected per URL-search run (per-platform cap)
-    max_comments_to_collect: int = 100
+    max_comments_to_collect: int = 500
 
     # Security hardening
     # Disable API documentation in production (set to "true" to enable /docs)

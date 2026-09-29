@@ -620,7 +620,7 @@ async def url_search_report(run_id: str, request: Request,
     posts = []
     async for p in db.facebook_posts.find(
             _scoped(ctx, "facebook_posts", {"page_ref": page_id})) \
-            .sort("published_date", -1).limit(30):
+            .sort("published_date", -1).limit(100):
         doc = _serialize(p)
         doc["total_comment_count"] = doc.get("total_comment_count") or doc.get("comments_count")
         doc.setdefault("scraped_comment_count", None)
@@ -632,7 +632,7 @@ async def url_search_report(run_id: str, request: Request,
     if post_ids:
         async for c in db.facebook_comments.find(
                 _scoped(ctx, "facebook_comments", {"post_ref": {"$in": post_ids}})) \
-                .sort("published_date", -1).limit(100):
+                .sort("published_date", -1).limit(500):
             comments.append(_serialize(c))
     for c in comments:
         c["platform"] = _resolve_platform(c)
@@ -650,6 +650,20 @@ async def url_search_report(run_id: str, request: Request,
                     c[key] = a[key]
 
     leads = [c for c in comments if c.get("is_lead")]
+    # Also include any qualified leads from ai_comments that may be outside the comments slice
+    if post_ids:
+        existing_lead_ids = {l["id"] for l in leads}
+        async for a in db.ai_comments.find(
+                _scoped(ctx, "ai_comments", {"post_ref": {"$in": post_ids}, "is_lead": True})) \
+                .sort("lead_score", -1).limit(500):
+            lead_ref = str(a.get("comment_ref") or a.get("_id"))
+            if lead_ref not in existing_lead_ids:
+                s_lead = _serialize(a)
+                s_lead["id"] = lead_ref
+                s_lead["commenter_name"] = a.get("commenter_name")
+                s_lead["comment_text"] = a.get("comment_text") or a.get("text")
+                leads.append(s_lead)
+                existing_lead_ids.add(lead_ref)
     page["activity_status"] = page.get("activity_status") or _activity_status(page.get("latest_post_date"))
     # Apify cost of this run = the recorded actor runs (app/connectors/apify_connector.py)
     cost = 0.0
@@ -904,7 +918,7 @@ async def list_post_comments(
 
     # Compute category counts across the full unfiltered collection
     total_all = len(docs)
-    total_leads = sum(1 for d in docs if d.get("is_lead") or (d.get("lead_score") or 0) >= 40)
+    total_leads = sum(1 for d in docs if d.get("is_lead"))
     total_contact = sum(1 for d in docs if d.get("has_contact") or d.get("phone") or d.get("email"))
     total_hot = sum(1 for d in docs if (d.get("lead_quality") == "hot") or (d.get("lead_score") or 0) >= 80 or d.get("priority") == "high")
     total_pricing = sum(1 for d in docs if d.get("budget") or any(w in (d.get("comment_text") or "").lower() for w in ["price", "cost", "rate", "kitna", "how much", "quote", "charges", "fees", "fee", "budget"]))
@@ -928,7 +942,7 @@ async def list_post_comments(
 
     # Type / tab filtering
     if filter_type == "leads" or only_leads:
-        filtered = [d for d in filtered if d.get("is_lead") or (d.get("lead_score") or 0) >= 40]
+        filtered = [d for d in filtered if d.get("is_lead")]
     elif filter_type == "contact" or contact_only:
         filtered = [d for d in filtered if d.get("has_contact") or d.get("phone") or d.get("email")]
     elif filter_type == "hot":
@@ -1322,12 +1336,12 @@ async def list_leads(
     query = _scoped(ctx, "ai_comments", query)
 
     sort_key = {
-        "score": [("lead_score", -1), ("lead_created_at", -1)],
-        "newest": [("lead_created_at", -1)],
-        "oldest": [("lead_created_at", 1)],
-        "priority": [("lead_priority", -1), ("lead_score", -1)],
-        "updated": [("lead_updated_at", -1)],
-    }.get(sort, [("lead_score", -1), ("lead_created_at", -1)])
+        "score": [("lead_score", -1), ("lead_created_at", -1), ("created_at", -1)],
+        "newest": [("lead_created_at", -1), ("created_at", -1), ("analyzed_at", -1)],
+        "oldest": [("lead_created_at", 1), ("created_at", 1), ("analyzed_at", 1)],
+        "priority": [("lead_priority", -1), ("lead_score", -1), ("created_at", -1)],
+        "updated": [("lead_updated_at", -1), ("updated_at", -1), ("created_at", -1)],
+    }.get(sort, [("lead_score", -1), ("created_at", -1)])
 
     total = await db.ai_comments.count_documents(query)
     skip = (page - 1) * page_size

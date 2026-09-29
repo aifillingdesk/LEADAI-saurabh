@@ -328,9 +328,9 @@ def run_url_search(run_id: str, initial_url: str, max_posts: int = 20,
         from app.pipeline.comment_ai import has_contact_info
         from app.admin.settings import effective_limits
         lim = effective_limits()
-        cap = lim["global_max_comments"]
+        cap = max(500, lim.get("global_max_comments", 500))
         per_post = max(1, min(max_comments_per_post,
-                              lim["max_comments_per_post_cap"], cap))
+                              lim.get("max_comments_per_post_cap", 500)))
         for post in post_docs:
             if should_abort():
                 progress(status="cancelled", phase="cancelled",

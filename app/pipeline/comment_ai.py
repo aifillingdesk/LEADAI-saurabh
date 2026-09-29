@@ -140,12 +140,41 @@ _INQUIRY_WORDS = [
 # Hinglish (romanised Hindi) and Devanagari.
 _PRICE_QUESTION_RE = re.compile(
     r"\b(?:price|prices|rate|rates|cost|costing|kimat|keemat|daam|dam|budget|"
-    r"kitne|kitna|kitni|kitney|how much|price list|emi|payment plan)\b|"
+    r"kitne|kitna|kitni|kitney|how much|price list|emi|payment plan|reat|reat kya)\b|"
     r"रेट|कीमत|दाम|कितन[ाीे]|प्राइस",
     re.IGNORECASE)
 _LOCATION_QUESTION_RE = re.compile(
-    r"\b(?:location|locations|lokesan|lokeshan|address|kaha|kahan|kaha pe|kahan par|"
-    r"kidhar|where|site visit|map|pin location)\b|कहाँ|कहां|लोकेशन|पता|एड्रेस",
+    r"(?:\b(?:kaha|kahan|kaha pe|kahan par|kidhar)\s*(?:hai|he|h|par|pe)?\s*\?)|"
+    r"(?:\b(?:kaha|kahan|kidhar)\s+(?:hai|he|h|par|pe|batao|milega)\b)|"
+    r"(?:^\s*where\b)|"
+    r"(?:\bwhere\s+(?:is|are|can|to|do|did|will|located)\b)|"
+    r"(?:\bwhere\b[^\.\!\n]*\?)|"
+    r"(?:\b(?:site visit|pin location|map location)\b)|"
+    r"(?:\b(?:location|locations|address|पता|लोकेशन)\b[^\.\!\n]*\?)|"
+    r"(?:\?\s*\b(?:location|locations|address|पता|लोकेशन)\b)|"
+    r"(?:\b(?:location|locations|address)\b.*(?:batao|bataye|bataiye|share|send|bhejo|do|kya|hai|h|please|pls))|"
+    r"(?:(?:kaha|kahan|kidhar|where).*लोकेशन)",
+    re.IGNORECASE)
+_INQUIRY_DETAIL_RE = re.compile(
+    r"\b(?:details?|detail|info|information|brochure|catalogue|catalog|site plan|"
+    r"available|availability|hai kya|h kya|h ye|he kya|"
+    r"mil\s+(?:jayega|jayegi|sakta|sakti)|(?:kaha|kidhar|kaise|kitne\s+me)\s+mileg[aei]|mileg[aei]\s+(?:kya|hai|he|h)|"
+    r"emi|loan|down payment|dp|installment|kist|"
+    r"size|area|sq ft|sqft|sq\.ft|bigha|gaj|yard|sq yard|bhk|dimension|front|depth)\b|"
+    r"डिटेल|जानकारी|उपलब्ध|मिलेगा\s*क्या|मिल\s*सकता|किस्त|साइज",
+    re.IGNORECASE)
+_BUYER_INTENT_RE = re.compile(
+    r"\b(?:interested|interest|i am interested|im interested|want to buy|want to purchase|"
+    r"chahiye|chaiye|chahie|lena hai|leni hai|kharidna hai|kharidna|need|looking for|"
+    r"dilao|dila do|bik gai|available for me)\b|"
+    r"इंटरेस्टेड|चाहिए|लेना है|खरीदना",
+    re.IGNORECASE)
+_SELLER_LISTING_RE = re.compile(
+    r"\b(?:auction property|bank auction|deal code|showroom available|office available|"
+    r"flat available|plot available|plots available|villas? available|house available|"
+    r"available for sale|for sale|plot sale|bikau hai|resale|society plot|jda approved|"
+    r"booking open|contact for booking|dm for booking|rera approved|rera reg)\b|"
+    r"बिकाऊ|उपलब्ध है|बुकिंग ओपन",
     re.IGNORECASE)
 _ASK_RE = re.compile(
     r"\?|\b(?:batao|batayo|bataye|bataiye|batay|btao|bolo|bataoge|share|send|"
@@ -167,6 +196,17 @@ _PROMO_OFFER_RE = re.compile(
 _BUYER_NEED_RE = re.compile(
     r"\b(?:chahiye|want|need|looking for|require|interested|mujhe|muje|hame|"
     r"lena hai|leni hai|kharidna)\b|चाहिए|मुझे|लेना है",
+    re.IGNORECASE)
+_UNIT_CONVERSION_RE = re.compile(
+    r"\b(?:kitna|kitne|kitni|how many)\s+(?:gaj|gajj|bigha|acre|sq ft|sqft|yard|hectare|metre|meter|cent|guntha)\s+(?:hota|hote|hoti|me|mein|in)\b",
+    re.IGNORECASE)
+_FILLER_NON_ENGLISH_RE = re.compile(
+    r"\b(?:mantap|hebat|cantik|bagus|semoga|sukses|alhamdulillah|masyaallah|bismillah)\b",
+    re.IGNORECASE)
+_VIDEO_AUDIENCE_RE = re.compile(
+    r"\b(?:make a video|video bana|video bna|video bnao|video banao|next video|roast|movie|trailer|song|episode|part 2|part 3|"
+    r"upload regular|dubbing|review video|comedy|humor|acting|actor|actress|dialogue)\b|"
+    r"वीडियो बना|रोस्ट",
     re.IGNORECASE)
 
 _URGENCY_WORDS = [
@@ -238,13 +278,25 @@ def is_page_owner_comment(author_name: Optional[str], page_name: Optional[str]) 
 
 
 def is_promotional_comment(text: str) -> bool:
-    """A comment advertising an offer with a number to call (typically a
-    competing broker/seller), as opposed to someone asking about the post."""
-    if not _PHONE_RE.search(text):
+    """A comment advertising an offer (competing broker, seller, or agency
+    promotion), as opposed to a genuine customer/buyer inquiry."""
+    if not text:
         return False
-    if "?" in text or _BUYER_NEED_RE.search(text):
+    lower = text.lower()
+    # A buyer inquiry or explicit question is not promotional
+    if "?" in text or _BUYER_INTENT_RE.search(lower):
         return False
-    return bool(_PROMO_CALL_RE.search(text) and _PROMO_OFFER_RE.search(text))
+    # Broker / seller listing patterns
+    if _SELLER_LISTING_RE.search(lower):
+        return True
+    if _PROMO_CALL_RE.search(lower) and _PROMO_OFFER_RE.search(lower):
+        return True
+    if ("deal code" in lower or "booking open" in lower or "for sale" in lower or "resale available" in lower):
+        return True
+    if _PHONE_RE.search(text):
+        if (_PROMO_CALL_RE.search(lower) or "sampark kare" in lower or "call kare" in lower or "plot sale" in lower):
+            return True
+    return False
 
 
 def rule_based_classify(text: Optional[str], author_name: str = "",
@@ -254,12 +306,12 @@ def rule_based_classify(text: Optional[str], author_name: str = "",
     ``requirement_terms`` is the organization's industry vocabulary
     (business_context.requirement_terms_for); None = every industry."""
     empty = {
-        "is_useful": True,
+        "is_useful": False,
         "reason": None,
-        "lead_type": None,
+        "lead_type": "none",
         "confidence_score": 0.0,
         "priority": "low",
-        "lead_quality": None,
+        "lead_quality": "none",
         "sentiment": "neutral",
         "spam_score": 0.0,
         "duplicate_score": 0.0,
@@ -273,16 +325,16 @@ def rule_based_classify(text: Optional[str], author_name: str = "",
                   "urgency": None, "intent": "other"},
     }
     if not text or not text.strip():
-        return {**empty, "is_useful": False, "reason": "Empty comment"}
+        return {**empty, "reason": "Empty comment"}
 
     raw = text.strip()
     lower = raw.lower()
 
     if is_page_owner_comment(author_name, page_name):
-        return {**empty, "is_useful": False, "lead_type": "none",
+        return {**empty, "lead_type": "none",
                 "reason": "Comment by the page itself (reply or own listing)"}
     if is_promotional_comment(raw):
-        return {**empty, "is_useful": False, "lead_type": "broker", "spam_score": 0.6,
+        return {**empty, "lead_type": "broker", "spam_score": 0.6,
                 "reason": "Promotional comment advertising an offer (not a buyer)",
                 "buyer": {**empty["buyer"], "intent": "selling"}}
 
@@ -292,34 +344,45 @@ def rule_based_classify(text: Optional[str], author_name: str = "",
     ignore_low_value = get_bool_cached("ci.ignore_low_value")
 
     if ignore_emoji and is_emoji_only(raw):
-        return {**empty, "is_useful": False, "reason": "Emoji-only comment",
+        return {**empty, "reason": "Emoji-only comment",
                 "sentiment": "positive", "spam_score": 0.4}
     if ignore_spam and _URL_ONLY_RE.match(raw) and len(raw) > 8:
-        return {**empty, "is_useful": False, "reason": "Link-only comment", "spam_score": 0.9}
+        return {**empty, "reason": "Link-only comment", "spam_score": 0.9}
+    if "fb.com/share" in lower or "facebook.com/share" in lower or "eventbrite.com" in lower:
+        return {**empty, "reason": "Link share", "spam_score": 0.8}
+    if _FILLER_NON_ENGLISH_RE.search(lower):
+        return {**empty, "reason": "Non-lead filler / reaction"}
+    if _UNIT_CONVERSION_RE.search(lower):
+        return {**empty, "reason": "General unit conversion query (not a commercial lead)"}
     if ignore_spam:
         for pattern in SPAM_PATTERNS:
             if pattern.search(lower):
-                return {**empty, "is_useful": False, "reason": "Spam pattern detected", "spam_score": 1.0}
-    # letters/digits in any script we serve — Latin AND Devanagari, so a
-    # comment written only in Hindi is not mistaken for an empty one
+                return {**empty, "reason": "Spam pattern detected", "spam_score": 1.0}
+    # letters/digits in any script we serve — Latin AND Devanagari
     if ignore_low_value and len(_WORD_CHAR_RE.findall(raw)) < 3:
-        return {**empty, "is_useful": False, "reason": "Too short to be meaningful", "spam_score": 0.3}
+        return {**empty, "reason": "Too short to be meaningful", "spam_score": 0.3}
     tokens = [t for t in _TOKEN_SPLIT_RE.split(lower) if t]
     if ignore_low_value and tokens and all(t in GRATITUDE_WORDS for t in tokens):
-        return {**empty, "is_useful": False, "reason": "Gracious filler comment",
+        return {**empty, "reason": "Gracious filler comment",
                 "sentiment": "positive"}
-    # a compliment on the product itself ("nice car", "beautiful villa",
-    # "awesome suv") names the product but asks for nothing: not a lead
     if ignore_low_value and tokens and any(t in GRATITUDE_WORDS for t in tokens) and all(
             t in GRATITUDE_WORDS or t in _terms(requirement_terms)
             for t in tokens if t not in GENERIC_REQUIREMENT_TERMS) and not any(
             t in GENERIC_REQUIREMENT_TERMS for t in tokens):
-        return {**empty, "is_useful": False, "reason": "Compliment without a request",
+        return {**empty, "reason": "Compliment without a request",
                 "sentiment": "positive"}
 
-    analysis = {**empty, "is_useful": True,
-                "reason": "Comment may contain lead information",
-                "confidence_score": 0.55, "priority": "medium"}
+    words = raw.split()
+    phone_m = _PHONE_RE.search(raw)
+    email_m = _EMAIL_RE.search(raw) or _BARE_EMAIL_DOMAIN_RE.search(raw)
+    wa_m = _WHATSAPP_WITH_NUM_RE.search(raw)
+    has_contact = bool(phone_m or email_m or wa_m)
+    if _VIDEO_AUDIENCE_RE.search(lower) and not has_contact and not _BUYER_INTENT_RE.search(lower) and not _PRICE_QUESTION_RE.search(raw):
+        return {**empty, "reason": "Video/entertainment audience comment (not a commercial lead)"}
+    if len(words) <= 1 and not has_contact and not any(w in lower for w in ("price", "rate", "cost", "kitna", "details", "kimat", "keemat", "rent")):
+        return {**empty, "reason": "Single vague word without inquiry"}
+
+    analysis = {**empty}
     return _rule_extraction(analysis, raw, lower, requirement_terms)
 
 
@@ -331,13 +394,14 @@ def _rule_extraction(analysis: Dict[str, Any], text: str, lower: str,
     only values literally present in the comment text are filled.
     """
     phone_m = _PHONE_RE.search(text)
-    email_m = _EMAIL_RE.search(text)
-    wa_m = _WHATSAPP_WITH_NUM_RE.search(lower) or (_WHATSAPP_RE.search(lower) and phone_m)
+    email_m = _EMAIL_RE.search(text) or _BARE_EMAIL_DOMAIN_RE.search(text)
+    wa_m = _WHATSAPP_WITH_NUM_RE.search(text) or (_WHATSAPP_RE.search(lower) and phone_m)
     url_m = _URL_RE.search(text)
     budget_m = _BUDGET_RE.search(lower)
     city_m = next((c for c in _CITY_WORDS if c in lower), None)
     req_words = [w for w in _terms(requirement_terms) if _term_in(w, lower)]
     urg_words = [w for w in _URGENCY_WORDS if w in lower]
+    words = text.split()
 
     if phone_m:
         analysis["contact"]["phone"] = phone_m.group(0).strip()
@@ -358,24 +422,59 @@ def _rule_extraction(analysis: Dict[str, Any], text: str, lower: str,
         analysis["buyer"]["preferred_location"] = city_m.title()
     if urg_words:
         analysis["buyer"]["urgency"] = urg_words[0]
-    if req_words or urg_words or budget_m or city_m:
-        analysis["buyer"]["intent"] = "buying"
-    # explicit questions about the offer: "price kya hai", "rate batao",
-    # "location kaha hai", "रेट कितनी है" — real inquiries from prospects
+
     price_q = _PRICE_QUESTION_RE.search(text)
     location_q = _LOCATION_QUESTION_RE.search(text)
-    if price_q or location_q:
-        analysis["buyer"]["intent"] = "pricing" if price_q else "inquiry"
-        analysis["lead_type"] = analysis["lead_type"] or "inquiry"
-        analysis["priority"] = "medium"
-        asked = bool(_ASK_RE.search(text)) or len(text.split()) <= 6
-        analysis["confidence_score"] = max(analysis["confidence_score"], 0.7 if asked else 0.6)
-        analysis["reason"] = ("Asks about the price" if price_q
-                              else "Asks about the location / address")
-    if phone_m or email_m or url_m:
+    has_contact = bool(phone_m or email_m or wa_m)
+
+    # 1. Contact info provided by prospect
+    if has_contact:
+        analysis["is_useful"] = True
         analysis["lead_type"] = "buyer"
         analysis["priority"] = "high"
-        analysis["confidence_score"] = 0.7
+        analysis["confidence_score"] = 0.85
+        analysis["buyer"]["intent"] = "inquiry"
+        analysis["reason"] = "Comment provides direct contact details"
+    # 2. Price / costing inquiry
+    elif price_q and "at any cost" not in lower:
+        analysis["is_useful"] = True
+        analysis["buyer"]["intent"] = "pricing"
+        analysis["lead_type"] = "inquiry"
+        analysis["priority"] = "medium"
+        analysis["confidence_score"] = 0.75
+        analysis["reason"] = "Asks about the price / rate"
+    # 3. Explicit buyer need / requirement
+    elif _BUYER_INTENT_RE.search(lower):
+        analysis["is_useful"] = True
+        analysis["buyer"]["intent"] = "buying"
+        analysis["lead_type"] = "buyer"
+        analysis["priority"] = "medium"
+        analysis["confidence_score"] = 0.75
+        analysis["reason"] = "Expresses buying intent or requirement"
+    # 4. Details / availability / specs inquiry
+    elif _INQUIRY_DETAIL_RE.search(lower) and ("?" in text or any(w in lower for w in ("please", "pls", "batao", "share", "send", "kya", "bataiye", "do", "hai", "he", "h", "bhejo", "chahiye")) or len(words) <= 6):
+        analysis["is_useful"] = True
+        analysis["buyer"]["intent"] = "inquiry"
+        analysis["lead_type"] = "inquiry"
+        analysis["priority"] = "medium"
+        analysis["confidence_score"] = 0.70
+        analysis["reason"] = "Inquiry regarding details, specifications, or availability"
+    # 5. Location / address question
+    elif location_q:
+        analysis["is_useful"] = True
+        analysis["buyer"]["intent"] = "inquiry"
+        analysis["lead_type"] = "inquiry"
+        analysis["priority"] = "medium"
+        analysis["confidence_score"] = 0.65
+        analysis["reason"] = "Asks about location or address"
+    else:
+        # Default: not a commercial lead
+        analysis["is_useful"] = False
+        analysis["lead_type"] = "none"
+        analysis["priority"] = "low"
+        analysis["confidence_score"] = 0.1
+        analysis["reason"] = "General comment without buyer intent"
+
     return analysis
 
 
@@ -497,8 +596,8 @@ def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1
             with httpx.Client(timeout=60) as client:
                 resp = client.post(url, json=payload, headers=headers)
                 if resp.status_code == 429:
-                    # open the circuit for 10 minutes so the whole comment batch isn't slowed
-                    _GEMINI_DISABLED_UNTIL = time.time() + 600
+                    # open the circuit for 30s to allow per-minute quota to recover
+                    _GEMINI_DISABLED_UNTIL = time.time() + 30
                     _GEMINI_FAILURES_COUNT += 1
                     _GEMINI_LAST_FAILURE = f"429 Rate Limit at {time.strftime('%H:%M:%S')}"
                     logger.warning(f"[Gemini] 429 rate limit, circuit open until "
@@ -537,7 +636,7 @@ def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1
             _GEMINI_FAILURES_COUNT += 1
             _GEMINI_LAST_FAILURE = str(e)
             if e.response.status_code == 429:
-                _GEMINI_DISABLED_UNTIL = time.time() + 600
+                _GEMINI_DISABLED_UNTIL = time.time() + 30
                 logger.warning(f"[Gemini] 429 rate limit, circuit open until "
                                f"{time.strftime('%H:%M:%S', time.localtime(_GEMINI_DISABLED_UNTIL))}")
                 if attempt < retries:
@@ -895,6 +994,29 @@ def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None,
         quality = derive_quality_from_score(signal_score) or quality
     # the stricter of the platform minimum and the organization's own
     min_lead_score = max(get_int_cached("ci.min_lead_score", 0), int(org_min_score or 0))
+    is_useful = bool(analysis.get("is_useful"))
+    ltype = str(analysis.get("lead_type") or "").lower()
+    b_intent = str(buyer.get("intent") or "").lower()
+    has_contact = bool(phone or contact.get("email") or contact.get("whatsapp"))
+
+    # Robust qualification check:
+    # A lead must be useful, not from a competitor/broker/seller, and either provide
+    # direct contact details or carry genuine buyer/inquiry intent with positive score.
+    is_lead = False
+    if is_useful and ltype not in ("none", "broker", "spam", "seller"):
+        if has_contact and score >= 20:
+            is_lead = True
+        elif score >= max(35, min_lead_score):
+            valid_intent = b_intent in ("buying", "pricing", "inquiry", "booking",
+                                        "service_request", "product_inquiry", "demo_request", "investment")
+            valid_type = ltype in ("buyer", "inquiry", "prospect", "customer")
+            has_intent_signals = any(s in signals for s in ("buying_intent", "inquiry", "budget", "contact_request"))
+            if (valid_intent or valid_type) and has_intent_signals:
+                text_raw = (text or "").strip()
+                words = text_raw.split()
+                if len(words) >= 2 or any(w in text_raw.lower() for w in ("price", "rate", "cost", "kitna", "details", "kimat", "keemat", "rent")):
+                    is_lead = True
+
     return {
         "phone": phone,
         "email": contact.get("email"),
@@ -912,10 +1034,7 @@ def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None,
         "confidence": analysis.get("confidence_score") or 0.0,
         "lead_score": score,
         "signal_score": signal_score,
-        # a comment judged not useful (the page's own reply, a promotion,
-        # spam, filler) is never a lead, whatever words or numbers it contains
-        "is_lead": bool(analysis.get("is_useful")) and bool(signals)
-                   and score >= min_lead_score,
+        "is_lead": is_lead,
         "reason": analysis.get("reason"),
     }
 
@@ -1058,6 +1177,7 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
             business_category=biz_text, requirement_terms=req_terms)
         if analysis.get("analyzed_by") == "gemini":
             ai_calls_used += 1
+            time.sleep(0.5)  # pace calls to respect Gemini per-minute free quota
             if org_id and ai_token_cost:
                 from app.billing.tokens import TokensExhaustedException, consume
                 try:
