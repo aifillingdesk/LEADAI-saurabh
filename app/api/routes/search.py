@@ -33,11 +33,12 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 from app.auth import permissions as P
 from app.auth.tenant import (
@@ -441,6 +442,9 @@ async def start_url_search(
     categories: Optional[str] = Query(None,
                                       description="Comma-separated category keys (filter_mode=custom)"),
     match_mode: str = Query("any", description="any | all | category | advanced"),
+    industry: Optional[str] = Query(None, description="Selected industry / domain"),
+    business_type: Optional[str] = Query(None, description="Selected business type"),
+    target_customer: Optional[str] = Query(None, description="Target customer type"),
     ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
 ):
     """Start a URL-based social lead search. Poll GET /api/search/{run_id}.
@@ -563,11 +567,24 @@ async def start_url_search(
         await _refund_tokens(ctx, "search", run_id, "search quota refused")
         raise
 
+    # Business context for AI lead analysis and intent scoring
+    biz_ctx = {}
+    if industry and industry.strip():
+        biz_ctx["industry"] = industry.strip()
+    if business_type and business_type.strip():
+        biz_ctx["business_type"] = business_type.strip()
+    if target_customer and target_customer.strip():
+        biz_ctx["target_customer"] = target_customer.strip()
+    clean_kws = [k.strip() for k in (include_keywords or "").split(",") if k.strip()]
+    if clean_kws:
+        biz_ctx["keywords"] = clean_kws
+
     await db.search_history.insert_one(stamp(ctx, {
         "run_id": run_id, "query": url, "intent": {
             "keyword": url, "type": "url", "platform": platform,
             "canonical_url": canonical, "limit": max_posts,
             "max_comments_per_post": max_comments_per_post},
+        "business_context": biz_ctx or None,
         "comment_filter": comment_filter or None,
         "limit": max_posts, "provider": "apify", "url_search": True,
         "status": "running", "phase": "queued", "message": "Starting URL search...",
@@ -585,6 +602,7 @@ async def start_url_search(
                  details={"url": canonical, "platform": platform,
                           "max_posts": max_posts,
                           "max_comments_per_post": max_comments_per_post,
+                          "business_context": biz_ctx or None,
                           "comment_filter": (comment_filter or {}).get("mode")})
     return {
         "run_id": run_id, "status": "running", "platform": platform,
@@ -1737,3 +1755,127 @@ async def lead_stats_summary(
         "min_score": doc["min_score"] or 0,
         "avg_confidence": round((doc["avg_confidence"] or 0) * 100, 1),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOMAIN TAXONOMY & SEARCH PRESETS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SearchPresetCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    industry: Optional[str] = Field(None, max_length=100)
+    business_type: Optional[str] = Field(None, max_length=100)
+    target_customer: Optional[str] = Field(None, max_length=100)
+    keywords: List[str] = Field(default_factory=list)
+    exclude_keywords: List[str] = Field(default_factory=list)
+    match_mode: str = Field(default="any")
+    notes: Optional[str] = Field(None, max_length=300)
+    is_shared: bool = Field(default=False)
+
+
+@router.get("/business-context/catalog")
+async def get_business_context_catalog(request: Request):
+    """Return the generic domain taxonomy catalog plus organization defaults (if session present)."""
+    from app.pipeline.domain_intelligence import get_taxonomy_catalog
+    from app.auth.service import session_user
+    from app.auth.tenant import resolve_tenant_context, org_match
+    from app.db.mongo import get_sync_db
+
+    catalog = get_taxonomy_catalog()
+    org_defaults = {}
+
+    try:
+        claims = session_user(request)
+        if claims:
+            sync_db = get_sync_db()
+            ctx = resolve_tenant_context(claims, sync_db)
+            if ctx and ctx.organization_id:
+                db = _db_or_503()
+                org = await db.organizations.find_one({"_id": org_match(ctx.organization_id)})
+                if org:
+                    settings = org.get("settings") or {}
+                    biz_profile = settings.get("business_profile") or {}
+                    org_defaults = {
+                        "industry": biz_profile.get("industry") or org.get("industry") or "",
+                        "business_type": biz_profile.get("business_type") or "",
+                        "custom_business_type": biz_profile.get("custom_business_type") or "",
+                        "target_customer_types": biz_profile.get("target_customer_types") or [],
+                        "primary_offerings": biz_profile.get("primary_offerings") or [],
+                        "active_keywords": settings.get("lead_keywords") or [],
+                        "excluded_keywords": settings.get("lead_exclude_keywords") or [],
+                    }
+    except Exception as e:
+        logger.debug(f"Catalog fetched without authenticated org context: {e}")
+
+    return {
+        "success": True,
+        "catalog": catalog,
+        "org_defaults": org_defaults,
+    }
+
+
+@router.get("/search-presets")
+async def list_search_presets(
+    ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
+):
+    """List saved search presets accessible to this user within the organization."""
+    db = _db_or_503()
+    query = {
+        "organization_id": org_match(ctx.organization_id),
+        "$or": [
+            {"user_id": ctx.user_id},
+            {"is_shared": True},
+        ],
+    }
+    cursor = db.search_presets.find(query).sort("created_at", -1)
+    presets = []
+    async for doc in cursor:
+        presets.append(_serialize(doc))
+    return {"success": True, "presets": presets}
+
+
+@router.post("/search-presets")
+async def create_search_preset(
+    preset_data: SearchPresetCreate,
+    ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
+):
+    """Save a search preset for fast reuse."""
+    db = _db_or_503()
+    doc = {
+        "name": preset_data.name.strip(),
+        "industry": preset_data.industry.strip() if preset_data.industry else None,
+        "business_type": preset_data.business_type.strip() if preset_data.business_type else None,
+        "target_customer": preset_data.target_customer.strip() if preset_data.target_customer else None,
+        "keywords": [k.strip() for k in preset_data.keywords if k.strip()],
+        "exclude_keywords": [k.strip() for k in preset_data.exclude_keywords if k.strip()],
+        "match_mode": preset_data.match_mode if preset_data.match_mode in ("any", "all", "category", "advanced") else "any",
+        "notes": preset_data.notes.strip() if preset_data.notes else None,
+        "is_shared": bool(preset_data.is_shared),
+        "created_at": utcnow(),
+    }
+    stamped = stamp(ctx, doc)
+    res = await db.search_presets.insert_one(stamped)
+    stamped["_id"] = res.inserted_id
+    return {"success": True, "preset": _serialize(stamped)}
+
+
+@router.delete("/search-presets/{preset_id}")
+async def delete_search_preset(
+    preset_id: str,
+    ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
+):
+    """Delete a saved search preset (creator or admin only)."""
+    db = _db_or_503()
+    oid = _oid(preset_id)
+    preset = await db.search_presets.find_one({"_id": oid, "organization_id": org_match(ctx.organization_id)})
+    if not preset:
+        raise HTTPException(status_code=404, detail="Preset not found")
+
+    is_owner = preset.get("user_id") == ctx.user_id
+    is_admin = ctx.has_permission(P.ORG_SETTINGS_WRITE)
+    if not (is_owner or is_admin):
+        raise HTTPException(status_code=403, detail="Cannot delete presets created by other members")
+
+    await db.search_presets.delete_one({"_id": oid})
+    return {"success": True, "deleted_id": preset_id}
+

@@ -1,0 +1,116 @@
+{
+  "health": {
+    "status": 200,
+    "latency_ms": 2156.6,
+    "ready": false,
+    "mongo_ok": true
+  },
+  "public_config": {
+    "cold_latency_ms": 69.8,
+    "warm_avg_latency_ms": 43.873,
+    "cache_control": "public, max-age=60"
+  },
+  "assets": [
+    {
+      "asset": "super-admin.js",
+      "raw_bytes": 313921,
+      "gzip_bytes": 74735,
+      "savings_pct": 76.2,
+      "encoding": "gzip",
+      "cache_control": "public, max-age=31536000, immutable"
+    },
+    {
+      "asset": "admin.js",
+      "raw_bytes": 301656,
+      "gzip_bytes": 65915,
+      "savings_pct": 78.1,
+      "encoding": "gzip",
+      "cache_control": "public, max-age=31536000, immutable"
+    },
+    {
+      "asset": "app.js",
+      "raw_bytes": 231525,
+      "gzip_bytes": 58171,
+      "savings_pct": 74.9,
+      "encoding": "gzip",
+      "cache_control": "public, max-age=31536000, immutable"
+    },
+    {
+      "asset": "org-admin.js",
+      "raw_bytes": 237355,
+      "gzip_bytes": 61116,
+      "savings_pct": 74.3,
+      "encoding": "gzip",
+      "cache_control": "public, max-age=31536000, immutable"
+    },
+    {
+      "asset": "tokens.css",
+      "raw_bytes": 17146,
+      "gzip_bytes": 4288,
+      "savings_pct": 75.0,
+      "encoding": "gzip",
+      "cache_control": "public, max-age=31536000, immutable"
+    },
+    {
+      "asset": "components.css",
+      "raw_bytes": 111140,
+      "gzip_bytes": 20784,
+      "savings_pct": 81.3,
+      "encoding": "gzip",
+      "cache_control": "public, max-age=31536000, immutable"
+    }
+  ],
+  "html_pages": [
+    {
+      "page": "/login",
+      "file": "login.html",
+      "status_initial": 200,
+      "etag": "\"6abca568-91a3\"",
+      "cache_control": "no-cache, must-revalidate",
+      "reval_status": 304,
+      "is_304": true
+    },
+    {
+      "page": "/website",
+      "file": "website.html",
+      "status_initial": 200,
+      "etag": "\"d42558bdadfc001f100cd41c488908ed\"",
+      "cache_control": "no-cache, must-revalidate",
+      "reval_status": 304,
+      "is_304": true
+    },
+    {
+      "page": "/",
+      "file": "index.html",
+      "status_initial": 200,
+      "etag": "\"6abca551-16ceb\"",
+      "cache_control": "no-cache, must-revalidate",
+      "reval_status": 304,
+      "is_304": true
+    },
+    {
+      "page": "/admin",
+      "file": "admin.html",
+      "status_initial": 200,
+      "etag": "\"6abca56f-576b\"",
+      "cache_control": "no-cache, must-revalidate",
+      "reval_status": 304,
+      "is_304": true
+    },
+    {
+      "page": "/superadmin",
+      "file": "super-admin.html",
+      "status_initial": 200,
+      "etag": "\"6abca57d-83e0\"",
+      "cache_control": "no-cache, must-revalidate",
+      "reval_status": 304,
+      "is_304": true
+    }
+  ],
+  "explain_plans": {
+    "ai_comments_user_id": "FETCH",
+    "search_presets_org": "FETCH",
+    "search_history_sort": "FETCH",
+    "notifications_user": "FETCH"
+  }
+}

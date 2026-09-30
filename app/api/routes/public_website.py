@@ -9,6 +9,7 @@ settings and non-public plans never leave the server here.
 Also: the rate-limited contact form, sitemap.xml / robots.txt and
 ``render_site_page`` — server-side SEO meta for the website HTML shells.
 """
+import hashlib
 import html
 import logging
 import os
@@ -359,7 +360,13 @@ async def render_site_page(request: Request, filename: str, slug: str) -> Respon
         shell = _SEO_BLOCK.sub(lambda _m: block, shell, count=1)
     except Exception as e:  # never fail the page because of SEO
         logger.warning("render_site_page(%s) meta failed: %s", slug, e)
-    return HTMLResponse(shell, headers={"Cache-Control": "no-cache"})
+
+    etag = f'"{hashlib.md5(shell.encode("utf-8")).hexdigest()}"'
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"})
+
+    return HTMLResponse(shell, headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"})
 
 
 # Route → (html shell, CMS page slug). main.py serves these paths through

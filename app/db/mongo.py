@@ -60,6 +60,9 @@ def get_async_client() -> Optional[AsyncIOMotorClient]:
             settings.mongo_uri,
             serverSelectionTimeoutMS=10000,
             connectTimeoutMS=10000,
+            maxPoolSize=50,
+            minPoolSize=5,
+            maxIdleTimeMS=45000,
         )
         return _async_client_cache
     except Exception as e:
@@ -96,6 +99,9 @@ def get_sync_client() -> Optional[MongoClient]:
             settings.mongo_uri,
             serverSelectionTimeoutMS=10000,
             connectTimeoutMS=10000,
+            maxPoolSize=50,
+            minPoolSize=5,
+            maxIdleTimeMS=45000,
         )
         return _sync_client_cache
     except Exception as e:
@@ -392,8 +398,27 @@ def ensure_indexes():
         _create_index_safe(db.role_permissions, [("kind", ASCENDING), ("role", ASCENDING)], unique=True)
         _create_index_safe(db.search_history, [("organization_id", ASCENDING), ("user_id", ASCENDING),
                                                ("created_at", DESCENDING)])
+        _create_index_safe(db.search_history, [("organization_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.search_history, [("organization_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.search_history, [("user_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.search_history, [("user_id", ASCENDING), ("status", ASCENDING)])
+
         _create_index_safe(db.ai_comments, [("organization_id", ASCENDING), ("assigned_user_id", ASCENDING)])
         _create_index_safe(db.ai_comments, [("organization_id", ASCENDING), ("user_id", ASCENDING)])
+        _create_index_safe(db.ai_comments, [("user_id", ASCENDING), ("is_lead", ASCENDING)])
+        _create_index_safe(db.ai_comments, [("user_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.ai_comments, [("organization_id", ASCENDING), ("is_lead", ASCENDING), ("lead_status", ASCENDING)])
+        _create_index_safe(db.ai_comments, [("organization_id", ASCENDING), ("lead_priority", ASCENDING)])
+        _create_index_safe(db.ai_comments, [("organization_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.ai_comments, [("search_run_id", ASCENDING), ("is_lead", ASCENDING)])
+
+        _create_index_safe(db.search_presets, [("organization_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.search_presets, [("organization_id", ASCENDING), ("platform", ASCENDING), ("created_at", DESCENDING)])
+
+        _create_index_safe(db.token_balances, [("updated_at", DESCENDING)])
+
+        _create_index_safe(db.notifications, [("audience", ASCENDING), ("user_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.notifications, [("read_by", ASCENDING), ("created_at", DESCENDING)])
 
         logger.info("MongoDB indexes verified successfully.")
     except Exception as e:

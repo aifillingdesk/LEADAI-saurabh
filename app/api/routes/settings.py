@@ -318,4 +318,4 @@ async def upload_branding(request: Request, admin: dict = Depends(require_manage
 
 @public_router.get("/config")
 async def public_config():
-    return await R.build_public_config(s.aget_setting)
+    return await R.build_public_config()

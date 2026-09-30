@@ -13,10 +13,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preload" href="/static/design/tokens.css?v=step3" as="style">
+  <link rel="preload" href="/static/design/components.css?v=step4" as="style">
   <link rel="stylesheet" href="/static/design/tokens.css?v=step3">
   <!-- shared components in a cascade layer: the portal's own (unlayered) rules always win -->
   <style id="dsLayer">@layer ds, ds-reset; @import url("/static/design/components.css?v=step4") layer(ds);</style>
   <link rel="stylesheet" href="/static/styles.css?v=step4">
+  <link rel="stylesheet" href="/static/design/domain-keywords.css?v=1">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✦</text></svg>">
 </head>
 <body>
@@ -300,99 +303,320 @@
             <div id="searchPermission" class="hidden"></div>
 
             <!-- ── Search card ── -->
+            <!-- ── Search card ── -->
             <div class="search-card glass-card" id="searchCard">
               <div class="search-card-glow" aria-hidden="true"></div>
-              <ol class="search-guide" id="searchGuide" aria-label="How a search works">
-                <li data-g="url" class="current" aria-current="step"><span class="sg-num" aria-hidden="true">1</span><span class="sg-text">Paste a link</span></li>
-                <li data-g="limits"><span class="sg-num" aria-hidden="true">2</span><span class="sg-text">Set limits</span></li>
-                <li data-g="filter"><span class="sg-num" aria-hidden="true">3</span><span class="sg-text">Qualify comments <em>optional</em></span></li>
-                <li data-g="run"><span class="sg-num" aria-hidden="true">4</span><span class="sg-text">Run &amp; watch live</span></li>
-              </ol>
-              <form id="urlSearchForm" class="search-form" onsubmit="handleUrlSearch(event)" novalidate>
-                <div class="search-field">
-                  <label class="field-label" for="urlSearchInput">Social profile / page URL</label>
-                  <div class="input-shell">
-                    <span class="input-icon" aria-hidden="true"><svg class="ico" aria-hidden="true"><use href="#i-link"/></svg></span>
-                    <input type="url" id="urlSearchInput" class="form-input" placeholder="https://www.facebook.com/yourpage" autocomplete="off" spellcheck="false" required aria-describedby="urlDetectionHint urlSearchError">
-                    <span id="urlDetectionHint" class="detect-hint" role="status">Waiting for URL…</span>
-                  </div>
-                  <p class="field-hint hidden" id="industryHint">Leads are analysed for your business: <b id="industryHintName"></b></p>
-                  <div class="platform-hints" id="platformHints" aria-hidden="true">
-                    <span class="ph-label">Supported:</span>
-                    <span class="ph-chip" data-p="facebook">Facebook</span>
-                    <span class="ph-chip" data-p="instagram">Instagram</span>
-                    <span class="ph-chip" data-p="youtube">YouTube</span>
-                    <span class="ph-chip" data-p="linkedin">LinkedIn</span>
-                  </div>
-                  <div id="urlSearchError" class="field-error" role="alert"></div>
-                  <div id="urlPlatformChip" class="detect-result hidden" role="status"></div>
-                </div>
 
-                <div class="search-actions-row">
-                  <div class="maxposts-field">
-                    <label class="field-label" for="urlSearchLimit">Posts</label>
-                    <input type="number" id="urlSearchLimit" class="form-input" min="1" max="100" value="20" inputmode="numeric" aria-describedby="capPostsHint">
-                    <span class="field-hint" id="capPostsHint">1 – 100</span>
-                  </div>
-                  <div class="maxposts-field">
-                    <label class="field-label" for="urlSearchCommentsPerPost">Comments / post</label>
-                    <input type="number" id="urlSearchCommentsPerPost" class="form-input" min="1" max="500" value="50" inputmode="numeric" aria-describedby="capCommentsHint">
-                    <span class="field-hint" id="capCommentsHint">1 – 500</span>
-                  </div>
-                  <button type="submit" id="urlSearchBtn" class="btn-primary btn-analyze">
-                    <span class="btn-icon" aria-hidden="true">✦</span>
-                    <span class="btn-text">Start search</span>
-                    <span class="btn-arrow" aria-hidden="true">→</span>
+              <!-- Top Bar: Saved Searches / Presets -->
+              <div class="presets-bar" id="presetsBar">
+                <div class="presets-left">
+                  <span class="presets-label"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-layers"/></svg> Saved Searches:</span>
+                  <select id="searchPresetSelect" class="presets-select" aria-label="Load a saved search preset">
+                    <option value="">Choose a saved search…</option>
+                  </select>
+                </div>
+                <div class="presets-right">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnSavePreset" title="Save current settings as a reusable preset">
+                    <span>💾 Save search</span>
+                  </button>
+                  <button type="button" class="btn btn-ghost btn-sm hidden" id="btnDeletePreset" title="Delete selected preset">
+                    <span>🗑️</span>
                   </button>
                 </div>
-                <div class="search-cost-row" id="searchCostRow" aria-live="polite"></div>
-                <div id="searchBlocker" class="hidden"></div>
+              </div>
 
-                <!-- Comment Scraping & Keyword Intelligence: filter comments before the AI stage -->
-                <details class="filter-panel" id="urlFilterPanel">
-                  <summary class="filter-panel-summary">
-                    <span class="filter-panel-title">Comment qualification</span>
-                    <span class="field-hint">— only matching comments reach the AI stage; skipped comments stay stored but get no AI call</span>
-                  </summary>
-                  <div class="filter-panel-body">
-                    <div class="filter-mode-row" role="radiogroup" aria-label="Comment filter mode" id="urlFilterModes">
-                      <label class="filter-radio"><input type="radio" name="filterMode" value="all" checked><span>All comments</span></label>
-                      <label class="filter-radio"><input type="radio" name="filterMode" value="preset"><span>Preset</span></label>
-                      <label class="filter-radio"><input type="radio" name="filterMode" value="custom"><span>Custom keywords</span></label>
-                    </div>
-                    <div class="filter-field hidden" id="urlFilterPresetField">
-                      <label class="field-label" for="urlFilterPreset">Preset</label>
-                      <select id="urlFilterPreset" class="form-input">
-                        <option value="">Loading…</option>
-                      </select>
-                      <span class="field-hint">Built-in intent presets and business categories. Your organization's own lead keywords apply automatically when you choose “All comments”.</span>
-                    </div>
-                    <div class="filter-custom hidden" id="urlFilterCustomField">
-                      <div class="maxposts-field">
-                        <label class="field-label" for="urlFilterInclude">Include keywords <span class="field-hint">comma-separated</span></label>
-                        <input type="text" id="urlFilterInclude" class="form-input" placeholder="price, broking, kharar, resale" autocomplete="off" spellcheck="false">
-                      </div>
-                      <div class="maxposts-field">
-                        <label class="field-label" for="urlFilterExclude">Exclude keywords <span class="field-hint">comma-separated</span></label>
-                        <input type="text" id="urlFilterExclude" class="form-input" placeholder="job, vacancy" autocomplete="off" spellcheck="false">
-                      </div>
-                      <div class="maxposts-field">
-                        <label class="field-label" for="urlFilterMatchMode">Match mode</label>
-                        <select id="urlFilterMatchMode" class="form-input">
-                          <option value="any">Any keyword (OR)</option>
-                          <option value="all">All keywords (AND)</option>
-                          <option value="category">A whole category</option>
-                          <option value="advanced">Advanced (excludes included)</option>
-                        </select>
-                      </div>
-                      <div id="urlFilterCategoriesWrap" class="filter-cats-wrap hidden">
-                        <span class="field-label">Categories</span>
-                        <div id="urlFilterCategories" class="filter-cats"></div>
-                        <span class="field-hint">Comment is matched if it belongs to one of these categories</span>
-                      </div>
+              <!-- Guided Stepper Navigation -->
+              <div class="lead-stepper-wrap">
+                <ol class="lead-stepper" id="guidedStepper" aria-label="Guided search steps">
+                  <li class="lead-step-item active" data-step="1" id="stepIndicator1">
+                    <span class="lead-step-num">1</span>
+                    <span class="lead-step-text">Industry</span>
+                  </li>
+                  <li class="lead-step-connector"></li>
+                  <li class="lead-step-item" data-step="2" id="stepIndicator2">
+                    <span class="lead-step-num">2</span>
+                    <span class="lead-step-text">Business Type</span>
+                  </li>
+                  <li class="lead-step-connector"></li>
+                  <li class="lead-step-item" data-step="3" id="stepIndicator3">
+                    <span class="lead-step-num">3</span>
+                    <span class="lead-step-text">Keywords</span>
+                  </li>
+                  <li class="lead-step-connector"></li>
+                  <li class="lead-step-item" data-step="4" id="stepIndicator4">
+                    <span class="lead-step-num">4</span>
+                    <span class="lead-step-text">Social Link</span>
+                  </li>
+                  <li class="lead-step-connector"></li>
+                  <li class="lead-step-item" data-step="5" id="stepIndicator5">
+                    <span class="lead-step-num">5</span>
+                    <span class="lead-step-text">Review &amp; Search</span>
+                  </li>
+                </ol>
+              </div>
+
+              <form id="urlSearchForm" class="search-form" onsubmit="handleUrlSearch(event)" novalidate>
+
+                <!-- ── STEP 1: INDUSTRY SELECTION ── -->
+                <div class="guided-step-panel active" id="guidedPanel1">
+                  <div class="guided-head">
+                    <h3 class="guided-title"><span>🏠</span> What industry are you in?</h3>
+                    <p class="guided-desc">Select your industry so LeadAI can suggest the most relevant keywords and buying signals.</p>
+                  </div>
+                  <div class="industry-search-shell">
+                    <span class="industry-search-icon">🔍</span>
+                    <input type="text" id="industrySearchInput" class="industry-search-input" placeholder="Search industries (e.g. Real Estate, Automotive, Healthcare, SaaS)…" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="industry-cards-grid" id="industryCardsGrid" role="radiogroup" aria-label="Select an industry">
+                    <!-- Populated dynamically by app.js from /api/business-context/catalog -->
+                  </div>
+                  <div style="margin-top: 10px;">
+                    <button type="button" class="custom-industry-toggle" id="btnCustomIndustryToggle">+ Can't find your industry? Create Custom Industry</button>
+                    <div id="customIndustryWrap" class="hidden" style="margin-top: 8px;">
+                      <label class="field-label" for="customIndustryInput">Custom Industry Name</label>
+                      <input type="text" id="customIndustryInput" class="form-input" placeholder="e.g. Renewable Energy, Heavy Machinery" maxlength="80">
                     </div>
                   </div>
-                </details>
+                  <div class="step-nav-bar">
+                    <span class="field-hint" id="step1Hint">Choose an industry above to continue</span>
+                    <button type="button" class="btn btn-primary" id="btnStep1Next">
+                      <span>Next: Business Type</span> <span aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- ── STEP 2: BUSINESS TYPE SELECTION ── -->
+                <div class="guided-step-panel" id="guidedPanel2">
+                  <div class="guided-head">
+                    <h3 class="guided-title"><span>💼</span> What type of business do you have?</h3>
+                    <p class="guided-desc">Selected industry: <b id="selectedIndustryBadge" style="color:var(--primary)">Real Estate</b></p>
+                  </div>
+                  <div class="biz-types-grid" id="bizTypesGrid" role="radiogroup" aria-label="Select business type">
+                    <!-- Populated dynamically based on chosen industry -->
+                  </div>
+                  <div style="margin-top: 10px;">
+                    <label class="field-label" for="customBusinessTypeInput">Or specify your exact business niche (optional)</label>
+                    <input type="text" id="customBusinessTypeInput" class="form-input" placeholder="e.g. Luxury Penthouse Specialist, Pre-owned EV Dealership" maxlength="80">
+                  </div>
+                  <div class="step-nav-bar">
+                    <button type="button" class="btn btn-secondary" id="btnStep2Back">← Back</button>
+                    <button type="button" class="btn btn-primary" id="btnStep2Next">
+                      <span>Next: Suggested Keywords</span> <span aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- ── STEP 3: KEYWORDS & TARGETING ── -->
+                <div class="guided-step-panel" id="guidedPanel3">
+                  <div class="guided-head">
+                    <h3 class="guided-title"><span>🎯</span> What are you looking for?</h3>
+                    <p class="guided-desc">Select who you want to reach and the key terms that signal buying interest.</p>
+                  </div>
+
+                  <!-- Target Customers -->
+                  <div style="margin-bottom: 12px;">
+                    <label class="field-label">Target Customer</label>
+                    <div class="target-customers-row" id="targetCustomersRow">
+                      <span class="target-cust-chip selected" data-target="Buyers">Buyers</span>
+                      <span class="target-cust-chip" data-target="Sellers">Sellers</span>
+                      <span class="target-cust-chip" data-target="Renters / Tenants">Renters / Tenants</span>
+                      <span class="target-cust-chip" data-target="Investors">Investors</span>
+                      <span class="target-cust-chip" data-target="Clients / Inquiries">Clients / Inquiries</span>
+                    </div>
+                  </div>
+
+                  <!-- Why Keywords Callout -->
+                  <div class="kw-why-callout">
+                    <span class="kw-why-icon">💡</span>
+                    <div class="kw-why-content">
+                      <b>Why keywords?</b> LeadAI uses these keywords to identify relevant conversations, filter social comments, and score genuine intent.
+                      <button type="button" class="kw-why-btn" id="btnWhyKeywordsInfo">ⓘ How does this work?</button>
+                    </div>
+                  </div>
+
+                  <!-- Selected Keywords Container -->
+                  <div class="kw-selected-container">
+                    <div class="kw-selected-head">
+                      <span class="kw-selected-title">
+                        <span>Your Selected Keywords</span>
+                        <span class="status-pill status-idle" id="selectedKeywordsCount" style="font-size:0.75rem;padding:2px 8px">0 selected</span>
+                      </span>
+                      <button type="button" class="btn btn-ghost btn-sm" id="btnClearKeywords" style="font-size:0.75rem;padding:2px 6px">Clear all</button>
+                    </div>
+                    <div class="kw-selected-chips" id="selectedKeywordsChips">
+                      <span class="oa-muted oa-small" id="noKeywordsMsg">No keywords selected yet. Click any suggested chip below or add custom terms.</span>
+                    </div>
+                    <div class="kw-add-custom-row">
+                      <input type="text" id="customKeywordInput" class="kw-custom-input" placeholder="Add custom keyword (e.g. 3 BHK, Penthouse, Financing)" maxlength="50">
+                      <button type="button" class="kw-add-btn" id="btnAddCustomKeyword">+ Add</button>
+                    </div>
+                  </div>
+
+                  <!-- Grouped Keyword Suggestions -->
+                  <div style="margin-top: 14px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                      <span class="field-label" style="margin:0">Suggested Keywords (Click to add):</span>
+                      <button type="button" class="oa-link oa-small" id="btnAddAllSuggestions" style="background:none;border:none;cursor:pointer;color:var(--primary)">+ Add all recommended</button>
+                    </div>
+
+                    <div class="kw-group-section" id="kwGroupProduct">
+                      <div class="kw-group-title"><span>📦</span> Product / Service</div>
+                      <div class="kw-suggestions-row" id="kwSuggestionsProduct"></div>
+                    </div>
+
+                    <div class="kw-group-section" id="kwGroupIntent">
+                      <div class="kw-group-title"><span>🔥</span> Buyer Intent</div>
+                      <div class="kw-suggestions-row" id="kwSuggestionsIntent"></div>
+                    </div>
+
+                    <div class="kw-group-section" id="kwGroupRequirement">
+                      <div class="kw-group-title"><span>📋</span> Requirement &amp; Specs</div>
+                      <div class="kw-suggestions-row" id="kwSuggestionsRequirement"></div>
+                    </div>
+
+                    <div class="kw-group-section" id="kwGroupLocation">
+                      <div class="kw-group-title"><span>📍</span> Location &amp; Status</div>
+                      <div class="kw-suggestions-row" id="kwSuggestionsLocation"></div>
+                    </div>
+                  </div>
+
+                  <div class="step-nav-bar">
+                    <button type="button" class="btn btn-secondary" id="btnStep3Back">← Back</button>
+                    <button type="button" class="btn btn-primary" id="btnStep3Next">
+                      <span>Next: Social Link</span> <span aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- ── STEP 4: SOCIAL URL & LIMITS ── -->
+                <div class="guided-step-panel" id="guidedPanel4">
+                  <div class="guided-head">
+                    <h3 class="guided-title"><span>🔗</span> Add your social URL</h3>
+                    <p class="guided-desc">Paste a link to a Facebook page, Instagram profile, YouTube channel, or LinkedIn company page.</p>
+                  </div>
+
+                  <div class="search-field">
+                    <label class="field-label" for="urlSearchInput">Social profile / page URL</label>
+                    <div class="input-shell">
+                      <span class="input-icon" aria-hidden="true"><svg class="ico" aria-hidden="true"><use href="#i-link"/></svg></span>
+                      <input type="url" id="urlSearchInput" class="form-input" placeholder="https://www.facebook.com/yourpage" autocomplete="off" spellcheck="false" required aria-describedby="urlDetectionHint urlSearchError">
+                      <span id="urlDetectionHint" class="detect-hint" role="status">Waiting for URL…</span>
+                    </div>
+                    <p class="field-hint hidden" id="industryHint">Leads are analysed for your business: <b id="industryHintName"></b></p>
+                    <div class="platform-hints" id="platformHints" aria-hidden="true">
+                      <span class="ph-label">Supported:</span>
+                      <span class="ph-chip" data-p="facebook">Facebook</span>
+                      <span class="ph-chip" data-p="instagram">Instagram</span>
+                      <span class="ph-chip" data-p="youtube">YouTube</span>
+                      <span class="ph-chip" data-p="linkedin">LinkedIn</span>
+                    </div>
+                    <div id="urlSearchError" class="field-error" role="alert"></div>
+                    <div id="urlPlatformChip" class="detect-result hidden" role="status"></div>
+                  </div>
+
+                  <div class="search-actions-row">
+                    <div class="maxposts-field">
+                      <label class="field-label" for="urlSearchLimit">Posts to analyze</label>
+                      <input type="number" id="urlSearchLimit" class="form-input" min="1" max="100" value="20" inputmode="numeric" aria-describedby="capPostsHint">
+                      <span class="field-hint" id="capPostsHint">1 – 100</span>
+                    </div>
+                    <div class="maxposts-field">
+                      <label class="field-label" for="urlSearchCommentsPerPost">Comments / post</label>
+                      <input type="number" id="urlSearchCommentsPerPost" class="form-input" min="1" max="500" value="50" inputmode="numeric" aria-describedby="capCommentsHint">
+                      <span class="field-hint" id="capCommentsHint">1 – 500</span>
+                    </div>
+                  </div>
+
+                  <!-- Advanced Filters (Optional Expandable) -->
+                  <details class="filter-panel" style="margin-top: 14px;">
+                    <summary class="filter-panel-summary">
+                      <span class="filter-panel-title">Advanced Settings (Exclusions &amp; Match Rules)</span>
+                      <span class="field-hint">— optional fine-tuning for lead qualification</span>
+                    </summary>
+                    <div class="filter-panel-body">
+                      <div class="maxposts-field">
+                        <label class="field-label" for="urlFilterExclude">Exclude keywords <span class="field-hint">comma-separated (e.g. jobs, vacancy, internship)</span></label>
+                        <input type="text" id="urlFilterExclude" class="form-input" placeholder="jobs, vacancy, hiring, scam, giveaway" autocomplete="off" spellcheck="false">
+                      </div>
+                      <div class="maxposts-field">
+                        <label class="field-label" for="urlFilterMatchMode">Match behavior</label>
+                        <select id="urlFilterMatchMode" class="form-input">
+                          <option value="any">Any keyword matches (OR — recommended)</option>
+                          <option value="all">All keywords must match (AND)</option>
+                          <option value="advanced">Advanced (include + exclude rules)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </details>
+
+                  <div class="step-nav-bar">
+                    <button type="button" class="btn btn-secondary" id="btnStep4Back">← Back</button>
+                    <button type="button" class="btn btn-primary" id="btnStep4Next">
+                      <span>Next: Review &amp; Search</span> <span aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- ── STEP 5: REVIEW & EXECUTE ── -->
+                <div class="guided-step-panel" id="guidedPanel5">
+                  <div class="guided-head">
+                    <h3 class="guided-title"><span>🚀</span> Review your search</h3>
+                    <p class="guided-desc">Everything is set. LeadAI will collect social posts and comments, qualify prospects using your keywords, and score high-intent leads.</p>
+                  </div>
+
+                  <div class="ready-search-card">
+                    <div class="ready-search-head">
+                      <span class="ready-search-title"><span>✦</span> Ready to Find Leads</span>
+                      <button type="button" class="btn btn-ghost btn-sm" id="btnEditSearchConfig">✎ Edit</button>
+                    </div>
+                    <div class="ready-grid">
+                      <div class="ready-item">
+                        <span class="ready-label">Industry</span>
+                        <span class="ready-val" id="reviewIndustry">Real Estate</span>
+                      </div>
+                      <div class="ready-item">
+                        <span class="ready-label">Business Type</span>
+                        <span class="ready-val" id="reviewBusinessType">Residential Property</span>
+                      </div>
+                      <div class="ready-item">
+                        <span class="ready-label">Target Customer</span>
+                        <span class="ready-val" id="reviewTargetCustomer">Buyers</span>
+                      </div>
+                      <div class="ready-item">
+                        <span class="ready-label">Social Platform</span>
+                        <span class="ready-val" id="reviewPlatform">Facebook</span>
+                      </div>
+                    </div>
+                    <div class="ready-item" style="margin-top: 6px;">
+                      <span class="ready-label">Active Keywords (<span id="reviewKwCount">0</span>)</span>
+                      <div class="kw-selected-chips" id="reviewKwChips" style="margin-top: 4px;"></div>
+                    </div>
+                    <div class="ready-item" style="margin-top: 8px;">
+                      <span class="ready-label">Target URL</span>
+                      <span class="ready-val" id="reviewUrl" style="word-break:break-all;font-family:var(--font-mono, monospace);font-size:0.8rem">—</span>
+                    </div>
+                  </div>
+
+                  <div class="search-cost-row" id="searchCostRow" aria-live="polite"></div>
+                  <div id="searchBlocker" class="hidden"></div>
+
+                  <div class="step-nav-bar">
+                    <button type="button" class="btn btn-secondary" id="btnStep5Back">← Back</button>
+                    <button type="submit" id="urlSearchBtn" class="btn-primary btn-analyze" style="padding: 10px 24px;">
+                      <span class="btn-icon" aria-hidden="true">✦</span>
+                      <span class="btn-text">Find Leads Now</span>
+                      <span class="btn-arrow" aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Hidden inputs for backward compatibility with existing JS pipelines -->
+                <input type="hidden" id="urlFilterInclude" value="">
+                <input type="hidden" id="urlFilterPreset" value="">
+                <div id="urlFilterModes" class="hidden">
+                  <input type="radio" name="filterMode" value="custom" checked>
+                </div>
+                <div id="urlFilterCategoriesWrap" class="hidden"><div id="urlFilterCategories"></div></div>
 
                 <!-- Live pipeline (driven by the run status/phase from GET /api/search/{run_id}) -->
                 <div id="urlSearchProgress" class="pipeline-progress hidden">
@@ -1102,9 +1326,9 @@
   <!-- ── Toast Container ── -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-  <script src="/static/config.js"></script>
-  <script src="/static/design/theme.js"></script>
-  <script src="/static/design/ui.js?v=step4"></script>
-  <script src="/static/app.js?v=step4"></script>
+  <script src="/static/config.js" defer></script>
+  <script src="/static/design/theme.js" defer></script>
+  <script src="/static/design/ui.js?v=step4" defer></script>
+  <script src="/static/app.js?v=step4" defer></script>
 </body>
 </html>

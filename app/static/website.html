@@ -11,10 +11,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;display=swap"/>
+  <link rel="preload" href="/static/design/tokens.css" as="style"/>
+  <link rel="preload" href="/static/design/components.css" as="style"/>
   <link rel="stylesheet" href="/static/design/tokens.css"/>
   <link rel="stylesheet" href="/static/design/components.css"/>
   <link rel="stylesheet" href="/static/website.css"/>
-  <script src="/static/design/theme.js"></script>
+  <script src="/static/design/theme.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -46,11 +48,12 @@
   <footer class="site-footer" id="site-footer"></footer>
 </div>
 
-<script src="/static/website.js"></script>
+<script src="/static/website.js" defer></script>
 <script>
-(function () {
+function initWebsite() {
   'use strict';
   const S = window.LeadAISite;
+  if (!S) return;
   const main = document.getElementById('main');
 
   // Route → [CMS page used for SEO, section to open]
@@ -146,7 +149,12 @@
   }
   window.addEventListener('popstate', () => { if (landingReady && LANDING[S.curPath()]) goTo(S.curPath(), false); });
   boot();
-})();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initWebsite);
+} else {
+  initWebsite();
+}
 </script>
 </body>
 </html>

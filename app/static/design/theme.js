@@ -6,7 +6,7 @@
  */
 (async function LeadAITheme() {
   const CACHE_KEY = 'leadai_theme_v1';
-  const CACHE_TTL = 60000; // 1 min
+  const CACHE_TTL = 300000; // 5 min
   const MODE_KEY = 'leadai_color_mode'; // 'light' | 'dark' (absent = follow OS)
   const BG_VARS = ['--bg-primary', '--bg-secondary', '--bg-tertiary'];
   let lastBranding = null;

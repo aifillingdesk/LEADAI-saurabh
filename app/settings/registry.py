@@ -11,6 +11,7 @@ so a change made here takes effect at runtime with no restart.
 """
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -630,20 +631,45 @@ def is_registered(key: str) -> bool:
 
 # ── Public config (safe values only — served without a session) ────────────
 
-async def build_public_config(get: Callable[[str], Any]) -> Dict[str, Any]:
+_PUBLIC_CONFIG_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
+_PUBLIC_CONFIG_TTL: float = 60.0
+
+
+def invalidate_public_config_cache() -> None:
+    global _PUBLIC_CONFIG_CACHE
+    _PUBLIC_CONFIG_CACHE = None
+
+
+async def build_public_config(get: Optional[Callable[[str], Any]] = None,
+                              all_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Assemble the /api/public/config payload. Never includes secrets,
     tokens, credentials or internal infrastructure details.
 
-    ``get`` may be sync or async (e.g. ``settings.aget_setting``); values are
-    read once per registered key, then the payload is assembled synchronously.
+    Fast, in-memory cached (60s TTL), and uses single-query batch settings loading
+    to eliminate sequential N+1 database roundtrips.
     """
-    import inspect
+    global _PUBLIC_CONFIG_CACHE
+    now = time.time()
+    if (
+        all_settings is None
+        and _PUBLIC_CONFIG_CACHE is not None
+        and (now - _PUBLIC_CONFIG_CACHE[0] < _PUBLIC_CONFIG_TTL)
+    ):
+        return _PUBLIC_CONFIG_CACHE[1]
+
     values: Dict[str, Any] = {}
-    for key in REGISTERED_KEYS:
-        value = get(key)
-        if inspect.isawaitable(value):
-            value = await value
-        values[key] = value
+    if all_settings is not None:
+        values = all_settings
+    elif get is None:
+        from app.admin.settings import aget_all_settings
+        values = await aget_all_settings()
+    else:
+        import inspect
+        for key in REGISTERED_KEYS:
+            value = get(key)
+            if inspect.isawaitable(value):
+                value = await value
+            values[key] = value
 
     def g(key: str, fallback: Any = None) -> Any:
         value = values.get(key)
@@ -655,7 +681,7 @@ async def build_public_config(get: Callable[[str], Any]) -> Dict[str, Any]:
         value = g(key)
         return str(value) if value is not None and str(value) != "" else fallback
 
-    return {
+    payload = {
         "app": {
             "name": s("general.app.name", "LeadAI"),
             "short_name": s("general.app.short_name", "LeadAI"),
@@ -746,3 +772,5 @@ async def build_public_config(get: Callable[[str], Any]) -> Dict[str, Any]:
             "page_size": int(g("defaults.page_size", 20) or 20),
         },
     }
+    _PUBLIC_CONFIG_CACHE = (now, payload)
+    return payload

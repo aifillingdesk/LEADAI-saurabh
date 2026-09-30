@@ -289,15 +289,35 @@
     applyBrandMarkers();
   }
 
+  var CONFIG_CACHE_KEY = "leadai_public_config_v1";
+  var CONFIG_CACHE_TTL = 300000; // 5 minutes
+
   function load() {
     if (loaded) return loaded;
+
+    // Check sessionStorage cache first
+    try {
+      var cached = sessionStorage.getItem(CONFIG_CACHE_KEY);
+      if (cached) {
+        var parsed = JSON.parse(cached);
+        if (parsed && parsed.ts && (Date.now() - parsed.ts < CONFIG_CACHE_TTL) && parsed.data) {
+          cfg = mergeDeep(DEFAULTS, parsed.data);
+          apply();
+          loaded = Promise.resolve(cfg);
+          return loaded;
+        }
+      }
+    } catch (_) {}
+
     loaded = fetch("/api/public/config", {
       headers: { Accept: "application/json" },
-      cache: "no-store",
     })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         cfg = mergeDeep(DEFAULTS, data || {});
+        try {
+          sessionStorage.setItem(CONFIG_CACHE_KEY, JSON.stringify({ ts: Date.now(), data: data }));
+        } catch (_) {}
         apply();
         return cfg;
       })
@@ -311,6 +331,7 @@
 
   // Re-fetch after an admin saves settings and re-apply branding.
   function refresh() {
+    try { sessionStorage.removeItem(CONFIG_CACHE_KEY); } catch (_) {}
     loaded = null;
     cfg = null;
     return load();

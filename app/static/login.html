@@ -6,8 +6,9 @@
   <title>Sign in · LeadAI</title>
   <meta name="description" content="Sign in to LeadAI — AI lead intelligence platform.">
   <meta name="robots" content="noindex,nofollow">
+  <link rel="preload" href="/static/design/tokens.css" as="style">
   <link rel="stylesheet" href="/static/design/tokens.css">
-  <script src="/static/design/theme.js"></script>
+  <script src="/static/design/theme.js" defer></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -557,7 +558,7 @@
     </div>
   </main>
 
-  <script src="/static/config.js"></script>
+  <script src="/static/config.js" defer></script>
   <script>
     "use strict";
 
@@ -567,23 +568,30 @@
     const isSuperAdminLogin = urlParams.get("superadmin") === "1";
     const loginScope = isSuperAdminLogin ? "admin" : (isAdminLogin ? "admin" : "site");
 
-    const appCfg = window.AppConfig ? AppConfig.load() : Promise.resolve(null);
-
-    if (window.AppConfig) appCfg.then((cfg) => {
-      if (isSuperAdminLogin) {
-        document.title = "Super admin sign in · " + ((cfg && cfg.app.name) || "LeadAI");
-        const h = document.querySelector("[data-brand-login-heading]");
-        if (h) h.textContent = "Super Admin Portal";
-        const s = document.querySelector("[data-brand-login-subtext]");
-        if (s) s.textContent = "Sign in to the platform control center.";
-      } else if (isAdminLogin) {
-        document.title = "Admin sign in · " + ((cfg && cfg.app.name) || "LeadAI");
-        const h = document.querySelector("[data-brand-login-heading]");
-        if (h) h.textContent = "Admin Portal";
-        const s = document.querySelector("[data-brand-login-subtext]");
-        if (s) s.textContent = "Sign in to the admin control center.";
+    function initAppConfig() {
+      if (window.AppConfig) {
+        AppConfig.load().then((cfg) => {
+          if (isSuperAdminLogin) {
+            document.title = "Super admin sign in · " + ((cfg && cfg.app.name) || "LeadAI");
+            const h = document.querySelector("[data-brand-login-heading]");
+            if (h) h.textContent = "Super Admin Portal";
+            const s = document.querySelector("[data-brand-login-subtext]");
+            if (s) s.textContent = "Sign in to the platform control center.";
+          } else if (isAdminLogin) {
+            document.title = "Admin sign in · " + ((cfg && cfg.app.name) || "LeadAI");
+            const h = document.querySelector("[data-brand-login-heading]");
+            if (h) h.textContent = "Admin Portal";
+            const s = document.querySelector("[data-brand-login-subtext]");
+            if (s) s.textContent = "Sign in to the admin control center.";
+          }
+        });
       }
-    });
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initAppConfig);
+    } else {
+      initAppConfig();
+    }
 
     const $ = (id) => document.getElementById(id);
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

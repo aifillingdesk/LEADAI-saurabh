@@ -945,23 +945,35 @@ async function handleUrlSearch(event) {
     max_posts: String(maxPosts),
     max_comments_per_post: String(maxCommentsPerPost),
   });
+
+  // Attach guided business context and keywords if configured
+  if (window.GuidedSearch && GuidedSearch.state) {
+    const gs = GuidedSearch.state;
+    if (gs.industry) params.set("industry", gs.industry);
+    if (gs.businessType) params.set("business_type", gs.businessType);
+    if (gs.targetCustomer) params.set("target_customer", gs.targetCustomer);
+    const kws = Array.from(gs.selectedKeywords || []).join(",");
+    if (kws) {
+      params.set("filter_mode", "custom");
+      params.set("include_keywords", kws);
+    }
+  }
+
   const mode = (document.querySelector('input[name="filterMode"]:checked') || {}).value || "all";
   if (mode === "preset") {
     const preset = $("urlFilterPreset") ? $("urlFilterPreset").value : "";
     if (preset) { params.set("filter_mode", "preset"); params.set("preset", preset); }
-  } else if (mode === "custom") {
-    const inc = ($("urlFilterInclude").value || "").trim();
-    const exc = ($("urlFilterExclude").value || "").trim();
+  } else if (mode === "custom" || params.has("include_keywords")) {
+    const inc = ($("urlFilterInclude") ? $("urlFilterInclude").value : "").trim();
+    const exc = ($("urlFilterExclude") ? $("urlFilterExclude").value : "").trim();
     const cats = Array.from(document.querySelectorAll("#urlFilterCategories input:checked"))
       .map((c) => c.value).join(",");
-    if (inc || exc || cats) {
-      params.set("filter_mode", "custom");
-      if (inc) params.set("include_keywords", inc);
-      if (exc) params.set("exclude_keywords", exc);
-      if (cats) params.set("categories", cats);
-      const mm = $("urlFilterMatchMode");
-      if (mm) params.set("match_mode", mm.value);
-    }
+    if (inc && !params.has("include_keywords")) params.set("include_keywords", inc);
+    if (exc) params.set("exclude_keywords", exc);
+    if (cats) params.set("categories", cats);
+    const mm = $("urlFilterMatchMode");
+    if (mm) params.set("match_mode", mm.value);
+    params.set("filter_mode", "custom");
   }
 
   let runId = null;
@@ -1098,6 +1110,597 @@ async function resumeRunningSearch() {
     refreshSummary();
   }
 }
+
+// ── Guided Domain & Keyword Search Controller ────────────────────────────
+
+const GuidedSearch = {
+  state: {
+    currentStep: 1,
+    catalog: {},
+    orgDefaults: {},
+    industry: "",
+    industryName: "",
+    businessType: "",
+    targetCustomer: "Buyers",
+    selectedKeywords: new Set(),
+    presets: [],
+    activePresetId: null,
+  },
+
+  async init() {
+    this.bindEvents();
+    await this.loadCatalogAndDefaults();
+    await this.loadPresets();
+  },
+
+  bindEvents() {
+    // Stepper navigation clicks
+    const stepper = $("guidedStepper");
+    if (stepper) {
+      stepper.addEventListener("click", (e) => {
+        const item = e.target.closest("[data-step]");
+        if (!item) return;
+        const step = parseInt(item.dataset.step, 10);
+        if (step) this.setStep(step);
+      });
+    }
+
+    // Step navigation buttons
+    const b1Next = $("btnStep1Next");
+    if (b1Next) b1Next.onclick = () => { if (this.validateStep(1)) this.setStep(2); };
+
+    const b2Back = $("btnStep2Back");
+    if (b2Back) b2Back.onclick = () => this.setStep(1);
+    const b2Next = $("btnStep2Next");
+    if (b2Next) b2Next.onclick = () => this.setStep(3);
+
+    const b3Back = $("btnStep3Back");
+    if (b3Back) b3Back.onclick = () => this.setStep(2);
+    const b3Next = $("btnStep3Next");
+    if (b3Next) b3Next.onclick = () => this.setStep(4);
+
+    const b4Back = $("btnStep4Back");
+    if (b4Back) b4Back.onclick = () => this.setStep(3);
+    const b4Next = $("btnStep4Next");
+    if (b4Next) b4Next.onclick = () => { if (this.validateStep(4)) this.setStep(5); };
+
+    const b5Back = $("btnStep5Back");
+    if (b5Back) b5Back.onclick = () => this.setStep(4);
+    const bEdit = $("btnEditSearchConfig");
+    if (bEdit) bEdit.onclick = () => this.setStep(1);
+
+    // Industry search filter
+    const indSearch = $("industrySearchInput");
+    if (indSearch) {
+      indSearch.addEventListener("input", () => {
+        this.renderIndustries(indSearch.value.trim());
+      });
+    }
+
+    // Custom industry toggle
+    const customIndToggle = $("btnCustomIndustryToggle");
+    const customIndWrap = $("customIndustryWrap");
+    const customIndInput = $("customIndustryInput");
+    if (customIndToggle && customIndWrap) {
+      customIndToggle.onclick = () => {
+        customIndWrap.classList.toggle("hidden");
+        if (!customIndWrap.classList.contains("hidden") && customIndInput) {
+          customIndInput.focus();
+        }
+      };
+    }
+    if (customIndInput) {
+      customIndInput.addEventListener("input", () => {
+        const val = customIndInput.value.trim();
+        if (val) {
+          this.selectIndustry("custom", val);
+        }
+      });
+    }
+
+    // Custom business type input
+    const customBizInput = $("customBusinessTypeInput");
+    if (customBizInput) {
+      customBizInput.addEventListener("input", () => {
+        const val = customBizInput.value.trim();
+        if (val) {
+          this.state.businessType = val;
+          this.syncReview();
+        }
+      });
+    }
+
+    // Target customers row
+    const targetRow = $("targetCustomersRow");
+    if (targetRow) {
+      targetRow.addEventListener("click", (e) => {
+        const chip = e.target.closest(".target-cust-chip");
+        if (!chip) return;
+        targetRow.querySelectorAll(".target-cust-chip").forEach((c) => c.classList.remove("selected"));
+        chip.classList.add("selected");
+        this.state.targetCustomer = chip.dataset.target || "Buyers";
+        this.syncReview();
+      });
+    }
+
+    // Why keywords explanation button
+    const whyBtn = $("btnWhyKeywordsInfo");
+    if (whyBtn) whyBtn.onclick = () => this.showExplanationModal();
+
+    // Custom keyword input + Add
+    const kwInput = $("customKeywordInput");
+    const kwAddBtn = $("btnAddCustomKeyword");
+    const handleAddCustomKw = () => {
+      if (!kwInput) return;
+      const val = kwInput.value.trim();
+      if (val) {
+        val.split(",").forEach((v) => this.addKeyword(v.trim()));
+        kwInput.value = "";
+        kwInput.focus();
+      }
+    };
+    if (kwAddBtn) kwAddBtn.onclick = handleAddCustomKw;
+    if (kwInput) {
+      kwInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === ",") {
+          e.preventDefault();
+          handleAddCustomKw();
+        }
+      });
+    }
+
+    // Clear all keywords
+    const clearKwBtn = $("btnClearKeywords");
+    if (clearKwBtn) {
+      clearKwBtn.onclick = () => {
+        this.state.selectedKeywords.clear();
+        this.renderSelectedKeywords();
+        this.renderKeywordSuggestions();
+        this.syncReview();
+      };
+    }
+
+    // Add all recommended keywords
+    const addAllBtn = $("btnAddAllSuggestions");
+    if (addAllBtn) {
+      addAllBtn.onclick = () => {
+        const ind = this.state.catalog[this.state.industry];
+        if (ind && ind.keyword_groups) {
+          Object.values(ind.keyword_groups).forEach((list) => {
+            (list || []).forEach((k) => this.state.selectedKeywords.add(k));
+          });
+        }
+        this.renderSelectedKeywords();
+        this.renderKeywordSuggestions();
+        this.syncReview();
+        toast("Added recommended keywords", "success");
+      };
+    }
+
+    // Suggestion chips click delegation
+    ["kwSuggestionsProduct", "kwSuggestionsIntent", "kwSuggestionsRequirement", "kwSuggestionsLocation"].forEach((id) => {
+      const box = $(id);
+      if (box) {
+        box.addEventListener("click", (e) => {
+          const chip = e.target.closest(".kw-chip-add");
+          if (!chip || chip.classList.contains("added")) return;
+          const kw = chip.dataset.kw;
+          if (kw) this.addKeyword(kw);
+        });
+      }
+    });
+
+    // Selected keyword chips remove delegation
+    const selChips = $("selectedKeywordsChips");
+    if (selChips) {
+      selChips.addEventListener("click", (e) => {
+        const rm = e.target.closest(".kw-chip-rm");
+        if (!rm) return;
+        const kw = rm.dataset.kw;
+        if (kw) this.removeKeyword(kw);
+      });
+    }
+
+    // Search presets
+    const presetSel = $("searchPresetSelect");
+    if (presetSel) {
+      presetSel.addEventListener("change", () => {
+        const id = presetSel.value;
+        if (id) this.loadPreset(id);
+      });
+    }
+    const savePresetBtn = $("btnSavePreset");
+    if (savePresetBtn) savePresetBtn.onclick = () => this.saveCurrentPreset();
+    const delPresetBtn = $("btnDeletePreset");
+    if (delPresetBtn) delPresetBtn.onclick = () => this.deleteSelectedPreset();
+
+    // URL input sync with review
+    const urlInput = $("urlSearchInput");
+    if (urlInput) {
+      urlInput.addEventListener("input", () => this.syncReview());
+    }
+  },
+
+  async loadCatalogAndDefaults() {
+    try {
+      const res = await api("/api/business-context/catalog");
+      if (!res.ok) return;
+      const data = res.data;
+      this.state.catalog = data.catalog || {};
+      this.state.orgDefaults = data.org_defaults || {};
+
+      this.renderIndustries();
+
+      // Auto-select org defaults or default to real_estate
+      const defInd = this.state.orgDefaults.industry || "real_estate";
+      const indKey = Object.keys(this.state.catalog).includes(defInd) ? defInd : "real_estate";
+      this.selectIndustry(indKey);
+
+      // Pre-populate org active keywords if configured by admin
+      if (Array.isArray(this.state.orgDefaults.active_keywords) && this.state.orgDefaults.active_keywords.length) {
+        this.state.orgDefaults.active_keywords.forEach((k) => this.state.selectedKeywords.add(k));
+        this.renderSelectedKeywords();
+        this.renderKeywordSuggestions();
+      }
+
+      // Pre-populate org business type if configured
+      if (this.state.orgDefaults.business_type) {
+        this.selectBusinessType(this.state.orgDefaults.business_type);
+      }
+    } catch (err) {
+      console.warn("Could not load domain catalog:", err);
+    }
+  },
+
+  renderIndustries(filter) {
+    const grid = $("industryCardsGrid");
+    if (!grid) return;
+    const q = (filter || "").toLowerCase();
+    const entries = Object.entries(this.state.catalog);
+    const filtered = entries.filter(([k, v]) => !q || v.name.toLowerCase().includes(q) || k.toLowerCase().includes(q));
+
+    grid.innerHTML = filtered.map(([k, v]) => `
+      <div class="industry-card-item ${this.state.industry === k ? 'selected' : ''}" data-ind="${esc(k)}" role="radio" aria-checked="${this.state.industry === k}" tabindex="0">
+        <span class="industry-card-icon">${esc(v.icon || '💼')}</span>
+        <span class="industry-card-name">${esc(v.name)}</span>
+      </div>
+    `).join("");
+
+    grid.querySelectorAll(".industry-card-item").forEach((card) => {
+      card.onclick = () => this.selectIndustry(card.dataset.ind);
+      card.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this.selectIndustry(card.dataset.ind); } };
+    });
+  },
+
+  selectIndustry(key, customName) {
+    this.state.industry = key;
+    let name = "";
+    if (key === "custom") {
+      name = customName || "Custom Industry";
+      this.state.industryName = name;
+    } else {
+      const info = this.state.catalog[key] || {};
+      name = info.name || key;
+      this.state.industryName = name;
+    }
+
+    const badge = $("selectedIndustryBadge");
+    if (badge) badge.textContent = (this.state.catalog[key] ? (this.state.catalog[key].icon + ' ') : '') + name;
+
+    // Highlight industry card
+    document.querySelectorAll(".industry-card-item").forEach((c) => {
+      c.classList.toggle("selected", c.dataset.ind === key);
+    });
+
+    this.renderBusinessTypes();
+    this.renderKeywordSuggestions();
+    this.syncReview();
+  },
+
+  renderBusinessTypes() {
+    const box = $("bizTypesGrid");
+    if (!box) return;
+    const info = this.state.catalog[this.state.industry] || {};
+    const btypes = info.business_types || ["General Services", "Agency", "Consultant", "Retailer", "Specialist", "Other"];
+
+    box.innerHTML = btypes.map((bt) => `
+      <button type="button" class="biz-type-chip ${this.state.businessType === bt ? 'selected' : ''}" data-bt="${esc(bt)}">
+        ${esc(bt)}
+      </button>
+    `).join("");
+
+    box.querySelectorAll(".biz-type-chip").forEach((btn) => {
+      btn.onclick = () => this.selectBusinessType(btn.dataset.bt);
+    });
+
+    // Default select first if not selected
+    if (!this.state.businessType && btypes.length) {
+      this.selectBusinessType(btypes[0]);
+    }
+  },
+
+  selectBusinessType(type) {
+    this.state.businessType = type;
+    document.querySelectorAll(".biz-type-chip").forEach((c) => {
+      c.classList.toggle("selected", c.dataset.bt === type);
+    });
+    this.syncReview();
+  },
+
+  renderKeywordSuggestions() {
+    const info = this.state.catalog[this.state.industry] || {};
+    const groups = info.keyword_groups || {
+      product_service: ["service", "product", "consultation", "booking"],
+      intent: ["buy", "hire", "price", "interested", "available"],
+      requirement: ["estimate", "quote", "features", "details"],
+      location: ["near me", "location", "contact", "support"],
+    };
+
+    const map = [
+      ["kwSuggestionsProduct", groups.product_service || []],
+      ["kwSuggestionsIntent", groups.intent || []],
+      ["kwSuggestionsRequirement", groups.requirement || []],
+      ["kwSuggestionsLocation", groups.location || []],
+    ];
+
+    map.forEach(([id, list]) => {
+      const container = $(id);
+      if (!container) return;
+      container.innerHTML = list.map((k) => {
+        const added = this.state.selectedKeywords.has(k);
+        return `<span class="kw-chip-add ${added ? 'added' : ''}" data-kw="${esc(k)}">${added ? '✓' : '+'} ${esc(k)}</span>`;
+      }).join("");
+    });
+  },
+
+  renderSelectedKeywords() {
+    const box = $("selectedKeywordsChips");
+    const countBadge = $("selectedKeywordsCount");
+    const noMsg = $("noKeywordsMsg");
+    if (!box) return;
+
+    const list = Array.from(this.state.selectedKeywords);
+    if (countBadge) countBadge.textContent = `${list.length} selected`;
+
+    if (!list.length) {
+      box.innerHTML = `<span class="oa-muted oa-small" id="noKeywordsMsg">No keywords selected yet. Click any suggested chip below or add custom terms.</span>`;
+    } else {
+      box.innerHTML = list.map((k) => `
+        <span class="kw-chip-active">
+          ${esc(k)}
+          <button type="button" class="kw-chip-rm" data-kw="${esc(k)}" aria-label="Remove ${esc(k)}">×</button>
+        </span>
+      `).join("");
+    }
+
+    // Sync hidden legacy input
+    const incInput = $("urlFilterInclude");
+    if (incInput) incInput.value = list.join(", ");
+  },
+
+  addKeyword(kw) {
+    const clean = String(kw || "").trim().toLowerCase();
+    if (!clean || this.state.selectedKeywords.has(clean)) return;
+    this.state.selectedKeywords.add(clean);
+    this.renderSelectedKeywords();
+    this.renderKeywordSuggestions();
+    this.syncReview();
+  },
+
+  removeKeyword(kw) {
+    const clean = String(kw || "").trim().toLowerCase();
+    this.state.selectedKeywords.delete(clean);
+    this.renderSelectedKeywords();
+    this.renderKeywordSuggestions();
+    this.syncReview();
+  },
+
+  setStep(n) {
+    this.state.currentStep = n;
+
+    // Update stepper tabs
+    document.querySelectorAll(".lead-step-item").forEach((item) => {
+      const s = parseInt(item.dataset.step, 10);
+      item.classList.toggle("active", s === n);
+      item.classList.toggle("completed", s < n);
+    });
+
+    // Update panels
+    for (let i = 1; i <= 5; i++) {
+      const panel = $("guidedPanel" + i);
+      if (panel) panel.classList.toggle("active", i === n);
+    }
+
+    if (n === 5) this.syncReview();
+    window.scrollTo({ top: ($("searchCard") ? $("searchCard").offsetTop - 60 : 0), behavior: "smooth" });
+  },
+
+  validateStep(step) {
+    if (step === 1 && !this.state.industry) {
+      toast("Please select an industry to continue", "warn");
+      return false;
+    }
+    if (step === 4) {
+      const urlIn = $("urlSearchInput");
+      const url = urlIn ? urlIn.value.trim() : "";
+      if (!url) {
+        setUrlError("Paste a Facebook, Instagram, YouTube or LinkedIn URL.");
+        if (urlIn) urlIn.focus();
+        return false;
+      }
+      if (!detectPlatform(url)) {
+        setUrlError("Please enter a supported social profile or page URL.");
+        if (urlIn) urlIn.focus();
+        return false;
+      }
+    }
+    return true;
+  },
+
+  syncReview() {
+    const rInd = $("reviewIndustry");
+    if (rInd) rInd.textContent = this.state.industryName || "Not set";
+
+    const rBiz = $("reviewBusinessType");
+    if (rBiz) rBiz.textContent = this.state.businessType || "General";
+
+    const rTarget = $("reviewTargetCustomer");
+    if (rTarget) rTarget.textContent = this.state.targetCustomer || "Buyers";
+
+    const urlIn = $("urlSearchInput");
+    const rawUrl = urlIn ? urlIn.value.trim() : "";
+    const p = rawUrl ? detectPlatform(rawUrl) : "";
+    const rPlat = $("reviewPlatform");
+    if (rPlat) rPlat.textContent = p ? ((URL_LABELS[p] || [p])[0]) : "Auto-detect";
+
+    const rUrl = $("reviewUrl");
+    if (rUrl) rUrl.textContent = rawUrl || "No URL specified";
+
+    const rKwCount = $("reviewKwCount");
+    const rKwChips = $("reviewKwChips");
+    const list = Array.from(this.state.selectedKeywords);
+    if (rKwCount) rKwCount.textContent = String(list.length);
+    if (rKwChips) {
+      if (!list.length) {
+        rKwChips.innerHTML = `<span class="oa-muted oa-small">No keywords configured (analysing all relevant comments)</span>`;
+      } else {
+        rKwChips.innerHTML = list.map((k) => `<span class="kw-chip-active" style="font-size:0.75rem">${esc(k)}</span>`).join("");
+      }
+    }
+  },
+
+  async loadPresets() {
+    try {
+      const res = await api("/api/search-presets");
+      if (!res.ok) return;
+      this.state.presets = res.data.presets || [];
+      const sel = $("searchPresetSelect");
+      if (!sel) return;
+
+      const opts = this.state.presets.map((p) => `
+        <option value="${esc(p.id)}">${esc(p.name)} (${esc(p.industry || 'All')})</option>
+      `);
+      sel.innerHTML = `<option value="">Choose a saved search…</option>` + opts.join("");
+    } catch (_) {}
+  },
+
+  loadPreset(id) {
+    const p = this.state.presets.find((x) => x.id === id);
+    if (!p) return;
+    this.state.activePresetId = id;
+    const delBtn = $("btnDeletePreset");
+    if (delBtn) delBtn.classList.remove("hidden");
+
+    if (p.industry) this.selectIndustry(p.industry);
+    if (p.business_type) this.selectBusinessType(p.business_type);
+    if (p.target_customer) {
+      this.state.targetCustomer = p.target_customer;
+      const chips = document.querySelectorAll("#targetCustomersRow .target-cust-chip");
+      chips.forEach((c) => c.classList.toggle("selected", c.dataset.target === p.target_customer));
+    }
+    this.state.selectedKeywords.clear();
+    (p.keywords || []).forEach((k) => this.state.selectedKeywords.add(k));
+    this.renderSelectedKeywords();
+    this.renderKeywordSuggestions();
+
+    const excIn = $("urlFilterExclude");
+    if (excIn && p.exclude_keywords) excIn.value = p.exclude_keywords.join(", ");
+    const mm = $("urlFilterMatchMode");
+    if (mm && p.match_mode) mm.value = p.match_mode;
+
+    this.syncReview();
+    toast(`Loaded preset “${p.name}”`, "info");
+    this.setStep(4);
+  },
+
+  async saveCurrentPreset() {
+    const defName = `${this.state.industryName || 'Lead Search'} - ${this.state.businessType || 'General'}`;
+    const name = window.prompt("Name this search preset:", defName);
+    if (!name || !name.trim()) return;
+
+    const excIn = $("urlFilterExclude");
+    const excList = excIn ? excIn.value.split(",").map((k) => k.trim()).filter(Boolean) : [];
+    const mm = $("urlFilterMatchMode");
+
+    try {
+      const res = await api("/api/search-presets", {
+        method: "POST",
+        body: {
+          name: name.trim(),
+          industry: this.state.industry,
+          business_type: this.state.businessType,
+          target_customer: this.state.targetCustomer,
+          keywords: Array.from(this.state.selectedKeywords),
+          exclude_keywords: excList,
+          match_mode: mm ? mm.value : "any",
+        },
+      });
+      if (res.ok) {
+        toast("Search preset saved!", "success");
+        await this.loadPresets();
+        if (res.data && res.data.preset) {
+          const sel = $("searchPresetSelect");
+          if (sel) sel.value = res.data.preset.id;
+        }
+      } else {
+        toast(errText(res.data, "Could not save preset"), "error");
+      }
+    } catch (e) {
+      toast(e.message || "Failed to save preset", "error");
+    }
+  },
+
+  async deleteSelectedPreset() {
+    const id = this.state.activePresetId;
+    if (!id) return;
+    if (!confirm("Are you sure you want to delete this saved search preset?")) return;
+    try {
+      const res = await api(`/api/search-presets/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (res.ok) {
+        toast("Preset deleted", "info");
+        this.state.activePresetId = null;
+        const delBtn = $("btnDeletePreset");
+        if (delBtn) delBtn.classList.add("hidden");
+        await this.loadPresets();
+      }
+    } catch (e) {
+      toast(e.message || "Could not delete preset", "error");
+    }
+  },
+
+  showExplanationModal() {
+    const modal = document.createElement("div");
+    modal.className = "modal-backdrop";
+    modal.id = "kwExplainModal";
+    modal.innerHTML = `
+      <div class="modal-card" style="max-width:540px">
+        <div class="modal-head">
+          <h3 class="modal-title">💡 How LeadAI Discovers Your Leads</h3>
+          <button type="button" class="btn-ghost btn-sm" id="closeExplainModal">✕</button>
+        </div>
+        <div class="modal-body" style="font-size:0.86rem;line-height:1.55;color:var(--text-secondary)">
+          <p><b style="color:var(--text-primary)">Industry:</b> The broad business sector you operate in (e.g. Real Estate, Automotive, Healthcare). LeadAI uses this to know what standard buying signals look like.</p>
+          <p><b style="color:var(--text-primary)">Business Type:</b> What your company specifically offers (e.g. Residential Property vs Commercial Broker vs Pre-owned Car Dealer).</p>
+          <p><b style="color:var(--text-primary)">Target Customer:</b> The persona you wish to acquire (Buyers, Sellers, Renters, Investors).</p>
+          <p><b style="color:var(--text-primary)">Keywords:</b> Words and phrases that appear when prospects are genuinely interested (e.g. <i>price, 3 BHK, test drive, available, consultation</i>). Comments containing these keywords are prioritized for AI intent scoring.</p>
+          <p><b style="color:var(--text-primary)">Excluded Keywords:</b> Words that should disqualify a conversation (e.g. <i>hiring, job, giveaway, scam</i>).</p>
+        </div>
+        <div class="modal-foot" style="justify-content:flex-end">
+          <button type="button" class="btn btn-primary" id="btnGotItExplain">Got it</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const close = () => modal.remove();
+    const c1 = modal.querySelector("#closeExplainModal");
+    if (c1) c1.onclick = close;
+    const c2 = modal.querySelector("#btnGotItExplain");
+    if (c2) c2.onclick = close;
+    modal.onclick = (e) => { if (e.target === modal) close(); };
+  },
+};
+
+window.GuidedSearch = GuidedSearch;
 
 // ── Comment Filter (user URL search) ────────────────────────────────────
 
@@ -3902,6 +4505,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   refreshSummary();
   applyUrlFilterDefaults();
   loadUrlFilterCatalog();
+  if (window.GuidedSearch) GuidedSearch.init();
   loadWorkspaceData();
   loadNotifications();
   await fetchRecentSearches();

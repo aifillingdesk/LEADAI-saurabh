@@ -405,35 +405,62 @@ async def overview(ctx: TenantContext = Depends(require_portal())):
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     week_ago = now - timedelta(days=7)
 
-    member_status = await _count_by(db, "organization_members",
-                                    {"organization_id": ctx.organization_id,
-                                     "status": {"$ne": "removed"}}, "status")
-    pending_invites = await db.organization_invitations.count_documents(
-        {"organization_id": ctx.organization_id, "status": "pending"})
-    search_status = await _count_by(db, "search_history", oq, "status")
-    searches_month = await db.search_history.count_documents(
-        _and(oq, {"created_at": {"$gte": month_start}}))
     lead_q = _and(oq, {"is_lead": True})
-    leads_total = await db.ai_comments.count_documents(lead_q)
-    leads_month = await db.ai_comments.count_documents(
-        _and(lead_q, {"analyzed_at": {"$gte": month_start}}))
-    unassigned = await db.ai_comments.count_documents(
-        _and(lead_q, {"$or": [{"assigned_user_id": None}, {"assigned_user_id": ""},
-                              {"assigned_user_id": {"$exists": False}}]}))
 
     from app.billing.entitlements import EntitlementService
     from app.billing.subscriptions import get_organization_subscription
-    usage = await EntitlementService.get_usage_summary(ctx.organization_id, db=db)
-    sub = await get_organization_subscription(ctx.organization_id, db=db)
 
-    # recent lists
-    recent_runs = [r async for r in db.search_history.find(oq).sort("created_at", -1).limit(6)]
-    failed_runs = [r async for r in db.search_history.find(
-        _and(oq, {"status": {"$in": ["error", "failed"]}})).sort("created_at", -1).limit(5)]
-    recent_leads = [lead async for lead in db.ai_comments.find(lead_q).sort("analyzed_at", -1).limit(6)]
-    recent_members = [m async for m in db.organization_members.find(
-        {"organization_id": ctx.organization_id, "status": {"$ne": "removed"}}
-    ).sort("_id", -1).limit(6)]
+    async def _fetch_runs():
+        return [r async for r in db.search_history.find(oq).sort("created_at", -1).limit(6)]
+
+    async def _fetch_failed():
+        return [r async for r in db.search_history.find(
+            _and(oq, {"status": {"$in": ["error", "failed"]}})).sort("created_at", -1).limit(5)]
+
+    async def _fetch_leads():
+        return [lead async for lead in db.ai_comments.find(lead_q).sort("analyzed_at", -1).limit(6)]
+
+    async def _fetch_members():
+        return [m async for m in db.organization_members.find(
+            {"organization_id": ctx.organization_id, "status": {"$ne": "removed"}}
+        ).sort("_id", -1).limit(6)]
+
+    (
+        member_status,
+        pending_invites,
+        search_status,
+        searches_month,
+        leads_total,
+        leads_month,
+        unassigned,
+        usage,
+        sub,
+        recent_runs,
+        failed_runs,
+        recent_leads,
+        recent_members,
+    ) = await asyncio.gather(
+        _count_by(db, "organization_members",
+                  {"organization_id": ctx.organization_id,
+                   "status": {"$ne": "removed"}}, "status"),
+        db.organization_invitations.count_documents(
+            {"organization_id": ctx.organization_id, "status": "pending"}),
+        _count_by(db, "search_history", oq, "status"),
+        db.search_history.count_documents(
+            _and(oq, {"created_at": {"$gte": month_start}})),
+        db.ai_comments.count_documents(lead_q),
+        db.ai_comments.count_documents(
+            _and(lead_q, {"analyzed_at": {"$gte": month_start}})),
+        db.ai_comments.count_documents(
+            _and(lead_q, {"$or": [{"assigned_user_id": None}, {"assigned_user_id": ""},
+                                  {"assigned_user_id": {"$exists": False}}]})),
+        EntitlementService.get_usage_summary(ctx.organization_id, db=db),
+        get_organization_subscription(ctx.organization_id, db=db),
+        _fetch_runs(),
+        _fetch_failed(),
+        _fetch_leads(),
+        _fetch_members(),
+    )
     uids = [r.get("user_id") for r in recent_runs + failed_runs] + \
         [m.get("user_id") for m in recent_members] + \
         [lead.get("assigned_user_id") for lead in recent_leads]
@@ -1265,30 +1292,61 @@ async def test_lead_rules(body: LeadRulesTest, ctx: TenantContext = Depends(requ
 class BusinessProfileBody(BaseModel):
     industry: str
     custom_industry: Optional[str] = ""
+    business_type: Optional[str] = ""
+    custom_business_type: Optional[str] = ""
     description: Optional[str] = ""
     offerings: Optional[str] = ""
     target_customers: Optional[str] = ""
+    target_customer_types: List[str] = []
+    primary_offerings: List[str] = []
     lead_criteria: Optional[str] = ""
     requirement_terms: List[str] = []
     filter_by_industry: bool = False
 
 
+class KeywordLibraryBody(BaseModel):
+    active_keywords: List[str] = []
+    excluded_keywords: List[str] = []
+
+
+class RecommendKeywordsBody(BaseModel):
+    industry: Optional[str] = None
+    business_type: Optional[str] = None
+    target_customers: Optional[List[str]] = None
+    products_services: Optional[List[str]] = None
+    custom_industry: Optional[str] = None
+
+
 def _business_profile_payload(org: Dict[str, Any], ctx: TenantContext) -> Dict[str, Any]:
     from app.pipeline import business_context as bc
+    from app.pipeline.domain_intelligence import get_taxonomy_catalog, generate_recommendations
     settings = org.get("settings") or {}
     effective = bc.build_context(org)
+    taxonomy = get_taxonomy_catalog()
+    recs = generate_recommendations(
+        industry_key=effective["industry_key"],
+        business_type=effective.get("business_type"),
+        target_customers=effective.get("target_customer_types"),
+        products_services=effective.get("primary_offerings"),
+    )
+    industries_list = list(taxonomy.values()) if isinstance(taxonomy, dict) else taxonomy
+    popular_keys = [k for k, v in taxonomy.items() if isinstance(v, dict) and v.get("popular")] if isinstance(taxonomy, dict) else []
+
     return {"success": True,
             "industry": effective["industry_key"],
             "profile": {**bc.clean_profile(settings.get("business_profile") or {}),
-                        "custom_industry": effective["custom_industry"]},
+                        "custom_industry": effective["custom_industry"],
+                        "business_type": effective.get("business_type"),
+                        "custom_business_type": effective.get("custom_business_type")},
             "filter_by_industry": bool(settings.get("filter_by_industry")),
             "effective": {k: effective[k] for k in (
-                "industry_key", "industry_name", "category_keys", "default_keywords",
-                "ai_guidance")},
+                "industry_key", "industry_name", "business_type", "custom_business_type",
+                "category_keys", "default_keywords", "ai_guidance")},
             "ai_context_preview": bc.context_prompt_text(effective),
-            "industries": [{k: i[k] for k in ("key", "name", "icon", "description",
-                                               "default_keywords", "ai_guidance")}
-                           for i in bc.list_industries()],
+            "industries": industries_list,
+            "popular_keys": popular_keys,
+            "catalog": taxonomy,
+            "recommendations": recs,
             "can_edit": P.SETTINGS_MANAGE in ctx.permissions}
 
 
@@ -1327,6 +1385,83 @@ async def put_business_profile(body: BusinessProfileBody, request: Request,
     org = await _org_doc(db, ctx)
     return {**await asyncio.to_thread(_business_profile_payload, org, ctx),
             "message": f"Business profile saved — lead analysis now uses {industry['name']}."}
+
+
+@router.post("/recommend-keywords")
+async def post_recommend_keywords(body: RecommendKeywordsBody, ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW))):
+    """Dynamic keyword recommendation generator for an industry and business type."""
+    from app.pipeline.domain_intelligence import generate_recommendations
+    recs = generate_recommendations(
+        industry_key=body.industry,
+        business_type=body.business_type,
+        target_customers=body.target_customers,
+        products_services=body.products_services,
+        custom_industry=body.custom_industry,
+    )
+    return {"success": True, **recs}
+
+
+@router.get("/keyword-library")
+async def get_keyword_library_endpoint(ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW))):
+    """Get the organization's categorized keyword library (Suggested, Active, Custom, Excluded)."""
+    from app.pipeline.domain_intelligence import get_org_keyword_library
+    db = _db()
+    org = await _org_doc(db, ctx)
+    lib = await get_org_keyword_library(org, db)
+    lib["can_edit"] = P.SETTINGS_MANAGE in ctx.permissions
+    return lib
+
+
+@router.put("/keyword-library")
+async def put_keyword_library_endpoint(body: KeywordLibraryBody, request: Request,
+                                      ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE))):
+    """Save the active and excluded keywords into the organization settings."""
+    from app.pipeline.domain_intelligence import save_org_keyword_library
+    db = _db()
+    res = await save_org_keyword_library(
+        ctx.organization_id, body.active_keywords, body.excluded_keywords, db
+    )
+    await _audit(ctx, request, "keyword_library.updated", "leads", resource_type="organization",
+                 resource_id=ctx.organization_id,
+                 details={"active_count": res["active_count"], "excluded_count": res["excluded_count"]})
+    return {**res, "message": "Keyword library updated successfully"}
+
+
+@router.get("/business-summary")
+async def get_business_summary(ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW))):
+    """Quick summary of the organization's business context for the Admin Overview card."""
+    from app.pipeline import business_context as bc
+    from app.pipeline.domain_intelligence import INDUSTRY_TAXONOMY
+    db = _db()
+    org = await _org_doc(db, ctx)
+    effective = bc.build_context(org)
+    settings = org.get("settings") or {}
+    profile = settings.get("business_profile") or {}
+    active_kws = list(settings.get("lead_keywords") or profile.get("active_keywords") or [])
+    excluded_kws = list(settings.get("lead_exclude_keywords") or profile.get("excluded_keywords") or [])
+    
+    btype_key = effective.get("business_type")
+    btype_name = effective.get("custom_business_type") or btype_key
+    tax = INDUSTRY_TAXONOMY.get(effective["industry_key"])
+    if tax and btype_key:
+        for bt in tax.get("business_types", []):
+            if bt["key"] == btype_key:
+                btype_name = bt["name"]
+                break
+
+    return {
+        "success": True,
+        "industry_key": effective["industry_key"],
+        "industry_name": effective["industry_name"],
+        "business_type": btype_key or "",
+        "business_type_name": btype_name or "Not configured",
+        "target_customers": effective.get("target_customer_types") or (
+            [effective["target_customers"]] if effective.get("target_customers") else ["General Buyers"]
+        ),
+        "active_keywords_count": len(active_kws),
+        "excluded_keywords_count": len(excluded_kws),
+        "using_defaults": len(active_kws) == 0,
+    }
 
 
 # ── Org-wide scraped data (pages / posts / comments) ────────────────────────

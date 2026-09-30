@@ -568,6 +568,19 @@ def reset_circuit_breaker() -> None:
     logger.info("[Gemini] Circuit breaker manually reset by admin")
 
 
+_gemini_client: Optional[httpx.Client] = None
+
+
+def _get_gemini_client() -> httpx.Client:
+    global _gemini_client
+    if _gemini_client is None or _gemini_client.is_closed:
+        _gemini_client = httpx.Client(
+            timeout=60,
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+        )
+    return _gemini_client
+
+
 def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1,
                  model: Optional[str] = None, retries: int = 1) -> tuple[dict, dict]:
     """Gemini API call with 429 backoff + circuit breaker and latency/token extraction.
@@ -591,47 +604,47 @@ def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1
     }
     backoff = [5]
     t0 = time.perf_counter()
+    client = _get_gemini_client()
     for attempt in range(retries + 1):
         try:
-            with httpx.Client(timeout=60) as client:
-                resp = client.post(url, json=payload, headers=headers)
-                if resp.status_code == 429:
-                    # open the circuit for 30s to allow per-minute quota to recover
-                    _GEMINI_DISABLED_UNTIL = time.time() + 30
-                    _GEMINI_FAILURES_COUNT += 1
-                    _GEMINI_LAST_FAILURE = f"429 Rate Limit at {time.strftime('%H:%M:%S')}"
-                    logger.warning(f"[Gemini] 429 rate limit, circuit open until "
-                                   f"{time.strftime('%H:%M:%S', time.localtime(_GEMINI_DISABLED_UNTIL))}")
-                    if attempt < retries:
-                        wait = backoff[min(attempt, len(backoff) - 1)]
-                        time.sleep(wait)
-                        continue
-                    raise RuntimeError("Gemini rate-limited (429)")
-                resp.raise_for_status()
-                latency_ms = (time.perf_counter() - t0) * 1000
-                data = resp.json()
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    raise RuntimeError("Gemini returned no candidates")
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if not parts:
-                    raise RuntimeError("Gemini returned no parts")
-                raw = parts[0].get("text", "").strip()
-                if raw.startswith("```"):
-                    raw = raw.split("```")[1]
-                    if raw.startswith("json"):
-                        raw = raw[4:]
-                parsed_json = json.loads(raw.strip())
-                usage = data.get("usageMetadata", {})
-                tokens_in = usage.get("promptTokenCount") or max(1, int(len(system_prompt + user_content) / 4))
-                tokens_out = usage.get("candidatesTokenCount") or max(1, int(len(raw) / 4))
-                meta = {
-                    "latency_ms": latency_ms,
-                    "tokens_in": tokens_in,
-                    "tokens_out": tokens_out,
-                    "model": model,
-                }
-                return parsed_json, meta
+            resp = client.post(url, json=payload, headers=headers)
+            if resp.status_code == 429:
+                # open the circuit for 30s to allow per-minute quota to recover
+                _GEMINI_DISABLED_UNTIL = time.time() + 30
+                _GEMINI_FAILURES_COUNT += 1
+                _GEMINI_LAST_FAILURE = f"429 Rate Limit at {time.strftime('%H:%M:%S')}"
+                logger.warning(f"[Gemini] 429 rate limit, circuit open until "
+                               f"{time.strftime('%H:%M:%S', time.localtime(_GEMINI_DISABLED_UNTIL))}")
+                if attempt < retries:
+                    wait = backoff[min(attempt, len(backoff) - 1)]
+                    time.sleep(wait)
+                    continue
+                raise RuntimeError("Gemini rate-limited (429)")
+            resp.raise_for_status()
+            latency_ms = (time.perf_counter() - t0) * 1000
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                raise RuntimeError("Gemini returned no candidates")
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if not parts:
+                raise RuntimeError("Gemini returned no parts")
+            raw = parts[0].get("text", "").strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            parsed_json = json.loads(raw.strip())
+            usage = data.get("usageMetadata", {})
+            tokens_in = usage.get("promptTokenCount") or max(1, int(len(system_prompt + user_content) / 4))
+            tokens_out = usage.get("candidatesTokenCount") or max(1, int(len(raw) / 4))
+            meta = {
+                "latency_ms": latency_ms,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "model": model,
+            }
+            return parsed_json, meta
         except httpx.HTTPStatusError as e:
             _GEMINI_FAILURES_COUNT += 1
             _GEMINI_LAST_FAILURE = str(e)
@@ -742,7 +755,7 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
     or off, ``ai.rule_fallback`` decides whether rule analysis is used when
     Gemini fails, and active prompt in ``ai_prompts`` determines the template."""
     from app.admin.settings import get_bool_cached, get_setting_cached
-    from app.pipeline.ai_prompt_service import get_active_prompt, render_template
+    from app.pipeline.ai_prompt_service import DEFAULT_COMMENT_USER_TEMPLATE, get_active_prompt, render_template
     from app.pipeline.ai_usage_service import log_ai_request
 
     ai_enabled = get_bool_cached("ai.enabled")
@@ -1149,7 +1162,15 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
     ai_token_cost = token_cost("ai_call")
     # the organization's industry / business profile drives every comment
     from app.pipeline import business_context as bc
+    from app.pipeline.domain_intelligence import merge_search_context
     biz = bc.org_business_context(org_id, db)
+    if run_id and db is not None:
+        try:
+            sh = db.search_history.find_one({"run_id": run_id}, {"business_context": 1})
+            if sh and sh.get("business_context"):
+                biz = merge_search_context(biz, sh["business_context"])
+        except Exception:
+            pass
     biz_text = bc.context_prompt_text(biz)
     req_terms = _order_terms(bc.requirement_terms_for(biz, db))
     summary["industry"] = biz["industry_key"]

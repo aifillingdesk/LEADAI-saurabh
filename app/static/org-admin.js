@@ -731,7 +731,10 @@
   // ── Dashboard ──────────────────────────────────────────────────────
   ROUTES.dashboard = {
     async render(v) {
-      const d = await api('/api/org-admin/overview');
+      const [d, bizSum] = await Promise.all([
+        api('/api/org-admin/overview'),
+        api('/api/org-admin/business-summary').catch(() => ({ success: false })),
+      ]);
       if (!v.alive()) return;
       const sub = d.subscription || {};
       const planStatus = sub.has_subscription ? sub.status : (sub.is_demo || (d.plan && d.plan.is_demo) ? 'demo' : 'none');
@@ -741,8 +744,43 @@
       const alertHtml = (d.alerts || []).map(a => `<div class="alert alert-${attr(a.severity === 'danger' ? 'danger' : a.severity === 'info' ? 'info' : 'warning')}">${ico('alert', 'alert-icon')}<div class="alert-body">${esc(a.message)}</div></div>`).join('');
       const stat = (href, icon, lbl, value, meta) => `<a class="oa-card oa-stat" href="${attr(href)}"><span class="oa-stat-label">${ico(icon)}${esc(lbl)}</span><span class="oa-stat-value">${num(value)}</span><span class="oa-stat-meta">${meta}</span></a>`;
       const miniRuns = (list, empty) => list.length ? `<ul class="oa-feed">${list.map(r => `<li class="${r.status === 'error' || r.status === 'failed' ? 'fail' : ''}"><div class="oa-feed-main"><a class="oa-link" href="#searches/${attr(r.run_id)}">${esc(r.url || r.run_id)}</a><div class="oa-small oa-muted">${esc(r.user_email || '')} · ${pill(r.status)} ${r.error ? '· ' + esc(String(r.error).slice(0, 90)) : ''}</div></div>${timeTag(r.created_at)}</li>`).join('')}</ul>` : `<p class="oa-muted oa-small">${esc(empty)}</p>`;
+
+      const bizCardHtml = bizSum && bizSum.success ? `
+        <div class="oa-biz-summary-card">
+          <div class="oa-biz-head">
+            <span class="oa-biz-title">${ico('building')} LeadAI Business Context</span>
+            <div class="oa-actions">
+              <a class="btn btn-secondary btn-sm" href="#organization/business">${ico('file')} Edit Business Profile</a>
+              <a class="btn btn-secondary btn-sm" href="#rules">${ico('target')} Manage Keywords</a>
+            </div>
+          </div>
+          <div class="oa-biz-grid">
+            <div>
+              <div class="oa-biz-stat-label">Industry</div>
+              <div class="oa-biz-stat-val">${esc(bizSum.industry || 'Not set')}</div>
+            </div>
+            <div>
+              <div class="oa-biz-stat-label">Business Type</div>
+              <div class="oa-biz-stat-val">${esc(bizSum.business_type || 'General')}</div>
+            </div>
+            <div>
+              <div class="oa-biz-stat-label">Target Customer</div>
+              <div class="oa-biz-stat-val">${esc((bizSum.target_customers || []).join(', ') || 'Buyers')}</div>
+            </div>
+            <div>
+              <div class="oa-biz-stat-label">Active Keywords</div>
+              <div class="oa-biz-stat-val" style="color:var(--primary)">${num(bizSum.active_keywords_count)}</div>
+            </div>
+            <div>
+              <div class="oa-biz-stat-label">Excluded Terms</div>
+              <div class="oa-biz-stat-val">${num(bizSum.excluded_keywords_count)}</div>
+            </div>
+          </div>
+        </div>` : '';
+
       v.el.innerHTML = head('Dashboard', `Everything happening in ${S.ctx.organization.name}.`, `<a class="btn btn-primary" href="#search">${ico('search')} New search</a>`) +
         (alertHtml ? `<div class="oa-alerts" role="region" aria-label="Usage alerts">${alertHtml}</div>` : '') +
+        bizCardHtml +
         `<div class="oa-grid oa-grid-4">
           ${stat('#team/users', 'users', 'Users', d.users.total, `<span>${num(d.users.active)} active</span><span>${num(d.users.inactive)} inactive</span><span>${num(d.users.pending_invitations)} invited</span>`)}
           ${stat('#searches', 'search', 'Searches', d.searches.total, `<span>${num(d.searches.this_month)} this month</span><span>${num(d.searches.failed)} failed</span>`)}
@@ -918,33 +956,101 @@
     const edit = d.can_edit, ro = edit ? '' : 'disabled', p = d.profile || {};
     const byKey = Object.fromEntries(d.industries.map(i => [i.key, i]));
     const area = (name, lbl, max, ph, hint) => `<div class="oa-field span-2"><label for="f-${name}">${esc(lbl)}</label><textarea class="form-textarea" id="f-${name}" name="${name}" rows="2" maxlength="${max}" placeholder="${attr(ph)}" ${ro}>${esc(p[name] || '')}</textarea>${hint ? `<span class="oa-hint">${esc(hint)}</span>` : ''}</div>`;
+    
+    const TARGET_OPTIONS = ['Buyers', 'Sellers', 'Renters / Tenants', 'Investors', 'Clients / Inquiries', 'Job Seekers'];
+    const curTargets = new Set(Array.isArray(p.target_customer_types) ? p.target_customer_types : (p.target_customers ? [p.target_customers] : ['Buyers']));
+
     v.el.innerHTML = head('Organization', 'Your organization profile, workspace branding and settings.') + tabs(ORG_TABS, '#organization/business') +
-      `<div class="oa-note">${ico('info')}<span>LeadAI works for any business. Your industry and description tell the lead AI what counts as a real lead for <b>you</b> — every new search in your organization uses them.</span></div>
+      `<div class="oa-note">${ico('info')}<span>LeadAI adapts to any business. Your industry, business model, and target customers configure how LeadAI filters social posts and qualifies high-intent leads across your entire organization.</span></div>
       <form class="oa-card oa-form" data-form novalidate><div class="oa-form-grid">
         <div class="oa-field"><label for="f-industry">Industry</label><select class="form-select" id="f-industry" name="industry" ${ro}>${selectOpts(d.industries.map(i => [i.key, (i.icon ? i.icon + ' ' : '') + i.name]), d.industry)}</select><span class="oa-hint" data-ind-desc></span></div>
-        ${fld('custom_industry', 'Industry label (optional)', p.custom_industry, 'text', ro, 'maxlength="80" placeholder="e.g. Organic skincare brand"', 'Your own name for your niche; shown to the AI instead of the industry name.')}
-        ${area('description', 'What your business does', 600, 'e.g. We are a used-car dealership in Pune selling certified pre-owned SUVs and sedans.')}
-        ${area('offerings', 'Products or services you sell', 600, 'e.g. Pre-owned cars, car loans, exchange, extended warranty')}
-        ${area('target_customers', 'Ideal customers', 400, 'e.g. Families and first-time buyers in Pune with a budget of 4–12 lakh')}
-        ${area('lead_criteria', 'What makes a qualified lead', 600, 'e.g. Asks for price, EMI, test drive or exchange value, or shares a phone number', 'Leave empty to use the industry default shown below.')}
-        <div class="oa-field span-2"><span class="oa-label" id="rt-l">Extra requirement terms <span class="optional">(optional)</span></span><div class="oa-chips" data-chips="terms" aria-labelledby="rt-l"></div><span class="oa-hint">Words your customers use for what they want (product names, models, services). They help lead detection even without AI.</span></div>
-        <div class="oa-field span-2">${switchRow('filter_by_industry', 'Only analyse comments relevant to my industry', 'When ON and you have no custom lead keywords, comments are pre-filtered by your industry\'s keywords plus universal buying-intent phrases before AI analysis (saves AI usage). When OFF, every comment is analysed.', d.filter_by_industry, !edit)}</div>
+        ${fld('custom_industry', 'Custom industry label (optional)', p.custom_industry, 'text', ro, 'maxlength="80" placeholder="e.g. Clean Energy, Heavy Machinery"', 'Your specific niche name; shown to the AI instead of the generic sector.')}
+        <div class="oa-field"><label for="f-business_type">Business Type</label><select class="form-select" id="f-business_type" name="business_type" ${ro}></select><span class="oa-hint">Your specific business model or specialization</span></div>
+        ${fld('custom_business_type', 'Custom business type (optional)', p.custom_business_type, 'text', ro, 'maxlength="80" placeholder="e.g. Luxury Penthouse Brokerage"', 'Specify your precise business type if not in the dropdown.')}
+        
+        <div class="oa-field span-2">
+          <span class="oa-label">Target Customer Types</span>
+          <div class="target-customers-row" id="oaTargetCustomers" style="margin-top:6px">
+            ${TARGET_OPTIONS.map(t => `<span class="target-cust-chip ${curTargets.has(t) ? 'selected' : ''}" data-target="${attr(t)}">${esc(t)}</span>`).join('')}
+          </div>
+          <span class="oa-hint">Select the personas your organization actively seeks to acquire.</span>
+        </div>
+
+        <div class="oa-field span-2">
+          <span class="oa-label" id="off-l">Primary Products / Offerings</span>
+          <div class="oa-chips" data-chips="offerings" aria-labelledby="off-l"></div>
+          <span class="oa-hint">Specific models, services, or product categories you provide (e.g. 3 BHK flats, Pre-owned SUVs, Web design).</span>
+        </div>
+
+        ${area('description', 'About your business', 600, 'e.g. We are a certified pre-owned car dealership in Pune specializing in warranty-backed SUVs and sedans.')}
+        ${area('lead_criteria', 'What qualifies as a high-intent lead', 600, 'e.g. Asks for price, quotation, brochure, availability, financing, or leaves phone/email', 'Leave empty to use the industry default guidance.')}
+        <div class="oa-field span-2"><span class="oa-label" id="rt-l">Extra requirement terms <span class="optional">(optional)</span></span><div class="oa-chips" data-chips="terms" aria-labelledby="rt-l"></div><span class="oa-hint">Words customers use for what they want. They aid comment classification even prior to AI processing.</span></div>
+        <div class="oa-field span-2">${switchRow('filter_by_industry', 'Only analyse comments relevant to my industry', 'When ON and you have no custom lead keywords, comments are pre-filtered by your industry keywords plus universal intent phrases before AI analysis (saves usage).', d.filter_by_industry, !edit)}</div>
       </div>
-      <div class="oa-card" style="margin-top:14px;background:var(--surface-2,transparent)"><div class="oa-card-head"><div class="oa-card-title">What the lead AI will be told</div></div><p class="oa-small" data-preview style="white-space:pre-wrap">${esc(d.ai_context_preview)}</p><p class="oa-hint">Saved changes apply to new searches. Industry default for a qualified lead: <span data-guidance>${esc((byKey[d.industry] || {}).ai_guidance || '')}</span></p></div>
+      <div class="oa-card" style="margin-top:14px;background:var(--surface-2,transparent)"><div class="oa-card-head"><div class="oa-card-title">What the lead AI will be told</div><a class="oa-link oa-small" href="#rules">Keyword Library →</a></div><p class="oa-small" data-preview style="white-space:pre-wrap">${esc(d.ai_context_preview)}</p><p class="oa-hint">Saved changes immediately apply to all new searches conducted by members in your organization.</p></div>
       ${edit ? '<div class="oa-form-foot"><button type="submit" class="btn btn-primary">Save business profile</button></div>' : readonlyNote()}</form>`;
+
     const form = $('[data-form]', v.el);
     const terms = chipEditor($('[data-chips="terms"]', form), p.requirement_terms || [], !edit);
-    const syncInd = () => { const i = byKey[form.industry.value] || {}; $('[data-ind-desc]', form).textContent = i.description || ''; $('[data-guidance]', form).textContent = i.ai_guidance || ''; };
-    form.industry.addEventListener('change', syncInd); syncInd();
+    const offeringsChips = chipEditor($('[data-chips="offerings"]', form), p.primary_offerings || (p.offerings ? [p.offerings] : []), !edit);
+
+    // Target customers chip toggling
+    const selTargets = new Set(curTargets);
+    const targetWrap = $('#oaTargetCustomers', form);
+    if (targetWrap && edit) {
+      targetWrap.addEventListener('click', (e) => {
+        const chip = e.target.closest('.target-cust-chip');
+        if (!chip) return;
+        const val = chip.dataset.target;
+        if (selTargets.has(val)) {
+          if (selTargets.size > 1) { selTargets.delete(val); chip.classList.remove('selected'); }
+        } else {
+          selTargets.add(val); chip.classList.add('selected');
+        }
+      });
+    }
+
+    const syncInd = () => {
+      const indKey = form.industry.value;
+      const i = byKey[indKey] || {};
+      $('[data-ind-desc]', form).textContent = i.description || '';
+      
+      // Update business types dropdown
+      const btSelect = form.business_type;
+      const btypes = i.business_types || ['General Services', 'Agency', 'Dealer', 'Retailer', 'Other'];
+      const curBt = p.business_type || '';
+      btSelect.innerHTML = selectOpts([['', 'Select business type']].concat(btypes.map(b => [b, b])), curBt);
+    };
+    form.industry.addEventListener('change', syncInd);
+    syncInd();
+
     if (!edit) return;
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = form.elements, btn = $('button[type=submit]', form);
-      const body = { industry: f.industry.value, filter_by_industry: f.filter_by_industry.checked, requirement_terms: terms.values() };
-      ['custom_industry', 'description', 'offerings', 'target_customers', 'lead_criteria'].forEach(k => { body[k] = f[k].value.trim(); });
+      const body = {
+        industry: f.industry.value,
+        business_type: f.business_type.value.trim(),
+        custom_business_type: f.custom_business_type.value.trim(),
+        target_customer_types: Array.from(selTargets),
+        primary_offerings: offeringsChips.values(),
+        filter_by_industry: f.filter_by_industry.checked,
+        requirement_terms: terms.values(),
+      };
+      ['custom_industry', 'description', 'lead_criteria'].forEach(k => { body[k] = f[k].value.trim(); });
+      body.offerings = offeringsChips.values().join(', ');
+      body.target_customers = Array.from(selTargets).join(', ');
+
       busy(btn, true, 'Saving…');
-      try { const r = await api('/api/org-admin/business-profile', { method: 'PUT', body }); toast(r.message, 'success'); await getOrg(true); route(); }
-      catch (err) { toast(err.message, 'error'); busy(btn, false); }
+      try {
+        const r = await api('/api/org-admin/business-profile', { method: 'PUT', body });
+        toast(r.message || 'Business profile saved', 'success');
+        await getOrg(true);
+        route();
+      } catch (err) {
+        toast(err.message, 'error');
+        busy(btn, false);
+      }
     });
   }
   function fld(name, lbl, val, type, ro, extra, hint) {
@@ -1508,42 +1614,397 @@
     },
   };
   ROUTES.rules = {
-    title: () => 'Lead rules',
+    title: () => 'Keyword Library',
     async render(v) {
-      const d = await api('/api/org-admin/lead-rules'); if (!v.alive()) return;
+      const d = await api('/api/org-admin/keyword-library'); if (!v.alive()) return;
       const edit = d.can_edit;
-      const g = d.global_rule;
-      v.el.innerHTML = head('Lead rules', 'Keywords that decide which comments are analysed as potential leads for your organization.') +
-        tabs([['#leads', 'All leads'], ['#leads/assigned', 'Assigned'], ['#pipeline', 'Lifecycle'], ['#rules', 'Rules']], '#rules') +
-        `<div class="alert ${d.using_defaults ? 'alert-info' : 'alert-success'}" style="margin-bottom:16px">${ico('info', 'alert-icon')}<div class="alert-body">${d.using_defaults ? `<div class="alert-title">Using LeadAI's global defaults</div>${g ? 'Default rule “' + esc(g.name || 'Active rule') + '”' + (g.include_keywords.length ? ': ' + esc(g.include_keywords.slice(0, 15).join(', ')) + (g.include_keywords.length > 15 ? '…' : '') : '') : 'No global filter is active, so every comment is analysed.'} Add your own keywords below to tailor lead detection to your business.${d.filter_by_industry ? ' Industry filter is ON: comments are pre-filtered for ' + esc(d.industry.name) + '.' : ''} Your industry (${esc(d.industry.name)}) is set in <a class="oa-link" href="#organization/business">Business profile</a>.` : '<div class="alert-title">Your organization\'s keywords are active</div>New searches only analyse comments containing at least one of these keywords (plus comments with contact details). Remove all keywords to go back to the global defaults.'}</div></div>
-        <div class="oa-grid oa-grid-2"><form class="oa-card oa-form" data-f>
-          <div class="oa-field"><span class="oa-label" id="kw-l">Lead keywords</span><div class="oa-chips" data-chips="keywords" aria-labelledby="kw-l"></div><span class="oa-hint">Press Enter or comma to add. Use the words your customers write, e.g. price, demo, test drive, admission, booking, interested.${edit && d.industry && d.industry.suggested_keywords.length ? ` <button type="button" class="oa-link" data-suggest style="background:none;border:0;padding:0;cursor:pointer">Add suggestions for ${esc(d.industry.name)}</button>` : ''}</span></div>
-          <div class="oa-field"><span class="oa-label" id="ex-l">Exclude keywords <span class="optional">(optional)</span></span><div class="oa-chips" data-chips="exclude" aria-labelledby="ex-l"></div><span class="oa-hint">Comments containing any of these are never treated as leads (e.g. spam, giveaway).</span></div>
-          ${edit ? '<div class="oa-form-foot"><button type="button" class="btn btn-ghost" data-clear>Use global defaults</button><button type="submit" class="btn btn-primary">Save rules</button></div>' : readonlyNote()}
-        </form>
-        <form class="oa-card oa-form" data-test><div class="oa-card-head"><div class="oa-card-title">Test a comment</div></div><label class="sr-only" for="rt">Comment text</label><textarea class="form-textarea" id="rt" name="text" rows="4" maxlength="2000" placeholder="e.g. Is this still available? What's the price and how do I book?" style="min-height:100px"></textarea><div class="oa-actions" style="justify-content:flex-end"><button type="submit" class="btn btn-secondary">Test against saved rules</button></div><div data-res aria-live="polite"></div></form></div>`;
-      const chips = {};
-      $$('[data-chips]', v.el).forEach(box => { chips[box.dataset.chips] = chipEditor(box, box.dataset.chips === 'keywords' ? d.keywords : d.exclude_keywords, !edit, box.dataset.chips === 'exclude'); });
-      const f = $('[data-f]', v.el);
-      const save = async (kws, ex, btn) => {
-        busy(btn, true, 'Saving…');
-        try { const r = await api('/api/org-admin/lead-rules', { method: 'PUT', body: { keywords: kws, exclude_keywords: ex } }); toast(r.message, 'success'); route(); }
-        catch (e) { toast(e.message, 'error'); busy(btn, false); }
+      const sum = d.summary || {};
+      const allKws = d.keywords || [];
+      let activeTab = 'all'; // all | active | suggested | custom | excluded
+      let searchQuery = '';
+
+      const renderView = () => {
+        const filtered = allKws.filter(k => {
+          if (activeTab !== 'all' && k.type !== activeTab && !(activeTab === 'excluded' && k.status === 'excluded')) return false;
+          if (searchQuery && !k.keyword.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+          return true;
+        });
+
+        v.el.innerHTML = head('Keyword Library', 'Manage organization-wide suggested, active, custom, and excluded keywords.') +
+          tabs([['#leads', 'All leads'], ['#leads/assigned', 'Assigned'], ['#pipeline', 'Lifecycle'], ['#rules', 'Keyword Library']], '#rules') +
+          
+          `<div class="alert ${d.using_defaults ? 'alert-info' : 'alert-success'}" style="margin-bottom:16px">${ico('info', 'alert-icon')}<div class="alert-body">
+            <div class="alert-title">${d.using_defaults ? 'Using LeadAI Default Business Intelligence' : 'Custom Organization Keywords Active'}</div>
+            <span>${d.using_defaults ? 'Your organization currently uses standard AI lead signals for ' + esc((d.industry && d.industry.name) || 'your industry') + '. Add keywords or generate suggestions below to customize lead discovery.' : 'Searches run by any member in your organization prioritize these keywords for qualifying prospects.'}</span>
+          </div></div>
+
+          <!-- Stats Strip -->
+          <div class="oa-grid oa-grid-4" style="margin-bottom:16px">
+            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('check')} Active Keywords</span><span class="oa-stat-value" style="color:var(--primary)">${num(sum.active_count)}</span><span class="oa-stat-meta">Used in comment analysis</span></div>
+            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('cpu')} Suggested Terms</span><span class="oa-stat-value">${num(sum.suggested_count)}</span><span class="oa-stat-meta">Ready to activate</span></div>
+            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('plus')} Custom Added</span><span class="oa-stat-value">${num(sum.custom_count)}</span><span class="oa-stat-meta">Organization specific</span></div>
+            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('x')} Excluded Terms</span><span class="oa-stat-value">${num(sum.excluded_count)}</span><span class="oa-stat-meta">Conversations ignored</span></div>
+          </div>
+
+          <!-- Library Main Card -->
+          <div class="oa-card">
+            <div class="oa-kw-lib-head">
+              <div class="oa-kw-tabs" role="tablist">
+                <button type="button" class="oa-kw-tab ${activeTab === 'all' ? 'active' : ''}" data-tab="all">All (${num(allKws.length)})</button>
+                <button type="button" class="oa-kw-tab ${activeTab === 'active' ? 'active' : ''}" data-tab="active">Active (${num(sum.active_count)})</button>
+                <button type="button" class="oa-kw-tab ${activeTab === 'suggested' ? 'active' : ''}" data-tab="suggested">Suggested (${num(sum.suggested_count)})</button>
+                <button type="button" class="oa-kw-tab ${activeTab === 'custom' ? 'active' : ''}" data-tab="custom">Custom (${num(sum.custom_count)})</button>
+                <button type="button" class="oa-kw-tab ${activeTab === 'excluded' ? 'active' : ''}" data-tab="excluded">Excluded (${num(sum.excluded_count)})</button>
+              </div>
+              ${edit ? `
+              <div class="oa-actions" style="flex-wrap:wrap">
+                <button type="button" class="btn btn-secondary btn-sm" id="btnGenSuggestions">${ico('cpu')} Generate Suggestions</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnAddKeywordModal">${ico('plus')} Add Keyword</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnAddBulkModal">${ico('list')} Add Multiple</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="btnRestoreDefaults">${ico('refresh')} Defaults</button>
+              </div>` : ''}
+            </div>
+
+            <!-- Search Bar -->
+            <div style="margin-bottom:14px">
+              <input type="search" class="form-input" id="kwSearchInput" placeholder="Filter keywords by name…" value="${esc(searchQuery)}" style="max-width:320px">
+            </div>
+
+            <!-- Table -->
+            <div class="oa-table-wrap">
+              <table class="oa-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Keyword</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Status</th>
+                    ${edit ? '<th scope="col" style="text-align:right">Actions</th>' : ''}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${filtered.length ? filtered.map(k => `
+                    <tr>
+                      <td><b>${esc(k.keyword)}</b></td>
+                      <td><span class="oa-pill ${k.type === 'suggested' ? 's-info' : k.type === 'custom' ? 's-brand' : 's-danger'}">${esc(cap(k.type))}</span></td>
+                      <td><span class="oa-muted oa-small">${esc(label(k.category || 'General'))}</span></td>
+                      <td>${pill(k.status === 'active' ? 'active' : 'disqualified', k.status === 'active' ? 'Active' : 'Excluded')}</td>
+                      ${edit ? `<td style="text-align:right">
+                        <div class="oa-actions" style="justify-content:flex-end">
+                          ${k.status === 'active' ? `
+                            <button type="button" class="btn btn-ghost btn-sm" data-act="exclude" data-kw="${attr(k.keyword)}" title="Move to excluded list">Exclude</button>
+                            <button type="button" class="btn btn-ghost btn-sm" data-act="remove" data-kw="${attr(k.keyword)}" title="Remove keyword">Remove</button>
+                          ` : k.status === 'excluded' ? `
+                            <button type="button" class="btn btn-ghost btn-sm" data-act="restore" data-kw="${attr(k.keyword)}" title="Restore to active keywords">Restore</button>
+                            <button type="button" class="btn btn-ghost btn-sm" data-act="remove" data-kw="${attr(k.keyword)}" title="Delete keyword">Delete</button>
+                          ` : `
+                            <button type="button" class="btn btn-secondary btn-sm" data-act="activate" data-kw="${attr(k.keyword)}">+ Activate</button>
+                          `}
+                        </div>
+                      </td>` : ''}
+                    </tr>
+                  `).join('') : `<tr><td colspan="5" class="oa-muted" style="text-align:center;padding:24px">No keywords match this view.</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Test a Comment Card -->
+          <div class="oa-card" style="margin-top:20px">
+            <div class="oa-card-head"><div class="oa-card-title">${ico('chat')} Test a comment against saved rules</div></div>
+            <form data-test>
+              <textarea class="form-textarea" id="rt" name="text" rows="3" maxlength="2000" placeholder="e.g. Hi, what is the price for a 3 BHK apartment and when is it available for site visit?" style="min-height:80px"></textarea>
+              <div class="oa-actions" style="justify-content:flex-end;margin-top:8px">
+                <button type="submit" class="btn btn-secondary btn-sm">Test comment qualification</button>
+              </div>
+              <div data-res aria-live="polite" style="margin-top:8px"></div>
+            </form>
+          </div>`;
+
+        // Bind tabs
+        $$('.oa-kw-tab', v.el).forEach(b => {
+          b.onclick = () => { activeTab = b.dataset.tab; renderView(); };
+        });
+
+        // Search input
+        const sInp = $('#kwSearchInput', v.el);
+        if (sInp) {
+          sInp.addEventListener('input', () => { searchQuery = sInp.value.trim(); renderView(); });
+          if (searchQuery) sInp.focus();
+        }
+
+        // Row action buttons
+        if (edit) {
+          $$('[data-act]', v.el).forEach(btn => {
+            btn.onclick = async () => {
+              const act = btn.dataset.act;
+              const kw = btn.dataset.kw;
+              await handleKeywordAction(act, kw);
+            };
+          });
+
+          // Add Keyword Modal
+          const addKwBtn = $('#btnAddKeywordModal', v.el);
+          if (addKwBtn) addKwBtn.onclick = () => showAddKeywordModal(false);
+          // Add Multiple Modal
+          const addBulkBtn = $('#btnAddBulkModal', v.el);
+          if (addBulkBtn) addBulkBtn.onclick = () => showAddKeywordModal(true);
+          // Generate Suggestions
+          const genBtn = $('#btnGenSuggestions', v.el);
+          if (genBtn) genBtn.onclick = () => showRecommendationGenerator();
+          // Restore Defaults
+          const defBtn = $('#btnRestoreDefaults', v.el);
+          if (defBtn) {
+            defBtn.onclick = async () => {
+              if (!(await confirmDialog('Restore LeadAI Defaults?', 'Your custom keywords will be replaced with standard defaults for your industry.', { confirm: 'Restore Defaults' }))) return;
+              try {
+                await api('/api/org-admin/keyword-library', { method: 'PUT', body: { active_keywords: [], excluded_keywords: [] } });
+                toast('Defaults restored', 'success');
+                route();
+              } catch (e) { toast(e.message, 'error'); }
+            };
+          }
+        }
+
+        // Test form
+        const tf = $('[data-test]', v.el);
+        if (tf) {
+          tf.onsubmit = async (e) => {
+            e.preventDefault();
+            const text = tf.text.value.trim();
+            if (!text) { tf.text.focus(); return; }
+            try {
+              const r = await api('/api/org-admin/lead-rules/test', { method: 'POST', body: { text } });
+              $('[data-res]', tf).innerHTML = `<div class="alert ${r.matched ? 'alert-success' : 'alert-warning'}">${ico('info', 'alert-icon')}<div class="alert-body"><div class="alert-title">${r.matched ? 'Would be analysed as a potential lead' : 'Would be skipped'}</div><div class="oa-small">Rules: ${esc(r.source)}${r.matched_keywords && r.matched_keywords.length ? ' · matched: ' + esc(r.matched_keywords.join(', ')) : ''}${r.excluded_keywords && r.excluded_keywords.length ? ' · excluded by: ' + esc(r.excluded_keywords.join(', ')) : ''}</div></div></div>`;
+            } catch (err) { toast(err.message, 'error'); }
+          };
+        }
       };
-      if (edit) {
-        const sg = $('[data-suggest]', f);
-        if (sg) sg.onclick = () => chips.keywords.addMany(d.industry.suggested_keywords);
-        f.onsubmit = (e) => { e.preventDefault(); save(chips.keywords.values(), chips.exclude.values(), $('button[type=submit]', f)); };
-        $('[data-clear]', f).onclick = async (e) => { if (await confirmDialog('Use global defaults?', 'Your organization keywords are removed and LeadAI\'s default lead detection applies.', { confirm: 'Use defaults' })) save([], [], e.currentTarget); };
-      }
-      const tf = $('[data-test]', v.el);
-      tf.onsubmit = async (e) => {
-        e.preventDefault(); const text = tf.text.value.trim(); if (!text) { tf.text.focus(); return; }
+
+      const handleKeywordAction = async (act, kw) => {
+        let active = allKws.filter(x => x.status === 'active').map(x => x.keyword);
+        let excluded = allKws.filter(x => x.status === 'excluded').map(x => x.keyword);
+
+        if (act === 'exclude') {
+          active = active.filter(k => k.toLowerCase() !== kw.toLowerCase());
+          if (!excluded.map(x => x.toLowerCase()).includes(kw.toLowerCase())) excluded.push(kw);
+        } else if (act === 'restore' || act === 'activate') {
+          excluded = excluded.filter(k => k.toLowerCase() !== kw.toLowerCase());
+          if (!active.map(x => x.toLowerCase()).includes(kw.toLowerCase())) active.push(kw);
+        } else if (act === 'remove') {
+          active = active.filter(k => k.toLowerCase() !== kw.toLowerCase());
+          excluded = excluded.filter(k => k.toLowerCase() !== kw.toLowerCase());
+        }
+
         try {
-          const r = await api('/api/org-admin/lead-rules/test', { method: 'POST', body: { text } });
-          $('[data-res]', tf).innerHTML = `<div class="alert ${r.matched ? 'alert-success' : 'alert-warning'}">${ico('info', 'alert-icon')}<div class="alert-body"><div class="alert-title">${r.matched ? 'Would be analysed as a potential lead' : 'Would be skipped'}</div><div class="oa-small">Rules: ${esc(r.source)}${r.matched_keywords && r.matched_keywords.length ? ' · matched: ' + esc(r.matched_keywords.join(', ')) : ''}${r.excluded_keywords && r.excluded_keywords.length ? ' · excluded by: ' + esc(r.excluded_keywords.join(', ')) : ''}</div></div></div>`;
-        } catch (err) { toast(err.message, 'error'); }
+          await api('/api/org-admin/keyword-library', { method: 'PUT', body: { active_keywords: active, excluded_keywords: excluded } });
+          toast(`Updated keyword: ${kw}`, 'success');
+          route();
+        } catch (e) { toast(e.message, 'error'); }
       };
+
+      const showAddKeywordModal = (isBulk) => {
+        const close = openModal({
+          title: isBulk ? 'Add Multiple Keywords' : 'Add Keyword',
+          body: `
+            <div class="oa-form-grid">
+              <div class="oa-field span-2">
+                <label for="kwModalInput">${isBulk ? 'Enter keywords (comma or newline separated)' : 'Keyword or phrase'}</label>
+                ${isBulk ? '<textarea class="form-textarea" id="kwModalInput" rows="4" placeholder="apartment, flat, villa, penthouse, 3 bhk"></textarea>' : '<input class="form-input" id="kwModalInput" type="text" placeholder="e.g. 3 BHK, Penthouse" maxlength="80"/>'}
+              </div>
+              <div class="oa-field span-2">
+                <label for="kwModalType">Keyword Type</label>
+                <select class="form-select" id="kwModalType">
+                  <option value="active">Active Lead Keyword (qualifies conversations)</option>
+                  <option value="excluded">Exclude Keyword (disqualifies / ignores)</option>
+                </select>
+              </div>
+            </div>`,
+          foot: `<button type="button" class="btn btn-secondary" data-close>Cancel</button><button type="button" class="btn btn-primary" id="btnConfirmAddKw">Add to Library</button>`,
+          onMount(root, closeFn) {
+            $('#btnConfirmAddKw', root).onclick = async () => {
+              const raw = $('#kwModalInput', root).value.trim();
+              const type = $('#kwModalType', root).value;
+              if (!raw) return;
+              const items = raw.split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+              let active = allKws.filter(x => x.status === 'active').map(x => x.keyword);
+              let excluded = allKws.filter(x => x.status === 'excluded').map(x => x.keyword);
+
+              items.forEach(k => {
+                if (type === 'active') {
+                  if (!active.includes(k)) active.push(k);
+                  excluded = excluded.filter(x => x !== k);
+                } else {
+                  if (!excluded.includes(k)) excluded.push(k);
+                  active = active.filter(x => x !== k);
+                }
+              });
+
+              try {
+                await api('/api/org-admin/keyword-library', { method: 'PUT', body: { active_keywords: active, excluded_keywords: excluded } });
+                toast(`Added ${items.length} keyword${items.length === 1 ? '' : 's'}`, 'success');
+                closeFn();
+                route();
+              } catch (e) { toast(e.message, 'error'); }
+            };
+          }
+        });
+      };
+
+      const showRecommendationGenerator = () => {
+        let recData = null;
+        const selRecommended = new Set();
+        const selExclusions = new Set();
+
+        const close = openModal({
+          title: '🤖 LeadAI Keyword Recommendation Generator',
+          body: `
+            <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px">
+              Select your business context and LeadAI will automatically generate categorized keyword signals tailored for your industry.
+            </div>
+            <div class="oa-form-grid" id="recForm">
+              <div class="oa-field">
+                <label for="recIndustry">Industry</label>
+                <select class="form-select" id="recIndustry">
+                  <option value="${esc((d.industry && d.industry.key) || 'real_estate')}">${esc((d.industry && d.industry.name) || 'Real Estate')}</option>
+                  <option value="automotive">Automotive</option>
+                  <option value="education">Education</option>
+                  <option value="healthcare">Healthcare</option>
+                  <option value="travel">Travel & Hospitality</option>
+                  <option value="ecommerce">E-commerce & Retail</option>
+                  <option value="saas">SaaS & Software</option>
+                  <option value="wedding">Wedding & Events</option>
+                  <option value="interior_design">Interior Design</option>
+                  <option value="agency">Marketing & Digital Agency</option>
+                  <option value="professional_services">Professional Services</option>
+                </select>
+              </div>
+              <div class="oa-field">
+                <label for="recTarget">Target Customer</label>
+                <select class="form-select" id="recTarget">
+                  <option value="Buyers">Buyers</option>
+                  <option value="Sellers">Sellers</option>
+                  <option value="Renters / Tenants">Renters / Tenants</option>
+                  <option value="Investors">Investors</option>
+                  <option value="Clients">Clients / Inquiries</option>
+                </select>
+              </div>
+              <div class="oa-field span-2">
+                <label for="recBizType">Business Model / Type</label>
+                <input class="form-input" id="recBizType" type="text" placeholder="e.g. Residential Agency, Commercial Brokerage, Pre-owned Cars" value="${esc((d.industry && d.industry.business_type) || '')}"/>
+              </div>
+            </div>
+            <div style="margin:14px 0">
+              <button type="button" class="btn btn-secondary btn-sm" id="btnRunRecGen">✦ Generate Keyword Groups</button>
+            </div>
+            <div id="recResultsArea" class="hidden" style="max-height:280px;overflow-y:auto;padding-right:6px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <span class="field-label" style="margin:0">Generated Recommendations:</span>
+                <button type="button" class="oa-link oa-small" id="btnSelectAllRec" style="background:none;border:none;cursor:pointer;color:var(--primary)">+ Select all</button>
+              </div>
+              <div id="recGroupsContainer"></div>
+            </div>
+          `,
+          foot: `<button type="button" class="btn btn-secondary" data-close>Cancel</button><button type="button" class="btn btn-primary" id="btnSaveRecToOrg" disabled>Save to Organization</button>`,
+          onMount(root, closeFn) {
+            const runBtn = $('#btnRunRecGen', root);
+            const saveBtn = $('#btnSaveRecToOrg', root);
+            const resArea = $('#recResultsArea', root);
+            const groupsBox = $('#recGroupsContainer', root);
+
+            runBtn.onclick = async () => {
+              busy(runBtn, true, 'Generating…');
+              try {
+                const body = {
+                  industry: $('#recIndustry', root).value,
+                  business_type: $('#recBizType', root).value.trim(),
+                  target_customer: $('#recTarget', root).value,
+                };
+                const res = await api('/api/org-admin/recommend-keywords', { method: 'POST', body });
+                recData = res;
+                resArea.classList.remove('hidden');
+                selRecommended.clear();
+                selExclusions.clear();
+
+                // By default select top recommendations
+                (res.recommended_to_add || []).forEach(k => selRecommended.add(k));
+                (res.recommended_exclusions || []).forEach(k => selExclusions.add(k));
+
+                const renderRecChips = () => {
+                  const groups = res.keyword_groups || {};
+                  let html = '';
+                  const map = [
+                    ['📦 Product / Service', groups.product_service || []],
+                    ['🔥 Buyer Intent', groups.intent || []],
+                    ['📋 Requirement & Specs', groups.requirement || []],
+                    ['📍 Location & Terms', groups.location || []],
+                  ];
+                  map.forEach(([title, list]) => {
+                    html += `<div style="margin-bottom:10px"><div style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">${title}</div><div style="display:flex;flex-wrap:wrap;gap:6px">`;
+                    html += list.map(k => `<span class="kw-chip-add ${selRecommended.has(k) ? 'added' : ''}" data-rkw="${attr(k)}" style="cursor:pointer">${selRecommended.has(k) ? '✓ ' : '+ '}${esc(k)}</span>`).join('');
+                    html += `</div></div>`;
+                  });
+                  if ((res.recommended_exclusions || []).length) {
+                    html += `<div style="margin-bottom:10px"><div style="font-size:0.75rem;font-weight:700;color:var(--danger);text-transform:uppercase;margin-bottom:4px">⛔ Recommended Exclusions</div><div style="display:flex;flex-wrap:wrap;gap:6px">`;
+                    html += res.recommended_exclusions.map(k => `<span class="kw-chip-add ${selExclusions.has(k) ? 'added' : ''}" data-exkw="${attr(k)}" style="cursor:pointer;border-color:var(--danger)">${selExclusions.has(k) ? '✓ ' : '+ '}${esc(k)}</span>`).join('');
+                    html += `</div></div>`;
+                  }
+                  groupsBox.innerHTML = html;
+
+                  groupsBox.querySelectorAll('[data-rkw]').forEach(chip => {
+                    chip.onclick = () => {
+                      const k = chip.dataset.rkw;
+                      if (selRecommended.has(k)) selRecommended.delete(k); else selRecommended.add(k);
+                      renderRecChips();
+                    };
+                  });
+                  groupsBox.querySelectorAll('[data-exkw]').forEach(chip => {
+                    chip.onclick = () => {
+                      const k = chip.dataset.exkw;
+                      if (selExclusions.has(k)) selExclusions.delete(k); else selExclusions.add(k);
+                      renderRecChips();
+                    };
+                  });
+                };
+                renderRecChips();
+
+                $('#btnSelectAllRec', root).onclick = () => {
+                  Object.values(res.keyword_groups || {}).forEach(arr => (arr || []).forEach(k => selRecommended.add(k)));
+                  (res.recommended_exclusions || []).forEach(k => selExclusions.add(k));
+                  renderRecChips();
+                };
+
+                saveBtn.disabled = false;
+              } catch (err) { toast(err.message, 'error'); }
+              finally { busy(runBtn, false); }
+            };
+
+            saveBtn.onclick = async () => {
+              let active = allKws.filter(x => x.status === 'active').map(x => x.keyword);
+              let excluded = allKws.filter(x => x.status === 'excluded').map(x => x.keyword);
+
+              selRecommended.forEach(k => {
+                if (!active.includes(k)) active.push(k);
+                excluded = excluded.filter(x => x !== k);
+              });
+              selExclusions.forEach(k => {
+                if (!excluded.includes(k)) excluded.push(k);
+                active = active.filter(x => x !== k);
+              });
+
+              busy(saveBtn, true, 'Saving…');
+              try {
+                await api('/api/org-admin/keyword-library', { method: 'PUT', body: { active_keywords: active, excluded_keywords: excluded } });
+                toast('Saved suggestions to organization keyword library', 'success');
+                closeFn();
+                route();
+              } catch (e) { toast(e.message, 'error'); busy(saveBtn, false); }
+            };
+          }
+        });
+      };
+
+      renderView();
     },
   };
   function chipEditor(box, initial, readonly, danger) {

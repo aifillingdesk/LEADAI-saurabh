@@ -8,10 +8,13 @@
   <meta name="referrer" content="no-referrer"/>
   <meta name="color-scheme" content="dark light"/>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✦</text></svg>">
+  <link rel="preload" href="/static/design/tokens.css" as="style"/>
+  <link rel="preload" href="/static/design/components.css" as="style"/>
   <link rel="stylesheet" href="/static/design/tokens.css"/>
   <link rel="stylesheet" href="/static/design/components.css"/>
   <link rel="stylesheet" href="/static/org-admin.css"/>
-  <script src="/static/design/theme.js"></script>
+  <link rel="stylesheet" href="/static/design/domain-keywords.css?v=1"/>
+  <script src="/static/design/theme.js" defer></script>
 </head>
 <body class="oa">
 <a class="skip-link" href="#oa-content">Skip to content</a>
@@ -101,6 +104,6 @@
 
 <div id="oa-modal-root"></div>
 <div class="oa-toasts" id="oa-toasts" role="status" aria-live="polite"></div>
-<script src="/static/org-admin.js"></script>
+<script src="/static/org-admin.js" defer></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from typing import Optional
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 from fastapi import FastAPI, Request
@@ -8,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.responses import Response
 from app.db.mongo import ensure_indexes
 from app.api.routes.search import router as search_router
 from app.api.routes.auth import router as auth_router
@@ -110,67 +113,40 @@ class _SecretRedactingFilter(logging.Filter):
         return True
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    _setup_logging()
-    # The permanent Super Admin (SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD) is the
-    # only credential the deployment needs; report its state (never the value).
-    from app.auth.superadmin import validate_superadmin_config
-    validate_superadmin_config()
-    if not settings.apify_api_token:
-        logger.warning(
-            "APIFY_API_TOKEN is not set in .env — searches will fail with an error. "
-            "Get a free token at https://apify.com/account/integrations"
-        )
-    ensure_indexes()
-    # Ensure multi-tenant migration and Default Organization backfill
+_is_ready: bool = False
+
+
+async def _run_startup_tasks():
+    global _is_ready
     try:
-        from app.db.migration import migrate_to_multi_tenant
-        from app.db.mongo import get_sync_db
+        from app.db.mongo import get_sync_db, get_async_db
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, ensure_indexes)
+
         sdb = get_sync_db()
         if sdb is not None:
-            migrate_to_multi_tenant(sdb)
-    except Exception as e:
-        logger.warning("Failed to run multi-tenant migration on startup: %s", e)
+            from app.db.migration import migrate_to_multi_tenant
+            await loop.run_in_executor(None, migrate_to_multi_tenant, sdb)
 
-    # Seed default SaaS subscription plans (Master Prompt 2)
-    try:
-        from app.billing.plans import ensure_default_plans
-        from app.db.mongo import get_async_db
         adb = get_async_db()
         if adb is not None:
+            from app.billing.plans import ensure_default_plans
             await ensure_default_plans(adb)
-    except Exception as e:
-        logger.warning("Failed to seed default plans on startup: %s", e)
-
-    # Seed CMS defaults (pages, FAQ, website settings)
-    try:
-        from app.cms.models import ensure_cms_indexes, seed_cms_defaults
-        from app.db.mongo import get_async_db
-        adb = get_async_db()
-        if adb is not None:
+            from app.cms.models import ensure_cms_indexes, seed_cms_defaults
             await ensure_cms_indexes(adb)
             await seed_cms_defaults(adb)
-    except Exception as e:
-        logger.warning("Failed to seed CMS defaults on startup: %s", e)
 
-    # Reconcile stale running jobs from previous interruptions/restarts
-    try:
-        from app.db.mongo import get_sync_db
-        from app.db.models import utcnow
-        sdb = get_sync_db()
         if sdb is not None:
-            res = sdb.search_history.update_many(
-                {"status": "running"},
-                {"$set": {"status": "cancelled", "phase": "cancelled", "message": "Interrupted (server restart)", "completed_at": utcnow()}}
-            )
-            if res.modified_count:
+            from app.db.models import utcnow
+            def _clean_stale():
+                return sdb.search_history.update_many(
+                    {"status": "running"},
+                    {"$set": {"status": "cancelled", "phase": "cancelled", "message": "Interrupted (server restart)", "completed_at": utcnow()}}
+                )
+            res = await loop.run_in_executor(None, _clean_stale)
+            if res and res.modified_count:
                 logger.info("Cleaned up %d stale running jobs on startup", res.modified_count)
-    except Exception as e:
-        logger.warning("Failed to reconcile stale running jobs on startup: %s", e)
-    # environment-only variables with a leftover in-app value: tell the
-    # Super Admin once per start (names only)
-    try:
+
         from app.admin.envvars import legacy_locked_overrides
         _legacy = legacy_locked_overrides()
         if _legacy:
@@ -183,12 +159,35 @@ async def lifespan(app: FastAPI):
                                 "the stored copies (Integrations).", severity="warning",
                                 link="/superadmin#/integrations")
     except Exception as e:
-        logger.debug("legacy override check failed: %s", e)
+        logger.warning(f"Error during async startup initialization: {e}")
+    finally:
+        _is_ready = True
+        logger.info("Application startup background tasks completed; server ready.")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import asyncio
+    _setup_logging()
+    # The permanent Super Admin (SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD) is the
+    # only credential the deployment needs; report its state (never the value).
+    from app.auth.superadmin import validate_superadmin_config
+    validate_superadmin_config()
+    if not settings.apify_api_token:
+        logger.warning(
+            "APIFY_API_TOKEN is not set in .env — searches will fail with an error. "
+            "Get a free token at https://apify.com/account/integrations"
+        )
+    # Non-blocking startup initialization running in background task
+    startup_task = asyncio.create_task(_run_startup_tasks())
+
     # time-driven lifecycle: billing periods, cancellations, demo expiry
     from app.lifecycle.maintenance import start_background_sweeper
     sweeper = start_background_sweeper()
     yield
     sweeper.cancel()
+    if not startup_task.done():
+        startup_task.cancel()
     # ── Graceful shutdown ──────────────────────────────────────────────
     # Cancel in-flight background tasks so they can update MongoDB status
     # before the process exits.  Daemon threads (UrlSearchThread) are killed
@@ -321,6 +320,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "form-action 'self'",
         ]
         response.headers["Content-Security-Policy"] = "; ".join(csp_directives)
+
+        # Cache-Control policy:
+        # Prevent caching on authenticated API routes; allow caching on public configs
+        if request.url.path.startswith("/api/"):
+            if request.url.path.startswith("/api/public/"):
+                response.headers["Cache-Control"] = "public, max-age=60"
+            elif not request.url.path.startswith("/api/billing/plans"):
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+                response.headers["Pragma"] = "no-cache"
+
         return response
 
 
@@ -380,10 +389,6 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
                 pass
         return await call_next(request)
 
-
-app.add_middleware(CSRFProtectionMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
-
 app.include_router(search_router)
 app.include_router(auth_router)
 app.include_router(comment_filters_router)
@@ -408,7 +413,6 @@ app.include_router(me_router)
 
 
 # ── Error pages & error reporting ──────────────────────────────────────────
-from fastapi.exceptions import RequestValidationError  # noqa: E402
 from starlette.exceptions import HTTPException as StarletteHTTPException  # noqa: E402
 
 _ERROR_PAGES = {403: "403.html", 404: "404.html"}
@@ -450,11 +454,27 @@ async def unhandled_error_handler(request: Request, exc: Exception):
     return JSONResponse({"success": False, "error": "internal_error",
                          "message": "Something went wrong. Please try again."}, status_code=500)
 
-# ── Static assets ───────────────────────────────────────────────────────────
+# ── Static assets with aggressive caching ─────────────────────────────────
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 
+
+class CachedStaticFiles(StaticFiles):
+    """Static file handler with long Cache-Control for immutable assets (CSS/JS/images/fonts)
+    and validation caching for HTML."""
+
+    def file_response(self, *args, **kwargs) -> Response:
+        resp = super().file_response(*args, **kwargs)
+        path = kwargs.get("path") or (args[0] if args else "")
+        ext = os.path.splitext(str(path))[1].lower()
+        if ext in (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".webp"):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif ext in (".html", ".htm"):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+
 if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.mount("/static", CachedStaticFiles(directory=static_dir), name="static")
 
 
 # Pages that stay reachable without a session
@@ -495,7 +515,7 @@ async def auth_gate(request: Request, call_next):
                      "/forgot-password", "/reset-password", "/403", "/404",
                      "/how-it-works", "/cookies", "/testimonials", "/sitemap.xml", "/robots.txt"}
     if (
-        path.startswith(("/static", "/api/auth", "/api/public", "/api/billing/plans", "/api/billing/webhook", "/api/invitations"))
+        path.startswith(("/static", "/api/auth", "/api/public", "/api/billing/plans", "/api/billing/webhook", "/api/invitations", "/api/business-context/catalog"))
         or path in _OPEN_PAGES
         or path in _PUBLIC_PAGES
         or path.startswith("/invite/")
@@ -614,17 +634,40 @@ async def maintenance_gate(request: Request, call_next):
         status_code=503)
 
 
+# Outermost response wrappers: CSRF, Security/Cache headers, and GZip compression
+app.add_middleware(CSRFProtectionMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+def _serve_html_file(filename: str, request: Optional[Request] = None, status_code: int = 200) -> Response:
+    """Serve an HTML file with ETag generation and 304 Not Modified validation."""
+    path = os.path.join(static_dir, filename) if not os.path.isabs(filename) else filename
+    if not os.path.exists(path):
+        return RedirectResponse("/", status_code=303)
+    try:
+        stat = os.stat(path)
+        etag = f'"{int(stat.st_mtime):x}-{stat.st_size:x}"'
+        if request:
+            inm = request.headers.get("if-none-match")
+            if inm and inm.strip() == etag:
+                return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache, must-revalidate"})
+        resp = FileResponse(path, status_code=status_code)
+        resp.headers["ETag"] = etag
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+    except Exception:
+        return FileResponse(path, status_code=status_code)
+
+
 @app.get("/login")
-async def login_page():
-    login_path = os.path.join(static_dir, "login.html")
-    if os.path.exists(login_path):
-        return FileResponse(login_path)
-    return RedirectResponse("/", status_code=303)
+async def login_page(request: Request):
+    return _serve_html_file("login.html", request)
 
 
 @app.get("/health")
 async def health():
-    """Public health endpoint — verifies MongoDB connectivity."""
+    """Public health endpoint — verifies MongoDB connectivity and startup readiness."""
     import time as _time
     mongo_ok = False
     mongo_latency_ms = None
@@ -640,7 +683,7 @@ async def health():
         pass
     status = "ok" if mongo_ok else "degraded"
     from app.auth.superadmin import config_status
-    result = {"status": status, "auth_enabled": True,
+    result = {"status": status, "ready": _is_ready, "auth_enabled": True,
               # deployed revision (Render sets RENDER_GIT_COMMIT) and whether a
               # Super Admin is configured — a yes/no only, never who or how
               "commit": (os.environ.get("RENDER_GIT_COMMIT") or "")[:7] or None,
@@ -652,22 +695,16 @@ async def health():
 
 @app.get("/admin")
 @app.get("/admin/")
-async def admin_page():
-    admin_path = os.path.join(static_dir, "admin.html")
-    if os.path.exists(admin_path):
-        return FileResponse(admin_path)
-    return RedirectResponse("/login?admin=1", status_code=303)
+async def admin_page(request: Request):
+    return _serve_html_file("admin.html", request)
 
 
 @app.get("/superadmin")
 @app.get("/superadmin/")
-async def super_admin_page():
+async def super_admin_page(request: Request):
     # Authorization is enforced by auth_gate above: only an admin-scope
     # session whose server-side effective role is super_admin reaches here.
-    super_admin_path = os.path.join(static_dir, "super-admin.html")
-    if os.path.exists(super_admin_path):
-        return FileResponse(super_admin_path)
-    return RedirectResponse("/login?superadmin=1", status_code=303)
+    return _serve_html_file("super-admin.html", request)
 
 
 @app.get("/org-admin")
@@ -682,31 +719,25 @@ async def org_admin_page(request: Request):
     except _HTTPException:
         return RedirectResponse("/login", status_code=303)
     if ctx.org_role not in ("owner", "admin"):
-        return _static_status("403.html", 403)
-    return _static("org-admin.html")
+        return _static_status("403.html", 403, request)
+    return _static("org-admin.html", request)
 
 
 @app.get("/")
 @app.get("/dashboard")
-async def root():
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"name": "LeadAI"}
+async def root(request: Request):
+    return _serve_html_file("index.html", request)
 
 
-def _static(filename: str):
+def _static(filename: str, request: Optional[Request] = None):
     """Return a static file from the static directory."""
-    path = os.path.join(static_dir, filename)
-    if os.path.exists(path):
-        return FileResponse(path)
-    return RedirectResponse("/", status_code=303)
+    return _serve_html_file(filename, request)
 
 
-def _static_status(filename: str, status: int):
+def _static_status(filename: str, status: int, request: Optional[Request] = None):
     path = os.path.join(static_dir, filename)
     if os.path.exists(path):
-        return FileResponse(path, status_code=status)
+        return _serve_html_file(filename, request, status_code=status)
     return JSONResponse({"detail": "Forbidden" if status == 403 else "Not found"}, status_code=status)
 
 

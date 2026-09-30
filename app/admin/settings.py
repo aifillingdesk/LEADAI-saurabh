@@ -387,9 +387,28 @@ async def adelete_setting(key: str) -> bool:
         if db is None:
             return False
         await db[COLLECTION].delete_one({"_id": key})
+        try:
+            from app.settings.registry import invalidate_public_config_cache
+            invalidate_public_config_cache()
+        except Exception:
+            pass
         return True
     except Exception:
         return False
+
+
+async def aget_all_settings() -> Dict[str, Any]:
+    """Fetch all setting overrides from MongoDB in a single batch query and merge with defaults."""
+    res = dict(SETTING_DEFAULTS)
+    try:
+        db = get_async_db()
+        if db is not None:
+            cursor = db[COLLECTION].find({}, {"_id": 1, "value": 1})
+            async for doc in cursor:
+                res[doc["_id"]] = doc.get("value")
+    except Exception as e:
+        logger.warning(f"Failed to fetch all settings in batch: {e}")
+    return res
 
 
 async def _async_get(key: str) -> Optional[Any]:
@@ -415,6 +434,11 @@ async def aset_setting(key: str, value: Any, by: str = "admin") -> bool:
                       "updated_at": utcnow(),
                       "updated_by": by}},
             upsert=True)
+        try:
+            from app.settings.registry import invalidate_public_config_cache
+            invalidate_public_config_cache()
+        except Exception:
+            pass
         return True
     except Exception as e:
         logger.warning(f"Failed to persist setting {key}: {e}")

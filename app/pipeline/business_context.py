@@ -48,8 +48,8 @@ GENERIC_REQUIREMENT_TERMS = [
     "searching", "interested in",
 ]
 
-PROFILE_LIMITS = {"custom_industry": 80, "description": 600, "offerings": 600,
-                  "target_customers": 400, "lead_criteria": 600}
+PROFILE_LIMITS = {"custom_industry": 80, "business_type": 80, "custom_business_type": 80,
+                  "description": 600, "offerings": 600, "target_customers": 400, "lead_criteria": 600}
 MAX_REQUIREMENT_TERMS = 100
 
 BUILTIN_INDUSTRIES: Dict[str, Dict[str, Any]] = {
@@ -398,12 +398,18 @@ def build_context(org: Dict[str, Any], db=None) -> Dict[str, Any]:
         "industry_key": key,
         "industry_name": custom_label or item["name"],
         "custom_industry": custom_label,
+        "business_type": clean_text(profile.get("business_type"), PROFILE_LIMITS["business_type"]),
+        "custom_business_type": clean_text(profile.get("custom_business_type"), PROFILE_LIMITS["custom_business_type"]),
         "organization_name": clean_text((org or {}).get("name"), 120),
         "description": clean_text(profile.get("description"), PROFILE_LIMITS["description"]),
         "offerings": clean_text(profile.get("offerings"), PROFILE_LIMITS["offerings"]),
         "target_customers": clean_text(profile.get("target_customers"), PROFILE_LIMITS["target_customers"]),
+        "target_customer_types": [clean_text(t, 60) for t in (profile.get("target_customer_types") or []) if t],
+        "primary_offerings": [clean_text(o, 80) for o in (profile.get("primary_offerings") or []) if o],
         "lead_criteria": clean_text(profile.get("lead_criteria"), PROFILE_LIMITS["lead_criteria"]),
         "custom_terms": clean_terms(profile.get("requirement_terms")),
+        "active_keywords": clean_terms(settings.get("lead_keywords") or profile.get("active_keywords")),
+        "excluded_keywords": clean_terms(settings.get("lead_exclude_keywords") or profile.get("excluded_keywords")),
         "industry_terms": list(item.get("requirement_terms") or []),
         "category_keys": list(item.get("category_keys") or []),
         "default_keywords": list(item.get("default_keywords") or []),
@@ -435,16 +441,29 @@ def context_prompt_text(ctx: Optional[Dict[str, Any]]) -> str:
     """One-line business context for the model (``{{business_category}}``)."""
     if not ctx:
         return ""
-    parts = [f"Industry: {ctx.get('industry_name') or 'General'}"]
+    ind = ctx.get("industry_name") or ctx.get("industry") or "General"
+    parts = [f"Industry: {ind}"]
+    btype = ctx.get("business_type_name") or ctx.get("custom_business_type") or ctx.get("business_type")
+    if btype:
+        parts.append(f"Business Type: {btype}")
     for label, field in (("Business", "description"), ("Offers", "offerings"),
                          ("Ideal customers", "target_customers"),
                          ("A qualified lead", "lead_criteria")):
         if ctx.get(field):
             parts.append(f"{label}: {ctx[field]}")
+    if ctx.get("target_customer_types"):
+        parts.append("Targeting: " + ", ".join(ctx["target_customer_types"]))
+    if ctx.get("primary_offerings"):
+        parts.append("Key Offerings: " + ", ".join(ctx["primary_offerings"][:10]))
     if not ctx.get("lead_criteria") and ctx.get("ai_guidance"):
         parts.append(f"A qualified lead: {ctx['ai_guidance']}")
-    if ctx.get("custom_terms"):
-        parts.append("Relevant terms: " + ", ".join(ctx["custom_terms"][:30]))
+    terms = list(ctx.get("custom_terms") or []) + list(ctx.get("active_keywords") or []) + list(ctx.get("lead_keywords") or [])
+    if terms:
+        unique_terms = []
+        for t in terms:
+            if t and t not in unique_terms:
+                unique_terms.append(t)
+        parts.append("Relevant terms: " + ", ".join(unique_terms[:30]))
     return ". ".join(p.rstrip(".") for p in parts) + "."
 
 
@@ -473,6 +492,8 @@ def json_safe(text: str) -> str:
 def clean_profile(body: Dict[str, Any]) -> Dict[str, Any]:
     out = {f: clean_text(body.get(f), lim) for f, lim in PROFILE_LIMITS.items()}
     out["requirement_terms"] = clean_terms(body.get("requirement_terms"))
+    out["target_customer_types"] = [clean_text(t, 60) for t in (body.get("target_customer_types") or []) if t][:10]
+    out["primary_offerings"] = [clean_text(o, 80) for o in (body.get("primary_offerings") or []) if o][:20]
     return out
 
 
