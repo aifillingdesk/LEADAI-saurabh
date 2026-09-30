@@ -283,15 +283,16 @@ Status legend: ✅ Implemented · 🟡 Partially Implemented · ⬜ Planned
 | Admin Leads routes (search, dossier, notes, bulk actions) | ✅ | `app/api/routes/admin_leads.py` |
 | Admin Analytics routes (SaaS overview, funnel, platform comparison) | ✅ | `app/api/routes/admin_analytics.py` |
 
-### Not Implemented (Planned)
+### Implementation Status Notes
 
-| Feature | Status |
-| --- | --- |
-| API rate limiting (provider 429s are handled locally) | ⬜ |
-| Webhooks / background job queue (Celery/RQ) | ⬜ |
-| Export to Excel / Sheets / CRM | ⬜ |
-| More social platforms (Twitter/X, Pinterest) | ⬜ |
-| Frontend tests / CI pipeline | ⬜ |
+| Feature | Status | Notes / Location |
+| --- | :---: | --- |
+| API Rate Limiting | ✅ | Dual-layer: in-memory sliding window (30 req/min) on search API (`app/api/routes/search.py`); MongoDB-backed persistent rate limiter (`rate_limits`) for auth, login brute-force, signups, and contact forms (`app/auth/rate_limit.py`). |
+| Stripe Billing Integration | 🟡 Partial | Mock payment gateway active by default (`MOCK_PAYMENTS_ENABLED=true`); Stripe checkout session generation and HMAC webhook verification implemented (`app/billing/`). Live card charge requires live keys. |
+| Priority Support & SLAs | 🟡 Partial | Full in-app ticketing and support center in Super Admin and Org Admin (`app/api/routes/org_admin.py`); external ticketing and formal enterprise SLA webhooks planned. |
+| Public REST API & API Keys | ⬜ Planned | Scheduled for Phase 6 (API key generation, HMAC validation, developer portal, per-org quotas matching Business plan). |
+| Background Job Queue (Celery/RQ/Arq) | ⬜ Planned | Current jobs run in managed background asyncio tasks/threads with live DB status; distributed Redis queue scheduled for Phase 5. |
+| CRM Connectors (HubSpot, Zoho, Sheets) | ⬜ Planned | Direct export to CSV/JSON active; automated CRM push scheduled for Phase 6. |
 
 ---
 
@@ -339,7 +340,7 @@ flowchart TD
     WEB -->|"GET /api/public/*"| API
     WEB -->|"POST /api/public/contact"| API
 
-    API --> DB[(MongoDB 'LeadAI'<br/>20+ collections)]
+    API --> DB[(MongoDB 'LeadAI'<br/>38 collections)]
     API -->|in-process background thread| URS[URL Search Pipeline<br/>app/social/url_search.py]
 
     URS --> UDET[URL Detector<br/>app/social/url_detector.py]
@@ -589,18 +590,18 @@ lead_apify/
 │   ├── settings/
 │   │   └── registry.py            # Settings schema registry (30 admin view definitions, validation, font/theme options)
 │   └── static/
-│       ├── super-admin.html       # Super Admin Portal shell (/superadmin, GLOBAL badge, 18 views)
-│       ├── super-admin.js         # Super Admin Portal SPA frontend (3,134 lines): org management, demo approvals, health, CMS, plans
+│       ├── super-admin.html       # Super Admin Portal shell (/superadmin, GLOBAL badge)
+│       ├── super-admin.js         # Super Admin Portal SPA frontend (29 routes across 7 groups): org management, demo approvals, health, CMS, plans
 │       ├── super-admin.css        # Super Admin design system (dark modern theme with global control accents)
-│       ├── org-admin.html         # Organization Admin Portal shell (/org-admin or /admin)
-│       ├── org-admin.js           # Org Admin Portal SPA frontend (2,630 lines): overview, team, business profile, keyword library, scraped data
+│       ├── org-admin.html         # Organization Admin Portal shell (/org-admin)
+│       ├── org-admin.js           # Org Admin Portal SPA frontend (21 routes): overview, team, business profile, keyword library, scraped data
 │       ├── org-admin.css          # Org Admin Portal design system (tenant branding support)
-│       ├── admin.html             # Platform Console shell (/admin, 30+ platform views)
-│       ├── admin.js               # Platform Console SPA frontend (4,725 lines): jobs, platforms, Apify, AI, logs, security
-│       ├── admin.css              # Platform Console design system (2,097 lines)
+│       ├── admin.html             # Platform Console shell (/admin, 29 navigation views)
+│       ├── admin.js               # Platform Console SPA frontend: jobs, platforms, Apify, AI, logs, security
+│       ├── admin.css              # Platform Console design system
 │       ├── index.html             # User Portal / Workspace shell (/dashboard or /): search, pages, posts, comments/leads, SaaS modals
-│       ├── app.js                 # User Portal SPA frontend (1,385 lines): URL search polling, memory, breadcrumbs, lead dossier, presets
-│       ├── styles.css             # User Portal design system (2,432 lines): glassmorphic accents, ambient orbs, responsive layouts
+│       ├── app.js                 # User Portal SPA frontend (11 views): URL search polling, memory, breadcrumbs, lead dossier, presets
+│       ├── styles.css             # User Portal design system: glassmorphic accents, ambient orbs, responsive layouts
 │       ├── website.html           # Public marketing website: hero, features, how-it-works, dynamic pricing, dynamic FAQ, CTA, footer
 │       ├── website.js             # Public website client: dynamic DB pricing & FAQ fetch, interactive demo request modal, smooth scroll
 │       ├── website.css            # Public website responsive styling
@@ -775,6 +776,20 @@ LeadAI seamlessly integrates four distinct user surfaces into one automated, end
 
 ## 7. UI Pages & Panels
 
+### Portal Access & URL Disambiguation Matrix
+
+| Portal | Canonical URL Route | Auth Scope | Access Role Required | Primary Capabilities | API Route Prefix |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **User Portal** | `/` or `/dashboard` | `scope="site"` | Organization members, admins, owners | Social URL search, lead cards & dossier, CSV exports, team & billing modals | `/api/*`, `/api/me/*` |
+| **Organization Admin** | `/org-admin` | `scope="site"` | `owner` or `admin` of confirmed org | Tenant overview, team management, business profile, keyword library, lead rules, org analytics, exports, audit | `/api/org-admin/*` |
+| **Platform Console** | `/admin` | `scope="admin"` | Platform staff (`admin`, `super_admin`, `viewer`, `support`) | Platform operations, Apify jobs, actors, global lead inventory, platform analytics, system settings | `/api/admin/*` |
+| **Super Admin Portal** | `/superadmin` | `scope="admin"` | `super_admin` only | Global governance: organizations, subscriptions, demo queue, token allocations, industries, impersonation | `/api/super-admin/*` |
+| **Public Website** | `/website` | Public (No auth) | Anyone / Prospective customers | Marketing landing, dynamic CMS pricing & FAQ, features, contact form, demo request | `/api/public/*` |
+
+> **Graceful Redirect Rule**: If an authenticated organization owner or admin enters `/admin`, the server automatically redirects them via HTTP 303 to `/org-admin`. Non-admin members are redirected to `/dashboard`. Platform staff entering `/admin` are granted immediate access.
+
+---
+
 ### 7A. Login Page (`/login` — `login.html`)
 
 **Two-scope login** (site vs admin):
@@ -783,10 +798,10 @@ LeadAI seamlessly integrates four distinct user surfaces into one automated, end
 | --- | --- |
 | **Logo badge** | Amber gradient square with ✦ icon, brand name "LeadAI", tagline "AI Lead Intelligence" |
 | **Heading** | "Welcome Back" (site) / "Admin Portal" (admin) — driven by `AppConfig` |
-| **Email field** | Input with email icon, live validation (green checkmark on valid format), placeholder "Admin@gmail.com" (site) / "Admin123@gmail.com" (admin) |
+| **Email field** | Input with email icon, live validation (green checkmark on valid format), placeholder "admin@gmail.com" (site) / "admin123@gmail.com" (admin) |
 | **Password field** | Input with lock icon, **eye button** to toggle visibility (show/hide password) |
 | **Remember Me** | Checkbox (amber gradient when checked), persists email in localStorage |
-| **Forgot Password** | Link → shows info message "Contact your administrator" (no self-reset flow) |
+| **Forgot Password** | Link → navigates to `/forgot-password` (served by `reset-password.html`) with self-service token reset |
 | **Error banner** | Red banner with shake animation, shows validation/login errors |
 | **Sign In button** | Amber gradient, arrow icon, loading spinner state, disabled during submission |
 | **Footer** | "Protected by secure authentication · LeadAI © 2026" |
@@ -803,10 +818,10 @@ Single-page application with **4 view screens** navigated via breadcrumb, plus *
 | Element | Description |
 | --- | --- |
 | **URL Search Input** | Text input for social media URL, hint text "Waiting for URL…" → "Ready to analyze — platform auto-detected" |
-| **Industry & Domain Selector** | Guided dropdown populated from the 22-industry Domain Intelligence catalog (`GET /api/business-context/catalog`). Selecting an industry dynamically adapts keyword suggestions and AI lead qualification criteria |
+| **Industry & Domain Context** | Auto-inherited from the organization's business profile (`app/pipeline/business_context.py`), dynamically driving keyword suggestions and AI qualification rules |
 | **Search Presets Dropdown** | Quick-select tenant-scoped search presets (`GET /api/search-presets`). Includes "Save Current as Preset" modal and preset deletion |
 | **Max Posts input** | Number input (default 20, range 1–100) |
-| **Comments Per Post input** | Number input (default 20, range 1–500), synced with comments view |
+| **Comments Per Post input** | Number input (default 30, range 1–500), synced with comments view |
 | **Filter Mode** | Radio buttons: All (no filter), Preset (select from categories/rules), Custom (manual keywords) |
 | **Preset selector** | Dropdown with category presets, industry keywords, and active organization rules |
 | **Custom keywords** | Include keywords text input, Exclude keywords text input, Category checkboxes, Match mode dropdown (any/all) |
@@ -1106,13 +1121,13 @@ Permissions are resolved from the role (owner/admin/manager/member/viewer) plus 
 
 ## 10. Super Admin Portal
 
-**URL**: `/superadmin` — HTML shell `app/static/super-admin.html` (409 lines) + SPA `app/static/super-admin.js` (3,134 lines) + API split across three routers:
+**URL**: `/superadmin` — HTML shell `app/static/super-admin.html` + SPA `app/static/super-admin.js` (29 routes across 7 functional groups) + API split across three routers:
 
 | Router | Prefix | Scope |
 | --- | --- | --- |
-| `app/api/routes/super_admin.py` (1,029 lines) | `/api/super-admin` | Global dashboard, organizations lifecycle, platform users, subscriptions, plan catalog CRUD, audit logs, impersonation |
-| `app/api/routes/super_admin_platform.py` (1,930 lines) | `/api/super-admin/platform` | System health, integrations & secrets, platform analytics, security center, feature flags, global reports, support tooling |
-| `app/api/routes/super_admin_lifecycle.py` (420 lines) | `/api/super-admin/lifecycle` | Demo queue & approvals, subscription queue, payment confirmation, token allocations, notification dispatch, role matrix, industry taxonomy |
+| `app/api/routes/super_admin.py` | `/api/super-admin` | Global dashboard, organizations lifecycle, platform users, subscriptions, plan catalog CRUD, audit logs, impersonation |
+| `app/api/routes/super_admin_platform.py` | `/api/super-admin/platform` | System health, integrations & secrets, platform analytics, security center, feature flags, global reports, support tooling |
+| `app/api/routes/super_admin_lifecycle.py` | `/api/super-admin/lifecycle` | Demo queue & approvals, subscription queue, payment confirmation, token allocations, notification dispatch, role matrix, industry taxonomy |
 
 The **global** platform super admin — the only identity with cross-organization authority. Authenticated exclusively via the environment credentials (`SUPERADMIN_EMAIL` / `SUPERADMIN_PASSWORD` in `.env`); no database account can hold or tamper with this role. Every single action is permanently recorded in the global immutable audit log.
 
@@ -2140,7 +2155,7 @@ flowchart LR
     AG --> PROV[PROVIDER — Apify actors]
     PROV --> RAW[RAW ACTOR DATA]
     RAW --> NORM[NORMALIZERS map_*_item]
-    NORM --> DB[(MONGODB — 11 collections)]
+    NORM --> DB[(MONGODB — 38 collections)]
     NORM --> CF[COMMENT FILTER comment_filter.py]
     CF --> AI[AI ANALYSIS comment_ai]
     AI --> QUAL[LEAD QUALIFICATION score / priority / is_lead]
@@ -2219,7 +2234,7 @@ Template file: `.env.example`.
 | `LINKEDIN_ACTOR_ID` | Actors | No | `harvestapi/linkedin-company` | Yes | No | Apify actor slug used for LinkedIn company pages |
 | `LINKEDIN_POSTS_ACTOR_ID`| Actors | No | `harvestapi/linkedin-company-posts` | Yes | No | Apify actor slug used for LinkedIn company posts |
 | `GEMINI_API_KEY` | AI | No² | — | No | Yes | Google Gemini API key for contextual comment analysis and lead qualification |
-| `GEMINI_MODEL` | AI | No | `gemini-2.5-flash` | Yes | No | Google Gemini model identifier (`gemini-2.5-flash`, `gemini-1.5-pro`, etc.) |
+| `GEMINI_MODEL` | AI | No | `gemini-2.5-flash` | Yes | No | Google Gemini model identifier (`gemini-2.5-flash`, `gemini-2.5-pro`) |
 | `STRIPE_SECRET_KEY` | Billing | No³ | — | No | Yes (Locked) | Stripe API Secret Key (`sk_live_...` or `sk_test_...`) |
 | `STRIPE_PUBLISHABLE_KEY`| Billing | No | — | No | No | Stripe Publishable Key for frontend Stripe Elements checkout integration |
 | `STRIPE_WEBHOOK_SECRET`| Billing | No³ | — | No | Yes (Locked) | Stripe Webhook Signing Secret (`whsec_...`) for subscription lifecycle events |
@@ -2281,8 +2296,8 @@ Stored in MongoDB `system_settings` collection, configurable via Admin Control C
 | `scoring.contact_phone` | 15 | Phone contact points |
 | `scoring.contact_email` | 10 | Email contact points |
 | `scoring.spam_penalty` | 20 | Spam penalty points |
-| `scoring.hot_min` | 70 | Hot lead threshold |
-| `scoring.warm_min` | 40 | Warm lead threshold |
+| `scoring.hot_min` | 80 | Hot lead threshold (min score) |
+| `scoring.warm_min` | 50 | Warm lead threshold (min score) |
 
 ### Comment Intelligence
 
@@ -2303,7 +2318,7 @@ Stored in MongoDB `system_settings` collection, configurable via Admin Control C
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `security.session_timeout_hours` | 24 | Session timeout |
+| `security.session_timeout_hours` | 168 | Session timeout (7 days / 168 hours, matches SESSION_TTL_DAYS) |
 | `security.login_protection` | true | Rate-limit logins |
 | `security.audit_logging` | true | Record admin actions |
 
@@ -2335,7 +2350,7 @@ Stored in MongoDB `system_settings` collection, configurable via Admin Control C
 ### Backend Installation
 
 ```bash
-git clone https://github.com/saurabh95710/LEADAI.git
+git clone https://github.com/saurabh95710/LEADAI.git lead_apify
 cd lead_apify
 
 python -m venv .venv
@@ -2684,29 +2699,49 @@ python -m pytest tests/test_http_endpoints.py -v
 python -m pytest -q
 ```
 
-**1,368 tests** (full suite; highlights below):
+**1,400 tests collected across 39 test files** (`pytest --collect-only`):
 
-| Category | Count | Test File |
-|----------|-------|-----------|
-| URL detection + canonicalization | 56 | `test_url_search.py` |
-| Lead qualification rules | 28 | `test_qualification.py` |
-| Authentication + sessions | 32 | `test_auth.py` |
-| Admin panel views | 45 | `test_admin_panel.py` |
-| Security (CSRF, headers, injection) | 38 | `test_security.py` |
-| Comment filter pipeline | 42 | `test_comment_filter.py` |
-| AI intelligence analysis | 35 | `test_ai_intelligence.py` |
-| Lead lifecycle state machine | 30 | `test_lead_lifecycle.py` |
-| Post normalization | 25 | `test_post_normalization.py` |
-| Settings CRUD | 28 | `test_settings.py` |
-| Environment variables | 32 | `test_envvars.py` |
-| Analytics export | 26 | `test_analytics_export.py` |
-| Admin panel hardening | 40 | `test_admin_panel_hardening.py` |
-| Admin data integrity | 35 | `test_admin_data.py` |
-| Scalability + production readiness | 30 | `test_scalability_production.py` |
-| HTTP/API endpoints (auth, roles, validation) | 76 | `test_http_endpoints.py` |
-| **Log parser (structured parsing, redaction, multiline)** | **117** | **`test_log_parser.py`** |
-| MongoDB index idempotency | 6 | `test_http_endpoints.py` |
-| Industries & business context (catalog, business profile, AI context, rule vocabulary, industry filter, isolation) | 13 | `test_industry_context.py` |
+| Test File | Tests | Coverage Focus |
+| :--- | :---: | :--- |
+| `tests/test_ai_intelligence.py` | 135 | Dual-stage AI analysis, prompt templating, Hinglish/currency parsing, rule fallbacks |
+| `tests/test_log_parser.py` | 117 | Structured log parser, multiline stack traces, secret redaction, log streaming |
+| `tests/test_step3_verification.py` | 86 | End-to-end multi-tenant flows, invitations, role boundaries, tenant scoping |
+| `tests/test_analytics_export.py` | 84 | Time-series aggregations, CSV generation, CSV sanitization, tenant isolation |
+| `tests/test_http_endpoints.py` | 80 | Full OpenAPI endpoints response codes, headers, and parameter validation |
+| `tests/test_lead_lifecycle.py` | 76 | Lead state machine (new → contacted → qualified → converted), history, notes |
+| `tests/test_admin_panel_hardening.py` | 73 | Admin input validation, injection protection, actor override constraints |
+| `tests/test_post_normalization.py` | 63 | Social post normalization across FB/IG/YT/LI, caption parsing, engagement |
+| `tests/test_scalability_production.py` | 54 | Concurrency, connection pool boundaries, graceful task shutdowns, rate limits |
+| `tests/test_url_search.py` | 53 | URL detector canonicalization, platform error classification, fallback pages |
+| `tests/test_step1_security.py` | 49 | Authentication gates, password policy, CSRF, security headers, XSS protections |
+| `tests/test_improvements_user.py` | 44 | User portal search presets, URL search runs, lead dossier, self-service profile |
+| `tests/test_comment_filter.py` | 33 | Comment filter modes (all/preset/custom), keyword matching, regex rules |
+| `tests/test_improvements_org.py` | 31 | Org admin overview metrics, team member permissions, keyword library |
+| `tests/test_security.py` | 29 | Cookie HMAC signatures, brute force protection, lockout escalation |
+| `tests/test_user_portal.py` | 27 | User portal workflows, quota enforcement, search isolation |
+| `tests/test_org_admin.py` | 26 | Org Admin Portal: access control, tenant data isolation, CSV exports, tickets |
+| `tests/test_super_admin_portal2.py` | 26 | Super Admin extended lifecycle: demo approvals, token quotas, org status |
+| `tests/test_improvements_platform.py` | 25 | Platform admin operations, Apify actor overrides, system settings |
+| `tests/test_superadmin_portal.py` | 25 | Super Admin Portal: global dashboard, org lifecycle, impersonation exits |
+| `tests/test_lead_quality.py` | 23 | Deterministic scoring formula, priority levels, Hot/Warm/Cold thresholds |
+| `tests/test_envvars.py` | 22 | Three-layer environment variable management, DB overrides, env panel |
+| `tests/test_audit_fixes.py` | 21 | Regression audit verification, edge case sanitization, error resilience |
+| `tests/test_auth.py` | 20 | Login flows, password hashing with bcrypt, session token generation |
+| `tests/test_saas_billing_entitlements.py` | 19 | SaaS billing plans, quota meters, entitlement rejection on limit |
+| `tests/test_public_website2.py` | 17 | Public CMS website endpoints, dynamic pricing/FAQ fetch, contact rate limits |
+| `tests/test_settings.py` | 17 | System settings registry CRUD, in-memory TTL caching, change history |
+| `tests/test_admin_panel.py` | 16 | Platform Console views, job cancellation, platform toggles |
+| `tests/test_qualification.py` | 16 | Lead qualification rules, comment relevance thresholds, contact extraction |
+| `tests/test_saas_multitenancy.py` | 15 | Multi-tenant organization scoping, cross-tenant access rejection |
+| `tests/test_step2_integration.py` | 15 | Integrated customer workflow: URL search → comment scrape → qualification |
+| `tests/test_search_isolation.py` | 14 | Cross-tenant search history isolation and query validation |
+| `tests/test_industry_context.py` | 13 | 22-industry catalog, business context prompt injection, custom categories |
+| `tests/test_superadmin_env.py` | 9 | Super Admin environment variables & secret management |
+| `tests/test_final_flow.py` | 9 | End-to-end acceptance verification across all four user portals |
+| `tests/test_phase1_perf_hardening.py` | 7 | Compression middleware, immutable asset caching, HTML ETag, batch config |
+| `tests/test_e2e_lifecycle.py` | 4 | Complete lifecycle: demo request → approval → search → lead transition |
+| `tests/test_improvements_integration.py` | 4 | Real-time event notifications, email outbox queuing |
+| `tests/test_admin_data.py` | 3 | Scraped pages, posts, and comments admin data endpoints |
 
 ---
 
@@ -2853,7 +2888,7 @@ EVENTS (app/events/ — email delivery, notification dispatch, security events)
   ↓
 CMS SERVICE (app/cms/service.py — pages, FAQ, testimonials, navigation, media)
   ↓
-MONGODB (20+ collections)
+MONGODB (38 collections)
   ↓
 API RESPONSE (serialized docs, live status)
   ↓
