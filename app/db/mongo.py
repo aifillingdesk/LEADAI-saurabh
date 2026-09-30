@@ -203,6 +203,33 @@ def ensure_indexes():
         _create_index_safe(db.facebook_comments, [("keyword_filter_status", ASCENDING)])
         _create_index_safe(db.facebook_comments, [("created_at", ASCENDING)])
 
+        # ── Platform-Neutral Social Collections (Phase 3) ───────────────────
+        _create_index_safe(db.social_pages,
+            [("page_url", ASCENDING), ("search_run_id", ASCENDING)], unique=True, sparse=True)
+        _create_index_safe(db.social_pages,
+            [("facebook_url", ASCENDING), ("search_run_id", ASCENDING)], sparse=True)
+        _create_index_safe(db.social_pages, [("search_run_id", ASCENDING)])
+        _create_index_safe(db.social_pages, [("category", ASCENDING)])
+        _create_index_safe(db.social_pages, [("platform", ASCENDING)])
+        _create_index_safe(db.social_pages, [("created_at", ASCENDING)])
+        _create_index_safe(db.social_pages, [("organization_id", ASCENDING), ("created_at", ASCENDING)])
+        _create_index_safe(db.social_pages, [("organization_id", ASCENDING), ("page_url", ASCENDING)])
+
+        _create_index_safe(db.social_posts,
+            [("post_url", ASCENDING), ("page_ref", ASCENDING)], unique=True, sparse=True)
+        _create_index_safe(db.social_posts, [("page_ref", ASCENDING)])
+        _create_index_safe(db.social_posts, [("platform", ASCENDING)])
+        _create_index_safe(db.social_posts, [("search_run_id", ASCENDING)])
+        _create_index_safe(db.social_posts, [("created_at", ASCENDING)])
+        _create_index_safe(db.social_posts, [("organization_id", ASCENDING), ("page_ref", ASCENDING)])
+
+        _create_index_safe(db.social_comments, [("comment_url", ASCENDING)])
+        _create_index_safe(db.social_comments, [("post_ref", ASCENDING)])
+        _create_index_safe(db.social_comments, [("search_run_id", ASCENDING)])
+        _create_index_safe(db.social_comments, [("platform", ASCENDING)])
+        _create_index_safe(db.social_comments, [("created_at", ASCENDING)])
+        _create_index_safe(db.social_comments, [("organization_id", ASCENDING), ("post_ref", ASCENDING)])
+
         _create_index_safe(db.ai_comments, [("comment_ref", ASCENDING)], unique=True)
         _create_index_safe(db.ai_comments, [("is_lead", ASCENDING)])
         _create_index_safe(db.ai_comments, [("lead_score", ASCENDING)])

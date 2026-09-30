@@ -85,6 +85,15 @@ def is_superadmin_email(email: Optional[str]) -> bool:
 def _verify_secret(password: str, secret: str) -> bool:
     if not password or not secret:
         return False
+    s = get_settings()
+    is_prod = str(getattr(s, "env", "")).strip().lower() in ("production", "prod")
+    if is_prod:
+        if not _BCRYPT.match(secret):
+            logger.error(
+                "SUPERADMIN_PASSWORD must be a bcrypt hash ($2b$... or $2a$...) when ENV=production. "
+                "Plaintext or legacy SHA-256 hashes are strictly refused in production."
+            )
+            return False
     if _BCRYPT.match(secret):
         import bcrypt
         try:
@@ -132,11 +141,20 @@ def config_status() -> Dict[str, Any]:
     s = get_settings()
     if managed_by_env():
         pw = env_superadmin_password()
-        is_hash = bool(_BCRYPT.match(pw) or _SHA256_HEX.match(pw))
-        return {"configured": True, "source": "SUPERADMIN_EMAIL",
-                "email_valid": bool(_EMAIL.match(env_superadmin_email())),
-                "password_is_hash": is_hash,
-                "password_too_short": (not is_hash) and len(pw) < MIN_PASSWORD_LENGTH}
+        is_bcrypt = bool(_BCRYPT.match(pw))
+        is_hash = is_bcrypt or bool(_SHA256_HEX.match(pw))
+        is_prod = str(getattr(s, "env", "")).strip().lower() in ("production", "prod")
+        stat = {
+            "configured": True, "source": "SUPERADMIN_EMAIL",
+            "email_valid": bool(_EMAIL.match(env_superadmin_email())),
+            "password_is_hash": is_hash,
+            "password_is_bcrypt": is_bcrypt,
+            "password_too_short": (not is_hash) and len(pw) < MIN_PASSWORD_LENGTH,
+        }
+        if is_prod and not is_bcrypt:
+            stat["configured"] = False
+            stat["problem"] = "SUPERADMIN_PASSWORD must be a bcrypt hash in production"
+        return stat
     if env_superadmin_email() and not env_superadmin_password():
         return {"configured": False, "source": "SUPERADMIN_EMAIL",
                 "problem": "SUPERADMIN_PASSWORD is empty"}

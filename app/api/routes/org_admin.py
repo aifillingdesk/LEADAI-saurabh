@@ -1087,7 +1087,7 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
     an active member; status changes must be valid transitions (others are
     reported in ``skipped``). One ``update_many`` per group, one audit entry."""
     from app.api.routes.search import (
-        LEAD_PRIORITIES, LEAD_STATUSES as VALID_STATUSES, VALID_TRANSITIONS, _resolve_assignee)
+        LEAD_PRIORITIES, LEAD_STATUSES as VALID_STATUSES, validate_transition, _resolve_assignee)
     from app.pipeline.lead_lifecycle import create_assignment_history_entry
     action = (body.action or "").strip().lower()
     if action not in ("assign", "status", "priority"):
@@ -1141,8 +1141,10 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
             if cur == value:
                 skipped.append({"id": lid, "reason": f"Already {value}"})
                 continue
-            if value not in VALID_TRANSITIONS.get(cur, ()):
-                skipped.append({"id": lid, "reason": f"Cannot move from {cur} to {value}"})
+            reason_text = (body.reason or "").strip()
+            valid, err = validate_transition(cur, value, reason=reason_text)
+            if not valid:
+                skipped.append({"id": lid, "reason": err})
                 continue
             groups.setdefault(cur, []).append(d["_id"])
         else:
@@ -1439,7 +1441,7 @@ async def get_business_summary(ctx: TenantContext = Depends(require_portal(P.SET
     profile = settings.get("business_profile") or {}
     active_kws = list(settings.get("lead_keywords") or profile.get("active_keywords") or [])
     excluded_kws = list(settings.get("lead_exclude_keywords") or profile.get("excluded_keywords") or [])
-    
+
     btype_key = effective.get("business_type")
     btype_name = effective.get("custom_business_type") or btype_key
     tax = INDUSTRY_TAXONOMY.get(effective["industry_key"])

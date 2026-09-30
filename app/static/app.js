@@ -2455,12 +2455,12 @@ async function openLeadDetail(commentId, event) {
 
   const validTransitions = {
     new: ["contacted", "qualified", "follow_up", "disqualified", "lost", "archived"],
-    contacted: ["qualified", "follow_up", "lost", "archived"],
-    qualified: ["follow_up", "converted", "lost", "archived"],
+    contacted: ["qualified", "follow_up", "disqualified", "lost", "archived"],
+    qualified: ["follow_up", "converted", "disqualified", "lost", "archived"],
     follow_up: ["contacted", "qualified", "converted", "lost", "archived"],
     converted: ["archived"],
-    lost: ["archived"],
-    disqualified: ["archived"],
+    lost: ["new", "contacted", "qualified", "follow_up", "archived"],
+    disqualified: ["new", "contacted", "qualified", "follow_up", "archived"],
     archived: []
   };
   const nextStatuses = validTransitions[currentStatus] || [];
@@ -2592,7 +2592,7 @@ async function openLeadDetail(commentId, event) {
         ${canManage && nextStatuses.length > 0 ? `
           <div class="inline-form">
             <label class="sr-only" for="leadStatusSelect">Change status</label>
-            <select id="leadStatusSelect" class="form-input form-input-sm">
+            <select id="leadStatusSelect" class="form-input form-input-sm" data-current-status="${esc(currentStatus)}">
               <option value="">Change status…</option>
               ${statusOptions}
             </select>
@@ -2656,9 +2656,17 @@ async function leadMutation(url, method, body, okMsg, leadId) {
 async function updateLeadStatus(leadId) {
   const select = $("leadStatusSelect");
   if (!select || !select.value) { toast("Choose a status first", "info"); return; }
+  const currentStatus = select.dataset.currentStatus || "";
+  let reason = "";
   if (["lost", "disqualified", "archived"].includes(select.value) &&
       !(await confirmAction({ title: `Mark this lead as ${LEAD_STATUS_LABELS[select.value].toLowerCase()}?`, message: "This is a closing status — the lead leaves your active pipeline.", confirmLabel: "Update status", danger: true }))) return;
-  await leadMutation(`/api/leads/${encodeURIComponent(leadId)}`, "PATCH", { lead_status: select.value }, "Status updated", leadId);
+  if (["lost", "disqualified"].includes(currentStatus) && ["new", "contacted", "qualified", "follow_up"].includes(select.value)) {
+    reason = window.prompt("Reason for reopening this lead (required):") || "";
+    if (!reason.trim()) { toast("A reason is required to reopen this lead", "warning"); return; }
+  }
+  const payload = { lead_status: select.value };
+  if (reason.trim()) payload.reason = reason.trim();
+  await leadMutation(`/api/leads/${encodeURIComponent(leadId)}`, "PATCH", payload, "Status updated", leadId);
 }
 async function addLeadNote(leadId) {
   const input = $("leadNoteInput");

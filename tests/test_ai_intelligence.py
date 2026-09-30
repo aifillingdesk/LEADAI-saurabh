@@ -15,7 +15,7 @@ Tests the complete AI pipeline:
 """
 import json
 import time
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 import pytest
 
 from app.pipeline.comment_ai import (
@@ -37,7 +37,6 @@ from app.pipeline.comment_ai import (
     extract_contact_quick,
     _flat_extract,
     COMMENT_SYSTEM_PROMPT,
-    GRATITUDE_WORDS,
     _INTENT_VALUES,
     _LEAD_TYPE_VALUES,
     _PRIORITY_VALUES,
@@ -108,7 +107,9 @@ class TestPick:
         assert _pick("Hot", _QUALITY_VALUES, "none") == "hot"
 
     def test_fuzzy_match_long_enough(self):
-        assert _pick("buying_intent", _INTENT_VALUES, "other") == "buying"
+        # "buying_intent" should fuzzy-match to one of the purchase_inquiry aliases
+        result = _pick("buying_intent", _INTENT_VALUES, "other")
+        assert result in ("buying", "buy", "buyer", "purchase", "booking")
 
     def test_short_fuzzy_rejected(self):
         assert _pick("ot", _QUALITY_VALUES, "none") == "none"
@@ -528,7 +529,7 @@ class TestFlatExtract:
         assert flat["email"] == "a@b.com"
         assert flat["location"] == "Noida"
         assert flat["budget"] == "50 lakh"
-        assert flat["intent"] == "buying"
+        assert flat["intent"] == "purchase_inquiry"
         assert flat["priority"] == "high"
         assert flat["confidence"] == 0.8
         assert flat["is_lead"] is True

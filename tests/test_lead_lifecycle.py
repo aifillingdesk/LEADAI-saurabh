@@ -13,14 +13,11 @@ Tests the complete lead lifecycle:
   - Concurrency
   - Security (XSS, IDOR, mass assignment)
 """
-import pytest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
 
 from app.pipeline.lead_lifecycle import (
     LEAD_STATUSES,
     TERMINAL_STATUSES,
-    VALID_TRANSITIONS,
     LEAD_PRIORITIES,
     FOLLOW_UP_STATUSES,
     STATUS_LABELS,
@@ -95,6 +92,9 @@ class TestStateMachine:
     def test_contacted_to_lost(self):
         assert can_transition("contacted", "lost") is True
 
+    def test_contacted_to_disqualified(self):
+        assert can_transition("contacted", "disqualified") is True
+
     def test_qualified_to_follow_up(self):
         assert can_transition("qualified", "follow_up") is True
 
@@ -132,13 +132,17 @@ class TestStateMachine:
         assert can_transition("converted", "contacted") is False
         assert can_transition("converted", "qualified") is False
 
-    def test_lost_cannot_go_back(self):
-        assert can_transition("lost", "new") is False
-        assert can_transition("lost", "contacted") is False
+    def test_lost_can_reopen(self):
+        assert can_transition("lost", "new") is True
+        assert can_transition("lost", "contacted") is True
+        assert can_transition("lost", "qualified") is True
+        assert can_transition("lost", "follow_up") is True
 
-    def test_disqualified_cannot_go_back(self):
-        assert can_transition("disqualified", "new") is False
-        assert can_transition("disqualified", "contacted") is False
+    def test_disqualified_can_reopen(self):
+        assert can_transition("disqualified", "new") is True
+        assert can_transition("disqualified", "contacted") is True
+        assert can_transition("disqualified", "qualified") is True
+        assert can_transition("disqualified", "follow_up") is True
 
 
 class TestValidateTransition:
@@ -166,6 +170,28 @@ class TestValidateTransition:
         valid, error = validate_transition("new", "invalid")
         assert valid is False
         assert "Invalid target status" in error
+
+    def test_reopen_lost_requires_reason(self):
+        valid, error = validate_transition("lost", "new")
+        assert valid is False
+        assert "requires a non-empty reason" in error
+
+        valid, error = validate_transition("lost", "new", reason="   ")
+        assert valid is False
+        assert "requires a non-empty reason" in error
+
+        valid, error = validate_transition("lost", "new", reason="Customer reached out again")
+        assert valid is True
+        assert error == ""
+
+    def test_reopen_disqualified_requires_reason(self):
+        valid, error = validate_transition("disqualified", "contacted")
+        assert valid is False
+        assert "requires a non-empty reason" in error
+
+        valid, error = validate_transition("disqualified", "contacted", reason="Criteria updated")
+        assert valid is True
+        assert error == ""
 
 
 class TestIsTerminal:

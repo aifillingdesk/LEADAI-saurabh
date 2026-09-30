@@ -54,6 +54,10 @@ from app.admin.audit import aaudit
 from app.db.mongo import get_async_db
 from app.db.models import utcnow
 from app.agent.search import _parse_iso, current_min_comments
+from app.pipeline.lead_lifecycle import (
+    LEAD_PRIORITIES,
+    validate_transition,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["agent"])
@@ -670,7 +674,7 @@ async def url_search_report(run_id: str, request: Request,
     leads = [c for c in comments if c.get("is_lead")]
     # Also include any qualified leads from ai_comments that may be outside the comments slice
     if post_ids:
-        existing_lead_ids = {l["id"] for l in leads}
+        existing_lead_ids = {lead["id"] for lead in leads}
         async for a in db.ai_comments.find(
                 _scoped(ctx, "ai_comments", {"post_ref": {"$in": post_ids}, "is_lead": True})) \
                 .sort("lead_score", -1).limit(500):
@@ -1285,21 +1289,6 @@ async def export_csv(
 # Lead Management API (Prompt 7)
 # ─────────────────────────────────────────────────────────────────────────────
 
-LEAD_STATUSES = ("new", "contacted", "qualified", "follow_up",
-                 "converted", "lost", "disqualified", "archived")
-TERMINAL_STATUSES = ("converted", "lost", "disqualified", "archived")
-VALID_TRANSITIONS = {
-    "new":         ("contacted", "qualified", "follow_up", "disqualified", "lost", "archived"),
-    "contacted":   ("qualified", "follow_up", "lost", "archived"),
-    "qualified":   ("follow_up", "converted", "lost", "archived"),
-    "follow_up":   ("contacted", "qualified", "converted", "lost", "archived"),
-    "converted":   ("archived",),
-    "lost":        ("archived",),
-    "disqualified": ("archived",),
-    "archived":    (),
-}
-LEAD_PRIORITIES = ("high", "medium", "low")
-
 
 def _lead_oid(lead_id: str) -> ObjectId:
     try:
@@ -1450,14 +1439,10 @@ async def update_lead(lead_id: str, body: dict, request: Request,
     new_status = body.get("lead_status")
     history_entry = None
     if new_status and new_status != current_status:
-        allowed = VALID_TRANSITIONS.get(current_status, ())
-        if new_status not in LEAD_STATUSES:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {new_status}")
-        if new_status not in allowed:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot transition from {current_status!r} to {new_status!r}"
-            )
+        reason_text = str(body.get("reason") or "").strip()
+        valid, err = validate_transition(current_status, new_status, reason=reason_text)
+        if not valid:
+            raise HTTPException(status_code=400, detail=err)
         updates["lead_status"] = new_status
         history_entry = {
             "from_status": current_status,
@@ -1465,7 +1450,7 @@ async def update_lead(lead_id: str, body: dict, request: Request,
             "changed_at": utcnow(),
             "changed_by": ctx.email,
             "changed_by_user_id": ctx.user_id,
-            "reason": body.get("reason", ""),
+            "reason": reason_text,
         }
 
     # Priority update

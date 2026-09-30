@@ -37,14 +37,14 @@ TERMINAL_STATUSES = ("converted", "lost", "disqualified", "archived")
 # An empty set means the status is terminal (no transitions out).
 
 VALID_TRANSITIONS: Dict[str, Tuple[str, ...]] = {
-    "new":         ("contacted", "qualified", "follow_up", "disqualified", "lost", "archived"),
-    "contacted":   ("qualified", "follow_up", "lost", "archived"),
-    "qualified":   ("follow_up", "converted", "lost", "archived"),
-    "follow_up":   ("contacted", "qualified", "converted", "lost", "archived"),
-    "converted":   ("archived",),
-    "lost":        ("archived",),
-    "disqualified": ("archived",),
-    "archived":    (),  # terminal — no transitions out
+    "new":          ("contacted", "qualified", "follow_up", "disqualified", "lost", "archived"),
+    "contacted":    ("qualified", "follow_up", "disqualified", "lost", "archived"),
+    "qualified":    ("follow_up", "converted", "disqualified", "lost", "archived"),
+    "follow_up":    ("contacted", "qualified", "converted", "lost", "archived"),
+    "converted":    ("archived",),
+    "lost":         ("new", "contacted", "qualified", "follow_up", "archived"),
+    "disqualified": ("new", "contacted", "qualified", "follow_up", "archived"),
+    "archived":     (),  # terminal — no transitions out
 }
 
 # ── Lead Priorities ──────────────────────────────────────────────────────────
@@ -75,8 +75,12 @@ def can_transition(current: str, target: str) -> bool:
     return target in allowed
 
 
-def validate_transition(current: str, target: str) -> Tuple[bool, str]:
-    """Validate a transition and return (valid, error_message)."""
+def validate_transition(current: str, target: str, reason: str = "") -> Tuple[bool, str]:
+    """Validate a transition and return (valid, error_message).
+
+    Reopening a lost or disqualified lead back into an active state requires
+    an explicit non-empty reason.
+    """
     if current == target:
         return True, ""
     if current not in LEAD_STATUSES:
@@ -85,6 +89,9 @@ def validate_transition(current: str, target: str) -> Tuple[bool, str]:
         return False, f"Invalid target status: {target}"
     if not can_transition(current, target):
         return False, f"Cannot transition from {current!r} to {target!r}"
+    if current in ("lost", "disqualified") and target in ("new", "contacted", "qualified", "follow_up"):
+        if not reason or not str(reason).strip():
+            return False, f"Reopening a {current} lead requires a non-empty reason"
     return True, ""
 
 
@@ -190,7 +197,7 @@ def check_overdue_follow_ups(follow_ups: List[Dict[str, Any]]) -> List[Dict[str,
 
 def should_create_lead(ai_analysis: Dict[str, Any]) -> bool:
     """Determine if an AI analysis qualifies as a lead.
-    
+
     Rules:
       - Must be useful (is_useful=True)
       - Must have is_lead=True (from signal analysis)
@@ -208,7 +215,7 @@ def should_create_lead(ai_analysis: Dict[str, Any]) -> bool:
 
 def initialize_lead_status(ai_analysis: Dict[str, Any]) -> str:
     """Determine initial lead status based on AI analysis.
-    
+
     Rules:
       - High priority + hot quality → "new" (strong lead)
       - Medium priority or warm → "new" (qualified lead)
@@ -220,7 +227,7 @@ def initialize_lead_status(ai_analysis: Dict[str, Any]) -> str:
 
 def get_lead_priority_from_score(lead_score: int, priority: str = "low") -> str:
     """Derive operational priority from AI score and priority.
-    
+
     This is an initial suggestion. Human can override.
     """
     if lead_score >= 80 or priority == "high":
@@ -237,11 +244,11 @@ def update_lead_status(
     reason: str = "",
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Update lead status with validation and history recording.
-    
+
     Returns (success, error_message, updated_lead).
     """
     current_status = lead.get("lead_status", "new")
-    valid, error = validate_transition(current_status, new_status)
+    valid, error = validate_transition(current_status, new_status, reason=reason)
     if not valid:
         return False, error, lead
 
