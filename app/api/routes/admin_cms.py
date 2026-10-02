@@ -28,6 +28,7 @@ from app.admin import audit as a
 from app.auth.roles import require_manager, require_super, require_viewer
 from app.cms import service as svc
 from app.cms.models import COLL_MEDIA, clean_list, utcnow
+from app.storage.service import get_storage_provider
 from app.db.mongo import get_async_db
 
 router = APIRouter(prefix="/api/admin/cms", tags=["admin_cms"])
@@ -357,10 +358,8 @@ async def upload_media(request: Request, file: UploadFile = File(...), admin: di
     if not content.startswith(_MAGIC[ext]):
         raise HTTPException(status_code=400, detail="File content does not match its type")
     safe_name = f"{uuid.uuid4().hex}{ext}"
-    os.makedirs(MEDIA_DIR, exist_ok=True)
-    with open(os.path.join(MEDIA_DIR, safe_name), "wb") as f:
-        f.write(content)
-    url = f"/static/media/{safe_name}"
+    storage = get_storage_provider()
+    url = await storage.upload_file(content, safe_name, mime, folder="media")
     db = await _db()
     doc = {"filename": safe_name, "original_name": svc.clean_text(file.filename or "", "filename", 200),
            "url": url, "mime": mime, "size": len(content), "uploaded_at": utcnow(),
@@ -377,10 +376,10 @@ async def delete_media(media_id: str, request: Request, admin: dict = Depends(re
     doc = await db[COLL_MEDIA].find_one({"_id": ObjectId(media_id)}) if ObjectId.is_valid(media_id) else None
     if not doc:
         raise HTTPException(status_code=404, detail="Media not found")
+    storage = get_storage_provider()
     filename = os.path.basename(doc.get("filename", ""))
-    dest = os.path.join(MEDIA_DIR, filename)
-    if filename and os.path.isfile(dest):
-        os.remove(dest)
+    target = doc.get("url") or filename
+    await storage.delete_file(target)
     await db[COLL_MEDIA].delete_one({"_id": doc["_id"]})
     await _audit("cms.media.delete", request, admin, resource_type="media", resource_id=media_id,
                  filename=filename)

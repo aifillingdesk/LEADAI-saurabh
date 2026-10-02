@@ -195,8 +195,18 @@ async def lifespan(app: FastAPI):
     # time-driven lifecycle: billing periods, cancellations, demo expiry
     from app.lifecycle.maintenance import start_background_sweeper
     sweeper = start_background_sweeper()
+
+    # Durable queue worker (Phase 5)
+    from app.queue.service import start_queue_worker, stop_queue_worker
+    queue_worker = None
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        queue_worker = start_queue_worker()
+
     yield
+
     sweeper.cancel()
+    if queue_worker:
+        stop_queue_worker()
     if startup_task and not startup_task.done():
         startup_task.cancel()
     # ── Graceful shutdown ──────────────────────────────────────────────

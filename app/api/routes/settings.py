@@ -25,6 +25,7 @@ from app.admin import settings as s
 from app.auth.roles import require_manager, require_viewer
 from app.db.mongo import get_async_db
 from app.settings import registry as R
+from app.storage.service import get_storage_provider
 
 logger = logging.getLogger(__name__)
 
@@ -304,14 +305,14 @@ async def upload_branding(request: Request, admin: dict = Depends(require_manage
         if _JS_DANGER_RE.search(content):
             raise HTTPException(status_code=400,
                                 detail="SVG contains scripts — rejected for safety")
-    os.makedirs(_UPLOAD_DIR, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.{ext}"
-    with open(os.path.join(_UPLOAD_DIR, filename), "wb") as fh:
-        fh.write(content)
+    storage = get_storage_provider()
+    mime = file.content_type or f"image/{ext}"
+    url = await storage.upload_file(content, filename, mime, folder="uploads/branding")
     await a.aaudit("settings.upload", "settings", user=admin,
                    ip=_client_ip(request),
                    details={"file": filename, "kind": ext})
-    return {"success": True, "url": f"/static/uploads/branding/{filename}"}
+    return {"success": True, "url": url}
 
 
 # ── Public config (no session required) ─────────────────────────────────────

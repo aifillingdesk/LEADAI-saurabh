@@ -121,7 +121,9 @@ def run_url_search(run_id: str, initial_url: str, max_posts: int = 20,
         )
 
     def should_abort():
-        return is_run_cancelled(run_id, db)
+        from app.queue.service import is_job_cancelled
+
+        return is_job_cancelled(run_id) or is_run_cancelled(run_id, db)
 
     def cancelled():
         mark_run_cancelled(run_id, db)
@@ -545,13 +547,43 @@ class UrlSearchThread(threading.Thread):
         self.user_id = user_id
 
     def run(self):
+        from app.queue.service import complete_job, enqueue_job, fail_job
+
         try:
-            run_url_search(self.run_id, self.url, self.max_posts,
-                           self.max_comments_per_post,
-                           organization_id=self.organization_id,
-                           created_by=self.created_by,
-                           user_id=self.user_id)
+            enqueue_job(
+                "url_search",
+                payload={
+                    "run_id": self.run_id,
+                    "url": self.url,
+                    "max_posts": self.max_posts,
+                    "max_comments_per_post": self.max_comments_per_post,
+                    "organization_id": self.organization_id,
+                    "created_by": self.created_by,
+                    "user_id": self.user_id,
+                },
+                run_id=self.run_id,
+                organization_id=self.organization_id,
+                created_by=self.created_by,
+                user_id=self.user_id,
+            )
+        except Exception as q_err:  # noqa: BLE001
+            logger.warning("[URL SEARCH] Could not enqueue durable job: %s", q_err)
+
+        try:
+            res = run_url_search(self.run_id, self.url, self.max_posts,
+                                 self.max_comments_per_post,
+                                 organization_id=self.organization_id,
+                                 created_by=self.created_by,
+                                 user_id=self.user_id)
+            try:
+                complete_job(self.run_id, res if isinstance(res, dict) else None)
+            except Exception as c_err:  # noqa: BLE001
+                logger.debug("Could not complete queue job: %s", c_err)
         except Exception as e:
+            try:
+                fail_job(self.run_id, str(e), can_retry=False)
+            except Exception as f_err:  # noqa: BLE001
+                logger.debug("Could not fail queue job: %s", f_err)
             logger.exception("[URL SEARCH] background run crashed")
             db = get_sync_db()
             if db is not None:

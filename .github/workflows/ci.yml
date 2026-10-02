@@ -1,0 +1,119 @@
+name: LeadAI CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'chore/**'
+      - 'feat/**'
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  lint-and-format:
+    name: Code Quality & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Linting Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy
+
+      - name: Run Ruff Linter
+        run: ruff check app tests scripts
+
+      - name: Run Mypy Type Checker
+        run: mypy app --ignore-missing-imports --no-strict-optional
+
+  test:
+    name: Test Suite (MongoDB & Redis Services)
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:6.0
+        ports:
+          - 27017:27017
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install boto3
+
+      - name: Run Pytest Suite
+        env:
+          MONGO_URI: mongodb://localhost:27017/test_leadai
+          MONGO_DB_NAME: test_leadai
+          REDIS_URL: redis://localhost:6379/0
+          ENVIRONMENT: test
+          SECRET_KEY: test_secret_key_ci_environment_32chars
+        run: |
+          pytest -v --tb=short
+
+  security-audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Audit Dependencies
+        run: |
+          pip-audit -r requirements.txt || true
+
+  frontend-validation:
+    name: Frontend Syntax & Integrity Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate JavaScript Syntax
+        run: |
+          find public static -name "*.js" -exec node --check {} +

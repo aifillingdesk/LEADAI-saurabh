@@ -71,7 +71,7 @@ _tasks: dict = {}
 _OWN = {"owner_field": "user_id", "legacy_email_field": "created_by"}
 _LEAD = {**_OWN, "assigned_field": "assigned_user_id"}
 
-# ── Per-user API rate limiting (in-memory) ─────────────────────────────────
+# ── Per-user API rate limiting (Redis -> in-memory) ───────────────────────
 _api_rate_limits: dict = {}
 _API_RATE_WINDOW = 60  # seconds
 _API_RATE_MAX = 30  # requests per window per user
@@ -81,10 +81,22 @@ _MAX_CONCURRENT_RUNS_PER_ORG = 5
 
 
 def _check_api_rate(user_key: str) -> bool:
-    """Return True if the user is within rate limits."""
+    """Return True if the user is within rate limits (Redis if available, else in-memory)."""
     import time as _t
+    key = str(user_key or "anonymous")
+    from app.queue.service import _get_redis
+    r = _get_redis()
+    if r:
+        try:
+            rkey = f"ratelimit:api:{key}"
+            current = r.incr(rkey)
+            if current == 1:
+                r.expire(rkey, _API_RATE_WINDOW)
+            return current <= _API_RATE_MAX
+        except Exception:
+            pass
+
     now = _t.time()
-    key = user_key or "anonymous"
     stamps = _api_rate_limits.get(key, [])
     stamps = [s for s in stamps if now - s < _API_RATE_WINDOW]
     if len(stamps) >= _API_RATE_MAX:
@@ -332,6 +344,8 @@ async def cancel_search_run(run_id: str, request: Request,
         _scoped(ctx, "search_history", {"_id": run["_id"]}), {"$set": {
             "cancel_requested": True, "message": "Cancelling search…",
             "updated_at": utcnow()}})
+    from app.queue.service import cancel_job
+    await asyncio.to_thread(cancel_job, run_id, cancelled_by=ctx.email)
     await _audit(ctx, request, "search.cancel_requested", "search",
                  resource_type="search_run", resource_id=run_id)
     return {"run_id": run_id, "status": "cancelling",
