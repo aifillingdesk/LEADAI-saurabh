@@ -56,6 +56,7 @@ from app.db.models import utcnow
 from app.agent.search import _parse_iso, current_min_comments
 from app.pipeline.lead_lifecycle import (
     LEAD_PRIORITIES,
+    LEAD_STATUSES,
     validate_transition,
 )
 
@@ -1805,13 +1806,14 @@ async def list_search_presets(
 ):
     """List saved search presets accessible to this user within the organization."""
     db = _db_or_503()
-    query = {
+    query: Dict[str, Any] = {
         "organization_id": org_match(ctx.organization_id),
-        "$or": [
+    }
+    if not ctx.can_view_all_org_data:
+        query["$or"] = [
             {"user_id": ctx.user_id},
             {"is_shared": True},
-        ],
-    }
+        ]
     cursor = db.search_presets.find(query).sort("created_at", -1)
     presets = []
     async for doc in cursor:
@@ -1847,18 +1849,20 @@ async def create_search_preset(
 @router.delete("/search-presets/{preset_id}")
 async def delete_search_preset(
     preset_id: str,
+    request: Request,
     ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
 ):
     """Delete a saved search preset (creator or admin only)."""
     db = _db_or_503()
     oid = _oid(preset_id)
-    preset = await db.search_presets.find_one({"_id": oid, "organization_id": org_match(ctx.organization_id)})
-    if not preset:
-        raise HTTPException(status_code=404, detail="Preset not found")
+    preset = await _find_or_404(
+        db, "search_presets", {"_id": oid}, ctx, request, detail="Preset not found"
+    )
 
     is_owner = preset.get("user_id") == ctx.user_id
     is_admin = ctx.has_permission(P.ORG_SETTINGS_WRITE)
     if not (is_owner or is_admin):
+        report_out_of_scope(request, ctx, "search_presets", preset)
         raise HTTPException(status_code=403, detail="Cannot delete presets created by other members")
 
     await db.search_presets.delete_one({"_id": oid})

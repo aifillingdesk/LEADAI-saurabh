@@ -156,7 +156,7 @@ _LOCATION_QUESTION_RE = re.compile(
     r"(?:(?:kaha|kahan|kidhar|where).*लोकेशन)",
     re.IGNORECASE)
 _INQUIRY_DETAIL_RE = re.compile(
-    r"\b(?:details?|detail|info|information|brochure|catalogue|catalog|site plan|"
+    r"\b(?:details?|detail|demo|trial|consultation|info|information|brochure|catalogue|catalog|site plan|"
     r"available|availability|hai kya|h kya|h ye|he kya|"
     r"mil\s+(?:jayega|jayegi|sakta|sakti)|(?:kaha|kidhar|kaise|kitne\s+me)\s+mileg[aei]|mileg[aei]\s+(?:kya|hai|he|h)|"
     r"emi|loan|down payment|dp|installment|kist|"
@@ -436,8 +436,12 @@ def _rule_extraction(analysis: Dict[str, Any], text: str, lower: str,
         analysis["lead_type"] = "prospect"
         analysis["priority"] = "high"
         analysis["confidence_score"] = 0.85
-        analysis["buyer"]["intent"] = "purchase_inquiry"
-        analysis["reason"] = "Comment provides direct contact details"
+        if price_q and "at any cost" not in lower:
+            analysis["buyer"]["intent"] = "pricing_inquiry"
+            analysis["reason"] = "Comment provides contact details and asks about price / rate"
+        else:
+            analysis["buyer"]["intent"] = "purchase_inquiry"
+            analysis["reason"] = "Comment provides direct contact details"
     # 2. Price / costing inquiry
     elif price_q and "at any cost" not in lower:
         analysis["is_useful"] = True
@@ -1130,6 +1134,9 @@ def _flat_extract(analysis: Dict[str, Any], text: Optional[str] = None,
                 words = text_raw.split()
                 if len(words) >= 2 or any(w in text_raw.lower() for w in ("price", "rate", "cost", "kitna", "details", "kimat", "keemat", "rent")):
                     is_lead = True
+
+    if is_lead and score < min_lead_score:
+        is_lead = False
 
     return {
         "phone": phone,

@@ -651,7 +651,8 @@ async def build_public_config(get: Optional[Callable[[str], Any]] = None,
     global _PUBLIC_CONFIG_CACHE
     now = time.time()
     if (
-        all_settings is None
+        get is None
+        and all_settings is None
         and _PUBLIC_CONFIG_CACHE is not None
         and (now - _PUBLIC_CONFIG_CACHE[0] < _PUBLIC_CONFIG_TTL)
     ):
@@ -772,5 +773,6 @@ async def build_public_config(get: Optional[Callable[[str], Any]] = None,
             "page_size": int(g("defaults.page_size", 20) or 20),
         },
     }
-    _PUBLIC_CONFIG_CACHE = (now, payload)
+    if get is None and all_settings is None:
+        _PUBLIC_CONFIG_CACHE = (now, payload)
     return payload

@@ -1031,7 +1031,7 @@ async def list_leads(
 
 @router.get("/leads/pipeline")
 async def lead_pipeline(ctx: TenantContext = Depends(require_portal(P.LEADS_VIEW))):
-    from app.api.routes.search import VALID_TRANSITIONS
+    from app.pipeline.lead_lifecycle import VALID_TRANSITIONS
     db = _db()
     base = scope_query(ctx, {"is_lead": True}, **_LEAD)
     by_status = await _count_by(db, "ai_comments", base, "lead_status")
@@ -1086,9 +1086,14 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
     Same rules as PATCH /api/leads/{id}: assignment needs ``leads.assign`` and
     an active member; status changes must be valid transitions (others are
     reported in ``skipped``). One ``update_many`` per group, one audit entry."""
-    from app.api.routes.search import (
-        LEAD_PRIORITIES, LEAD_STATUSES as VALID_STATUSES, validate_transition, _resolve_assignee)
-    from app.pipeline.lead_lifecycle import create_assignment_history_entry
+    from app.pipeline.lead_lifecycle import (
+        LEAD_PRIORITIES,
+        LEAD_STATUSES as VALID_STATUSES,
+        can_transition,
+        validate_transition,
+        create_assignment_history_entry,
+    )
+    from app.api.routes.search import _resolve_assignee
     action = (body.action or "").strip().lower()
     if action not in ("assign", "status", "priority"):
         raise HTTPException(status_code=422, detail="action must be assign, status or priority")
@@ -1144,7 +1149,10 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
             reason_text = (body.reason or "").strip()
             valid, err = validate_transition(cur, value, reason=reason_text)
             if not valid:
-                skipped.append({"id": lid, "reason": err})
+                if not can_transition(cur, value):
+                    skipped.append({"id": lid, "reason": f"Cannot move from {cur} to {value}"})
+                else:
+                    skipped.append({"id": lid, "reason": err})
                 continue
             groups.setdefault(cur, []).append(d["_id"])
         else:

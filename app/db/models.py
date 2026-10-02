@@ -19,6 +19,40 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# ── Sensitive field stripping ────────────────────────────────────────────────
+# Fields that must NEVER appear in any API response payload.
+# Use strip_sensitive() before returning any document sourced from users /
+# admin_users collections.
+_SENSITIVE_FIELDS: frozenset = frozenset({
+    "hashed_password",
+    "password_hash",
+    "password",
+    "session_secret",
+    "admin_password_hash",
+    "panel_admin_password_hash",
+    "admin_panel_password_hash",
+    "new_password",
+    "old_password",
+    "secret",
+    "apify_token",
+    "stripe_secret_key",
+    "stripe_webhook_secret",
+    "gemini_api_key",
+})
+
+
+def strip_sensitive(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return a shallow copy of *doc* with all sensitive fields removed.
+
+    Safe to call on ``None`` — returns ``None`` unchanged.
+    Always call this before returning any document from the ``users`` or
+    ``admin_users`` collections in an API response.
+    """
+    if not doc or not isinstance(doc, dict):
+        return doc
+    return {k: v for k, v in doc.items() if k not in _SENSITIVE_FIELDS}
+
+
 class SearchHistory(BaseModel):
     """One AI-agent search run: `POST /api/search`."""
 

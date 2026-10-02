@@ -50,10 +50,14 @@ class Settings(BaseSettings):
     # Secret signing the session cookie (any long random string; without it a
     # per-process random secret is used and sessions reset on restart)
     session_secret: str = ""
-    # Session lifetime in days
+    # Session lifetime in days (absolute expiry)
     session_ttl_days: int = 7
     # Set true when serving over HTTPS so the cookie is only sent over TLS
     session_cookie_secure: bool = False
+    # Idle session timeout in minutes (0 = disabled). When set, sessions are
+    # invalidated if the user has not made a request within this window.
+    # Tracked server-side via user_sessions.last_active_at.
+    session_idle_timeout_minutes: int = 30
 
     # CORS — comma-separated allowed origins (empty = same-origin only)
     # For local dev: http://localhost:8000

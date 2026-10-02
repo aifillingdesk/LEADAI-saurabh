@@ -20,7 +20,7 @@ from fastapi import Request, Response
 from app.admin.envvars import get_envvar_bool, get_envvar_int, get_envvar_str
 from app.config import get_settings
 from app.db.mongo import get_sync_db
-from app.db.models import utcnow
+from app.db.models import strip_sensitive, utcnow
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -428,7 +428,7 @@ def create_tracked_session(user: Dict[str, Any], ip: str = "unknown",
                 "impersonation_reason": impersonation_reason,
                 "created_at": utcnow(),
                 "expires_at": expires_at,
-                "last_activity_at": utcnow(),
+                "last_active_at": utcnow(),
                 "revoked_at": None,
                 "revoked_by": None,
             }
@@ -581,6 +581,34 @@ def parse_session_value(value: Optional[str]) -> Optional[Dict[str, Any]]:
                         exp = exp.replace(tzinfo=timezone.utc)
                     if exp < datetime.now(timezone.utc):
                         return None
+
+                # ── Idle session timeout ────────────────────────────────────
+                idle_minutes = get_envvar_int(
+                    "SESSION_IDLE_TIMEOUT_MINUTES",
+                    settings.session_idle_timeout_minutes
+                )
+                if idle_minutes and idle_minutes > 0:
+                    last_active = record.get("last_active_at")
+                    if last_active is not None:
+                        if last_active.tzinfo is None:
+                            last_active = last_active.replace(tzinfo=timezone.utc)
+                        idle_seconds = (datetime.now(timezone.utc) - last_active).total_seconds()
+                        if idle_seconds > idle_minutes * 60:
+                            logger.info(
+                                "Session %s idle for %.0fs > %sm limit — expired",
+                                session_id[:8], idle_seconds, idle_minutes
+                            )
+                            db["user_sessions"].update_one(
+                                {"session_id": session_id},
+                                {"$set": {"revoked_at": utcnow(), "revoked_by": "idle_timeout"}}
+                            )
+                            return None
+
+                # Touch last_active_at for sliding-window idle detection
+                db["user_sessions"].update_one(
+                    {"session_id": session_id, "revoked_at": None},
+                    {"$set": {"last_active_at": utcnow()}},
+                )
         except Exception:
             pass  # DB outage: signature + exp above still apply
 

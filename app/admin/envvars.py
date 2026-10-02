@@ -129,6 +129,10 @@ ENVVAR_REGISTRY: list[EnvVarDef] = [
      "settings_attr": "session_cookie_secure", "default": False,
      "group": "Security", "description": "Send the session cookie only over "
                                         "HTTPS. Enable behind a TLS proxy."},
+    {"name": "SESSION_IDLE_TIMEOUT_MINUTES", "kind": "int", "secret": False, "restart": False,
+     "settings_attr": "session_idle_timeout_minutes", "default": 30,
+     "group": "Security", "description": "Idle session timeout in minutes (0 disables). "
+                                        "Sessions inactive for longer than this are expired."},
     # Database
     {"name": "MONGO_URI", "kind": "str", "secret": False, "restart": True,
      "settings_attr": "mongo_uri", "default": "mongodb://localhost:27017",

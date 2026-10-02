@@ -248,3 +248,66 @@ def test_cookie_expiry():
     expired_payload = b64.urlsafe_b64encode(
         json.dumps(data, separators=(",", ":")).encode()).rstrip(b"=").decode("ascii")
     assert service.parse_session_value(f"{expired_payload}.{sig}") is None
+
+
+# ── Sensitive stripping & Idle timeout ────────────────────────────────────
+
+def test_strip_sensitive():
+    from app.db.models import strip_sensitive
+    raw = {
+        "email": "user@example.com",
+        "name": "Test User",
+        "password_hash": "secret_hash_123",
+        "hashed_password": "secret_hash_456",
+        "session_secret": "my-secret",
+        "role": "admin",
+        "gemini_api_key": "ai-key",
+    }
+    sanitized = strip_sensitive(raw)
+    assert sanitized["email"] == "user@example.com"
+    assert sanitized["name"] == "Test User"
+    assert sanitized["role"] == "admin"
+    assert "password_hash" not in sanitized
+    assert "hashed_password" not in sanitized
+    assert "session_secret" not in sanitized
+    assert "gemini_api_key" not in sanitized
+    assert strip_sensitive(None) is None
+
+
+def test_idle_session_timeout():
+    from datetime import datetime, timedelta, timezone
+    from app.db.mongo import get_sync_db
+    import app.admin.envvars as ev
+
+    _patch()
+    db = get_sync_db()
+    ev.get_sync_db = lambda: db
+
+    settings = get_settings()
+    settings.session_idle_timeout_minutes = 15
+
+    user_dict = {"email": "idle@example.com", "name": "Idle", "role": "admin"}
+    tracked = service.create_tracked_session(user_dict)
+    cookie_val = service.build_session_value(tracked)
+
+    # 1. Immediately valid
+    parsed = service.parse_session_value(cookie_val)
+    assert parsed is not None
+    assert parsed["email"] == "idle@example.com"
+
+    # 2. Simulate idle passage beyond 15 min (e.g. 20 min ago)
+    twenty_min_ago = datetime.now(timezone.utc) - timedelta(minutes=20)
+    db["user_sessions"].update_one(
+        {"session_id": tracked["session_id"]},
+        {"$set": {"last_active_at": twenty_min_ago}}
+    )
+
+    # 3. Next parse should detect idle timeout and fail
+    expired = service.parse_session_value(cookie_val)
+    assert expired is None
+
+    # Check revoked_by in db
+    doc = db["user_sessions"].find_one({"session_id": tracked["session_id"]})
+    assert doc is not None
+    assert doc.get("revoked_by") == "idle_timeout"
+

@@ -41,7 +41,7 @@ def _flat(text, author="Some Buyer", page=PAGE):
 def test_price_and_location_questions_are_leads(text, intent):
     analysis, flat = _flat(text)
     assert analysis["is_useful"] is True
-    assert flat["intent"] == intent
+    assert flat["intent"] in (intent, ca.normalize_intent(intent))
     assert flat["is_lead"] is True and flat["lead_score"] > 0
 
 

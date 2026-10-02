@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -178,15 +179,19 @@ async def lifespan(app: FastAPI):
             "APIFY_API_TOKEN is not set in .env — searches will fail with an error. "
             "Get a free token at https://apify.com/account/integrations"
         )
-    # Non-blocking startup initialization running in background task
-    startup_task = asyncio.create_task(_run_startup_tasks())
+    # Non-blocking startup initialization running in background task (await in tests)
+    startup_task = None
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        await _run_startup_tasks()
+    else:
+        startup_task = asyncio.create_task(_run_startup_tasks())
 
     # time-driven lifecycle: billing periods, cancellations, demo expiry
     from app.lifecycle.maintenance import start_background_sweeper
     sweeper = start_background_sweeper()
     yield
     sweeper.cancel()
-    if not startup_task.done():
+    if startup_task and not startup_task.done():
         startup_task.cancel()
     # ── Graceful shutdown ──────────────────────────────────────────────
     # Cancel in-flight background tasks so they can update MongoDB status

@@ -43,7 +43,7 @@ from app.auth.roles import (require_env_unlocked, require_manager,
                             require_super, require_viewer)
 from app.config import get_settings
 from app.db.mongo import get_async_db
-from app.db.models import utcnow
+from app.db.models import strip_sensitive, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -2303,13 +2303,13 @@ async def list_users():
     rows = []
     async for doc in db["admin_users"].find(
             {}, {"password_hash": 0}).sort("email", 1):
-        d = _serialize_oid(doc)
+        d = _serialize_oid(strip_sensitive(doc))
         d["user_type"] = "admin"
         rows.append(d)
 
     async for doc in db["users"].find(
             {}, {"password_hash": 0}).sort("email", 1):
-        d = _serialize_oid(doc)
+        d = _serialize_oid(strip_sensitive(doc))
         d["user_type"] = "customer"
         d["enabled"] = d.get("status") == "active"
         if d.get("organization_id"):
@@ -2362,7 +2362,7 @@ async def create_user(body: CreateUserRequest):
     await a.aaudit("user.create", "users",
                    details={"email": email, "role": role})
     doc.pop("password_hash", None)
-    return {"success": True, "user": _serialize_oid(doc)}
+    return {"success": True, "user": _serialize_oid(strip_sensitive(doc))}
 
 
 @router.patch("/users/{user_id}", dependencies=[Depends(require_super)])
@@ -2391,7 +2391,7 @@ async def update_user(user_id: str, body: UpdateUserRequest):
     await a.aaudit("user.update", "users", details={"email": user["email"]})
     updated = {**user, **update}
     updated.pop("password_hash", None)
-    return {"success": True, "user": _serialize_oid(updated)}
+    return {"success": True, "user": _serialize_oid(strip_sensitive(updated))}
 
 
 @router.delete("/users/{user_id}", dependencies=[Depends(require_super)])

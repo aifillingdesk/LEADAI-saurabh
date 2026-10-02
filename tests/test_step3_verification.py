@@ -167,8 +167,11 @@ def _seed_tree(db, org_id, uid, email, tag):
                               "organization_id": org_id, "actor_user_id": uid,
                               "actor_email": email, "resource_id": lead,
                               "details": {"note": tag}, "success": True})
+    preset = str(db.search_presets.insert_one({
+        **common, "name": f"Preset {tag}", "keywords": [tag],
+        "is_shared": False, "created_at": NOW}).inserted_id)
     return {"run": run_id, "page": page, "post": post, "comment": comment, "lead": lead,
-            "export": export, "ticket": ticket, "notification": notification}
+            "export": export, "ticket": ticket, "notification": notification, "preset": preset}
 
 
 def _seed_billing(db, org_id, tag, status="pending_payment", plan="pro"):
@@ -289,6 +292,7 @@ def _param_values(w, owner_key, rec_key, sub_key, cs_key, inv_key):
         "user_id": w["u"][owner_key], "member_user_id": w["u"][owner_key],
         "short_id": _session_id_for(w["db"], w["u"][owner_key])[:12],
         "session_id": d[cs_key], "invitation_id": d[inv_key], "scope": "posts",
+        "preset_id": rec["preset"],
     }
 
 
@@ -312,7 +316,7 @@ def _call(client, method, url, cookies, body=None, params=None):
 _TENANT_COLLECTIONS = ("search_history", "facebook_pages", "facebook_posts", "facebook_comments",
                        "ai_comments", "exports", "token_ledger", "token_balances", "subscriptions",
                        "payments", "support_tickets", "notifications", "organization_members",
-                       "organization_invitations")
+                       "organization_invitations", "search_presets")
 
 
 def _snapshot(db, org_id, user_id=None):

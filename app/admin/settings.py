@@ -60,7 +60,7 @@ SETTING_DEFAULTS: Dict[str, Any] = {
     "limits.min_comments": settings.min_comments,
     "limits.max_posts_default": 20,
     "limits.max_posts_cap": 100,
-    "limits.max_comments_per_post_default": 50,
+    "limits.max_comments_per_post_default": 30,
     "limits.max_comments_per_post_cap": 500,
     "limits.global_max_comments": settings.max_comments_to_collect,
 

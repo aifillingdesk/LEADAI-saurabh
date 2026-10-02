@@ -2196,6 +2196,7 @@ The project treats failures as **data**, not just exceptions.
 | Duplicate key on insert | Handled via unique indexes + upsert |
 | Brute-force login attempt | Rate limit: 5 failures → lockout |
 | Session expired | 401 → redirect to `/login` |
+| Idle session timeout | `revoked_by="idle_timeout"` in `user_sessions` → 401 redirect to `/login` |
 | Maintenance mode | 503 with custom message (admin panel still accessible) |
 
 ---
@@ -2219,6 +2220,7 @@ Template file: `.env.example`.
 | `SESSION_SECRET` | Security | **Yes** | — | No | Yes (Locked) | High-entropy random secret for session cookie signing. If empty, a volatile per-process secret is used (invalidating logins on reboot) |
 | `SESSION_TTL_DAYS` | Security | No | `7` | No | No | Session lifetime in days applied to newly authenticated users |
 | `SESSION_COOKIE_SECURE`| Security | No | `false` | No | No | Enforces `Secure` flag on cookies. Must be `true` behind HTTPS/TLS reverse proxies |
+| `SESSION_IDLE_TIMEOUT_MINUTES` | Security | No | `30` | No | No | Idle session timeout in minutes (0 disables). Inactive sessions are revoked server-side |
 | `ALLOWED_ORIGINS` | Security | No | `""` | Yes | No | Comma-separated CORS allowed origins (e.g., `https://app.leadai.com`). Empty string restricts to same-origin |
 | `ENABLE_API_DOCS` | Security | No | `false` | Yes | No | Enables `/docs` and `/redoc` OpenAPI interactive documentation (disable in production) |
 | `TRUST_PROXY_HEADERS` | Security | No | `false` | No | No | Trust `X-Forwarded-For` and `X-Real-IP` headers for rate limiting and IP logging behind proxies |
@@ -2577,6 +2579,8 @@ AI Analysis     → Gemini API usage (per comment, only MATCHED/NO_FILTER)
 - **Log secret redaction** — API keys, tokens, passwords, MongoDB URIs, and bearer tokens are automatically redacted in all log output (`app/log_parser.py`)
 - **Multi-tenant data isolation** — All customer data is organization-scoped
 - **Invitation token hashing** — Cryptographically secure SHA-256 hashed tokens with expiration
+- **Server-side tracked sessions & idle timeout** — sliding-window session expiration (`SESSION_IDLE_TIMEOUT_MINUTES`, default 30m) with server-side revocation in `user_sessions`
+- **Sensitive field stripping** — `strip_sensitive()` auditable chokepoint automatically purges credentials, password hashes, and provider tokens from all user-facing API payloads
 - **In-memory rate limiting** — Per-user API throttling (30 requests/minute), per-IP contact form throttling (1 submission/60 seconds), and brute-force login throttle (5 consecutive failures → lockout)
 - **Automatic audit log retention** — Configurable MongoDB TTL index (`AUDIT_RETENTION_DAYS`, default 365 days) automatically purges aged audit trails
 
