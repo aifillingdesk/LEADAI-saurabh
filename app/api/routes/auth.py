@@ -23,6 +23,7 @@ from typing import Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.admin.audit import aaudit, audit, request_meta
@@ -76,6 +77,7 @@ class LoginRequest(BaseModel):
     email: str
     password: str
     scope: str = "site"
+    totp_code: Optional[str] = None
 
 
 class SignupRequest(BaseModel):
@@ -138,6 +140,29 @@ async def signup(body: SignupRequest, request: Request):
                               message=body.message, ip=ip, source="signup",
                               industry=body.industry, requested_plan=body.plan,
                               accepted_terms=bool(body.accepted_terms))
+    # Email verification token generation on signup (Phase 4)
+    db = get_sync_db()
+    if db is not None:
+        token = secrets.token_urlsafe(32)
+        now = utcnow()
+        db["email_verifications"].insert_one({
+            "email": body.email.strip().lower(),
+            "token_hash": _hash_token(token),
+            "demo_request_id": res.get("id"),
+            "expires_at": now + timedelta(hours=24),
+            "used_at": None,
+            "created_at": now,
+        })
+        link = absolute_url(f"/verify-email?token={token}")
+        await asyncio.to_thread(
+            send_email,
+            body.email.strip().lower(),
+            "Verify your LeadAI email address",
+            f"Hi {name},\n\nPlease verify your email address by clicking the link below:\n{link}\n\n"
+            "Thank you for registering with LeadAI.",
+            kind="email_verification",
+        )
+
     return {
         "success": True,
         "status": res["status"],
@@ -229,6 +254,20 @@ async def login(body: LoginRequest, request: Request, response: Response):
         await aaudit("auth.login", "auth", user=email, ip=ip, success=False,
                      user_agent=user_agent, details={"scope": body.scope})
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # RFC 6238 TOTP Two-Factor Authentication check if enabled
+    if user.get("totp_enabled"):
+        totp_secret = user.get("totp_secret")
+        if not body.totp_code:
+            return JSONResponse(
+                {"success": False, "requires_2fa": True, "message": "Two-factor authentication code required"},
+                status_code=200,
+            )
+        from app.auth.totp import verify_totp_code
+        if not totp_secret or not verify_totp_code(totp_secret, body.totp_code):
+            record_login_failure(ip)
+            log_security_event("totp_failed", "medium", actor_email=email, ip=ip, path=str(request.url.path))
+            raise HTTPException(status_code=401, detail="Invalid two-factor authentication code")
 
     reset_login_attempts(ip)
     clear_account_failures(email)
@@ -505,3 +544,188 @@ async def reset_password(body: ResetRequest, request: Request):
     await aaudit("auth.password_reset", "auth", user=(record or {}).get("email"), ip=ip,
                  resource_type="user", resource_id=doc["user_id"])
     return {"success": True, "message": "Password updated. You can now sign in."}
+
+
+# ── Two-Factor Authentication (RFC 6238 TOTP) ────────────────────────────────
+
+
+class TotpVerifyRequest(BaseModel):
+    secret: str
+    code: str
+
+
+class TotpDisableRequest(BaseModel):
+    code: Optional[str] = None
+    password: Optional[str] = None
+
+
+@router.get("/2fa/status")
+async def get_2fa_status(request: Request):
+    """Check whether two-factor authentication is enabled for the current user."""
+    user = session_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Sign in required")
+    db = get_sync_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    doc = db["users"].find_one({"_id": ObjectId(str(user["user_id"]))})
+    return {"totp_enabled": bool(doc and doc.get("totp_enabled"))}
+
+
+@router.post("/2fa/setup")
+async def setup_2fa(request: Request):
+    """Generate a new RFC 6238 TOTP secret and QR code URI."""
+    user = session_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Sign in required")
+    from app.auth.totp import generate_totp_secret, get_totp_uri
+    secret = generate_totp_secret()
+    email = user.get("email") or "user"
+    uri = get_totp_uri(secret, email=email)
+    return {"secret": secret, "otpauth_url": uri}
+
+
+@router.post("/2fa/enable")
+async def enable_2fa(body: TotpVerifyRequest, request: Request):
+    """Verify submitted code against secret and activate 2FA."""
+    user = session_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Sign in required")
+    from app.auth.totp import verify_totp_code
+    if not verify_totp_code(body.secret, body.code):
+        raise HTTPException(status_code=400, detail="Invalid verification code. Please check your authenticator app.")
+
+    db = get_sync_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    now = utcnow()
+    db["users"].update_one(
+        {"_id": ObjectId(str(user["user_id"]))},
+        {"$set": {"totp_enabled": True, "totp_secret": body.secret, "totp_enabled_at": now, "updated_at": now}}
+    )
+    await aaudit("auth.2fa_enabled", "auth", user=user, **request_meta(request))
+    return {"success": True, "message": "Two-factor authentication successfully enabled."}
+
+
+@router.post("/2fa/disable")
+async def disable_2fa(body: TotpDisableRequest, request: Request):
+    """Disable 2FA (requires current password or valid TOTP code)."""
+    user = session_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Sign in required")
+    db = get_sync_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    record = db["users"].find_one({"_id": ObjectId(str(user["user_id"]))})
+    if not record:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    authenticated = False
+    if body.password:
+        ok, _ = _verify_and_migrate_password(body.password, record.get("password_hash") or "")
+        if ok:
+            authenticated = True
+    if not authenticated and body.code and record.get("totp_secret"):
+        from app.auth.totp import verify_totp_code
+        if verify_totp_code(record["totp_secret"], body.code):
+            authenticated = True
+
+    if not authenticated:
+        raise HTTPException(status_code=400, detail="Valid password or TOTP code required to disable 2FA")
+
+    now = utcnow()
+    db["users"].update_one(
+        {"_id": record["_id"]},
+        {"$set": {"totp_enabled": False, "updated_at": now}, "$unset": {"totp_secret": "", "totp_enabled_at": ""}}
+    )
+    await aaudit("auth.2fa_disabled", "auth", user=user, **request_meta(request))
+    return {"success": True, "message": "Two-factor authentication disabled."}
+
+
+# ── Email Verification ───────────────────────────────────────────────────────
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: Optional[str] = None
+
+
+_email_verify_limiter = RateLimiter("verify_email_ip", 5, 3600)
+
+
+@router.post("/verify-email")
+async def verify_email(body: VerifyEmailRequest, request: Request):
+    """Verify an email address using a single-use token."""
+    db = get_sync_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    now = utcnow()
+    token_hash = _hash_token(body.token.strip())
+    doc = db["email_verifications"].find_one_and_update(
+        {"token_hash": token_hash, "used_at": None, "expires_at": {"$gt": now}},
+        {"$set": {"used_at": now}}
+    )
+    if not doc:
+        raise HTTPException(status_code=400, detail="This verification link is invalid or has expired.")
+
+    uid = ObjectId(str(doc["user_id"])) if doc.get("user_id") else None
+    email = doc.get("email")
+
+    if uid:
+        db["users"].update_one({"_id": uid}, {"$set": {"email_verified": True, "email_verified_at": now, "updated_at": now}})
+    elif email:
+        db["users"].update_many({"email": email.lower()}, {"$set": {"email_verified": True, "email_verified_at": now, "updated_at": now}})
+
+    await aaudit("auth.email_verified", "auth", user=email or str(uid), ip=_get_client_ip(request), details={"user_id": str(uid)})
+    return {"success": True, "message": "Email address successfully verified."}
+
+
+@router.post("/verify-email/resend")
+async def resend_email_verification(body: ResendVerificationRequest, request: Request):
+    """Send or re-send an email verification link."""
+    ip = _get_client_ip(request)
+    if not _email_verify_limiter.consume(ip):
+        raise HTTPException(status_code=429, detail="Too many verification requests. Please try again later.")
+
+    user = session_user(request)
+    target_email = (body.email or (user.get("email") if user else "") or "").strip().lower()
+    if not target_email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    db = get_sync_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    record = db["users"].find_one({"email": target_email})
+    user_id_str = str(record["_id"]) if record else None
+
+    now = utcnow()
+    db["email_verifications"].update_many(
+        {"$or": [{"email": target_email}, {"user_id": user_id_str}], "used_at": None},
+        {"$set": {"used_at": now, "invalidated": True}}
+    )
+
+    token = secrets.token_urlsafe(32)
+    db["email_verifications"].insert_one({
+        "user_id": user_id_str,
+        "email": target_email,
+        "token_hash": _hash_token(token),
+        "expires_at": now + timedelta(hours=24),
+        "used_at": None,
+        "requested_ip": ip,
+        "created_at": now,
+    })
+
+    link = absolute_url(f"/verify-email?token={token}")
+    await asyncio.to_thread(
+        send_email,
+        target_email,
+        "Verify your LeadAI email address",
+        f"Hi,\n\nPlease verify your email address by clicking the link below (valid for 24 hours):\n{link}\n\n"
+        "If you did not request this, you can safely ignore this email.",
+        kind="email_verification",
+    )
+    return {"success": True, "message": "Verification link sent to your email."}

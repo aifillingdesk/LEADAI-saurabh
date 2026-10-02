@@ -38,6 +38,8 @@ from app.api.routes.notifications import router as notifications_router
 from app.api.routes.org_admin import router as org_admin_router
 from app.api.routes.super_admin_platform import router as super_admin_platform_router
 from app.api.routes.me import router as me_router
+from app.api.routes.compliance import router as compliance_router
+from app.logging_context import RequestIdFilter, RequestIdMiddleware, capture_exception
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -61,12 +63,15 @@ def _setup_logging():
     console_level = os.environ.get("LOG_CONSOLE_LEVEL", "INFO").upper()
 
     root.setLevel(getattr(logging, root_level, logging.DEBUG))
+    req_filter = RequestIdFilter()
+    root.addFilter(req_filter)
     fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S")
+        "%(asctime)s %(levelname)-7s [%(name)s] [request_id=%(request_id)s] %(message)s", "%H:%M:%S")
     redact = _SecretRedactingFilter()
     console = logging.StreamHandler()
     console.setLevel(getattr(logging, console_level, logging.INFO))
     console.setFormatter(fmt)
+    console.addFilter(req_filter)
     console.addFilter(redact)
     root.addHandler(console)
     # test runs (in-memory DB) must not append to the real application log
@@ -79,6 +84,7 @@ def _setup_logging():
             maxBytes=10 * 1024 * 1024, backupCount=5)
         log_file.setLevel(getattr(logging, file_level, logging.DEBUG))
         log_file.setFormatter(fmt)
+        log_file.addFilter(req_filter)
         log_file.addFilter(redact)
         root.addHandler(log_file)
     # uvicorn's own access logs stay on console only
@@ -415,6 +421,7 @@ app.include_router(notifications_router)
 app.include_router(org_admin_router)
 app.include_router(super_admin_platform_router)
 app.include_router(me_router)
+app.include_router(compliance_router)
 
 
 # ── Error pages & error reporting ──────────────────────────────────────────
@@ -447,6 +454,10 @@ async def unhandled_error_handler(request: Request, exc: Exception):
     """500s are logged, audited and (at most once a minute) notified to Super Admins."""
     import time as _t
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    try:
+        capture_exception(exc, tags={"method": request.method, "path": request.url.path})
+    except Exception:
+        pass
     try:
         if _t.time() - _last_error_notice["at"] > 60:
             _last_error_notice["at"] = _t.time()
@@ -639,9 +650,10 @@ async def maintenance_gate(request: Request, call_next):
         status_code=503)
 
 
-# Outermost response wrappers: CSRF, Security/Cache headers, and GZip compression
+# Outermost response wrappers: CSRF, Security/Cache headers, Request IDs, and GZip compression
 app.add_middleware(CSRFProtectionMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 

@@ -254,7 +254,7 @@ def _all_routes():
 
 
 # Route families a tenant (site-scope) session can reach.
-_NON_TENANT = ("/api/admin/", "/api/super-admin/", "/api/comment-filters/", "/api/public/")
+_NON_TENANT = ("/api/admin/", "/api/super-admin/", "/api/comment-filters/", "/api/public/", "/api/compliance/")
 
 
 def _tenant_routes():
