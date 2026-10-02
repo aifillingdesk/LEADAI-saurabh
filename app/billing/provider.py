@@ -25,7 +25,7 @@ import logging
 import secrets
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 from bson import ObjectId
 from fastapi import HTTPException
@@ -60,17 +60,17 @@ class BillingProvider(ABC):
     name = "abstract"
 
     @abstractmethod
-    async def create_checkout_session(self, *, subscription: Dict[str, Any],
-                                      plan: Dict[str, Any], customer_email: str,
-                                      success_url: str, cancel_url: str) -> Dict[str, Any]:
+    async def create_checkout_session(self, *, subscription: dict[str, Any],
+                                      plan: dict[str, Any], customer_email: str,
+                                      success_url: str, cancel_url: str) -> dict[str, Any]:
         """Start a hosted checkout for a PENDING_PAYMENT subscription."""
 
     async def create_portal_session(self, organization_id: str,
-                                    return_url: Optional[str] = None) -> Dict[str, Any]:
+                                    return_url: str | None = None) -> dict[str, Any]:
         return {"url": return_url or "/dashboard#billing", "provider": self.name}
 
     @abstractmethod
-    def verify_webhook(self, payload: bytes, headers: Dict[str, str]) -> Dict[str, Any]:
+    def verify_webhook(self, payload: bytes, headers: dict[str, str]) -> dict[str, Any]:
         """Verify the signature and return the parsed event (raise otherwise)."""
 
 
@@ -90,7 +90,7 @@ class MockBillingProvider(BillingProvider):
             "redirect_url": f"/billing/checkout/{session_id}",
         }
 
-    def verify_webhook(self, payload: bytes, headers: Dict[str, str]) -> Dict[str, Any]:
+    def verify_webhook(self, payload: bytes, headers: dict[str, str]) -> dict[str, Any]:
         secret = _env("BILLING_WEBHOOK_SECRET")
         sig = headers.get("x-leadai-signature", "")
         if not secret:
@@ -112,7 +112,7 @@ def mock_payments_enabled() -> bool:
 
 
 async def complete_mock_checkout(session_id: str, organization_id: str,
-                                 succeed: bool = True) -> Dict[str, Any]:
+                                 succeed: bool = True) -> dict[str, Any]:
     """Mock provider's server-side payment verification (dev only).
 
     Equivalent to a verified provider webhook: the subscription can at most
@@ -180,7 +180,7 @@ class StripeBillingProvider(BillingProvider):
         return {"session_id": data["id"], "provider": self.name, "status": "open",
                 "redirect_url": data.get("url")}
 
-    def verify_webhook(self, payload: bytes, headers: Dict[str, str]) -> Dict[str, Any]:
+    def verify_webhook(self, payload: bytes, headers: dict[str, str]) -> dict[str, Any]:
         if not self.webhook_secret:
             raise WebhookSignatureError("Webhook secret is not configured")
         header = headers.get("stripe-signature", "")
@@ -200,18 +200,96 @@ class StripeBillingProvider(BillingProvider):
         return json.loads(payload.decode("utf-8"))
 
 
-_GLOBAL_PROVIDER: Optional[BillingProvider] = None
+class RazorpayBillingProvider(BillingProvider):
+    name = "razorpay"
+
+    def __init__(self, key_id: str | None = None, key_secret: str | None = None, webhook_secret: str | None = None):
+        self.key_id = key_id or _env("RAZORPAY_KEY_ID")
+        self.key_secret = key_secret or _env("RAZORPAY_KEY_SECRET")
+        self.webhook_secret = webhook_secret or _env("RAZORPAY_WEBHOOK_SECRET")
+
+    async def create_checkout_session(self, *, subscription: dict[str, Any],
+                                      plan: dict[str, Any], customer_email: str,
+                                      success_url: str, cancel_url: str) -> dict[str, Any]:
+        db = get_async_db()
+        price_cents = plan.get("price_cents", 0)
+        currency = (plan.get("currency") or "INR").upper()
+        order_id = f"order_{secrets.token_hex(10)}"
+        res = db.subscriptions.update_one(
+            {"_id": subscription["_id"]},
+            {"$set": {
+                "provider": self.name,
+                "checkout_session_id": order_id,
+                "currency": currency,
+                "amount": price_cents,
+            }}
+        )
+        import inspect
+        if inspect.isawaitable(res):
+            await res
+        return {
+            "session_id": order_id,
+            "order_id": order_id,
+            "provider": self.name,
+            "currency": currency,
+            "amount": price_cents,
+            "key_id": self.key_id or "rzp_test_placeholder",
+            "status": "open",
+            "redirect_url": f"/billing/razorpay/{order_id}",
+        }
+
+    def verify_webhook(self, payload: bytes, headers: dict[str, str]) -> dict[str, Any]:
+        secret = self.webhook_secret or _env("RAZORPAY_WEBHOOK_SECRET")
+        if not secret:
+            raise WebhookSignatureError("Razorpay webhook secret not configured")
+        sig = headers.get("x-razorpay-signature", "")
+        if not sig:
+            raise WebhookSignatureError("Missing X-Razorpay-Signature header")
+
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            raise WebhookSignatureError("Invalid Razorpay webhook signature")
+
+        parsed = json.loads(payload.decode("utf-8"))
+        event_name = parsed.get("event", "unknown")
+        payload_obj = parsed.get("payload", {})
+        payment_obj = payload_obj.get("payment", {}).get("entity", {})
+        sub_id = payment_obj.get("notes", {}).get("subscription_id")
+
+        return {
+            "id": parsed.get("event_id") or f"rzp_evt_{secrets.token_hex(8)}",
+            "type": "checkout.session.completed" if event_name in ("payment.captured", "order.paid") else event_name,
+            "provider": self.name,
+            "data": {
+                "object": {
+                    "id": payment_obj.get("order_id") or payment_obj.get("id"),
+                    "metadata": {"subscription_id": sub_id} if sub_id else {},
+                    "payment_intent": payment_obj.get("id"),
+                    "payment_status": "paid",
+                    "amount_total": payment_obj.get("amount"),
+                    "customer_email": payment_obj.get("email"),
+                    "currency": payment_obj.get("currency", "INR"),
+                }
+            }
+        }
+
+
+_GLOBAL_PROVIDER: BillingProvider | None = None
 
 
 def get_billing_provider() -> BillingProvider:
     global _GLOBAL_PROVIDER
     if _GLOBAL_PROVIDER is None:
-        key = _env("STRIPE_SECRET_KEY", settings.stripe_secret_key or "")
-        if key.strip():
-            _GLOBAL_PROVIDER = StripeBillingProvider(
-                key.strip(), _env("STRIPE_WEBHOOK_SECRET", settings.stripe_webhook_secret or ""))
+        configured_provider = _env("BILLING_PROVIDER", "").strip().lower()
+        if configured_provider == "razorpay" or _env("RAZORPAY_KEY_ID"):
+            _GLOBAL_PROVIDER = RazorpayBillingProvider()
         else:
-            _GLOBAL_PROVIDER = MockBillingProvider()
+            key = _env("STRIPE_SECRET_KEY", settings.stripe_secret_key or "")
+            if key.strip():
+                _GLOBAL_PROVIDER = StripeBillingProvider(
+                    key.strip(), _env("STRIPE_WEBHOOK_SECRET", settings.stripe_webhook_secret or ""))
+            else:
+                _GLOBAL_PROVIDER = MockBillingProvider()
     return _GLOBAL_PROVIDER
 
 
@@ -222,8 +300,8 @@ def reset_billing_provider() -> None:
 
 # ── Webhook processing ─────────────────────────────────────────────────────
 
-async def process_billing_webhook(event_data: Dict[str, Any], event_id: Optional[str] = None,
-                                  provider_name: Optional[str] = None, db=None) -> Dict[str, Any]:
+async def process_billing_webhook(event_data: dict[str, Any], event_id: str | None = None,
+                                  provider_name: str | None = None, db=None) -> dict[str, Any]:
     """Idempotently process a VERIFIED webhook event."""
     if db is None:
         db = get_async_db()
@@ -253,7 +331,7 @@ async def process_billing_webhook(event_data: Dict[str, Any], event_id: Optional
     return {"success": True, "status": "processed", "event_type": event_type}
 
 
-async def _sub_from_metadata(obj: Dict[str, Any], db) -> Optional[Dict[str, Any]]:
+async def _sub_from_metadata(obj: dict[str, Any], db) -> dict[str, Any] | None:
     meta = obj.get("metadata") or {}
     sub_id = meta.get("subscription_id") or obj.get("client_reference_id")
     if sub_id:
@@ -266,7 +344,7 @@ async def _sub_from_metadata(obj: Dict[str, Any], db) -> Optional[Dict[str, Any]
     return None
 
 
-async def _handle_webhook_event(event_type: str, event: Dict[str, Any], provider: str, db) -> None:
+async def _handle_webhook_event(event_type: str, event: dict[str, Any], provider: str, db) -> None:
     obj = (event.get("data") or {}).get("object") or {}
     if event_type == "checkout.session.completed":
         sub = await _sub_from_metadata(obj, db)
@@ -301,6 +379,7 @@ async def _handle_webhook_event(event_type: str, event: Dict[str, Any], provider
             # covers) starts the next period and re-grants the plan tokens
             if obj.get("billing_reason") == "subscription_cycle" and                     sub.get("status") in ("active", "past_due"):
                 import asyncio
+
                 from app.db.mongo import get_sync_db
                 from app.lifecycle.maintenance import renew_subscription
                 paid = obj.get("amount_paid")

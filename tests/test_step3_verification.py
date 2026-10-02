@@ -170,8 +170,21 @@ def _seed_tree(db, org_id, uid, email, tag):
     preset = str(db.search_presets.insert_one({
         **common, "name": f"Preset {tag}", "keywords": [tag],
         "is_shared": False, "created_at": NOW}).inserted_id)
+    scan = str(db.scheduled_scans.insert_one({
+        **common, "url": f"https://youtube.com/@{tag}", "frequency": "daily", "status": "active",
+        "created_at": NOW}).inserted_id)
+    rule = str(db.lead_assignment_rules.insert_one({
+        **common, "name": f"Rule {tag}", "rule_type": "round_robin", "assignees": [uid],
+        "created_at": NOW}).inserted_id)
+    webhook = str(db.outbound_webhooks.insert_one({
+        **common, "target_url": f"https://example.com/webhook/{tag}", "events": ["lead.created"],
+        "created_at": NOW}).inserted_id)
+    key = str(db.api_keys.insert_one({
+        **common, "name": f"Key {tag}", "prefix": f"lai_live_{tag}", "key_hash": f"hash_{tag}",
+        "scopes": ["leads:read"], "status": "active", "created_at": NOW}).inserted_id)
     return {"run": run_id, "page": page, "post": post, "comment": comment, "lead": lead,
-            "export": export, "ticket": ticket, "notification": notification, "preset": preset}
+            "export": export, "ticket": ticket, "notification": notification, "preset": preset,
+            "scan": scan, "rule": rule, "webhook": webhook, "key": key}
 
 
 def _seed_billing(db, org_id, tag, status="pending_payment", plan="pro"):
@@ -254,7 +267,7 @@ def _all_routes():
 
 
 # Route families a tenant (site-scope) session can reach.
-_NON_TENANT = ("/api/admin/", "/api/super-admin/", "/api/comment-filters/", "/api/public/", "/api/compliance/")
+_NON_TENANT = ("/api/admin/", "/api/super-admin/", "/api/comment-filters/", "/api/public/", "/api/compliance/", "/api/v1/")
 
 
 def _tenant_routes():
@@ -293,6 +306,10 @@ def _param_values(w, owner_key, rec_key, sub_key, cs_key, inv_key):
         "short_id": _session_id_for(w["db"], w["u"][owner_key])[:12],
         "session_id": d[cs_key], "invitation_id": d[inv_key], "scope": "posts",
         "preset_id": rec["preset"],
+        "scan_id": rec["scan"],
+        "rule_id": rec["rule"],
+        "webhook_id": rec["webhook"],
+        "key_id": rec["key"],
     }
 
 
@@ -316,7 +333,8 @@ def _call(client, method, url, cookies, body=None, params=None):
 _TENANT_COLLECTIONS = ("search_history", "facebook_pages", "facebook_posts", "facebook_comments",
                        "ai_comments", "exports", "token_ledger", "token_balances", "subscriptions",
                        "payments", "support_tickets", "notifications", "organization_members",
-                       "organization_invitations", "search_presets")
+                       "organization_invitations", "search_presets", "scheduled_scans",
+                       "lead_assignment_rules", "outbound_webhooks", "api_keys")
 
 
 def _snapshot(db, org_id, user_id=None):

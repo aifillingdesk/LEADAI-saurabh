@@ -21,16 +21,16 @@ All endpoints require the super_admin platform role; every mutation is audited.
 import logging
 import re
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
-from app.auth.tenant import get_tenant_context, TenantContext, require_platform_role
+from app.admin import audit as _audit
+from app.auth.tenant import TenantContext, require_platform_role
 from app.db.models import utcnow
 from app.db.mongo import get_async_db, get_sync_db
-from app.admin import audit as _audit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/super-admin", tags=["super-admin"])
@@ -58,19 +58,19 @@ def _db():
     return db
 
 
-def _oid(value: Any) -> Optional[ObjectId]:
+def _oid(value: Any) -> ObjectId | None:
     try:
         return ObjectId(str(value))
     except Exception:
         return None
 
 
-def _rx(q: Optional[str]) -> Optional[Dict[str, Any]]:
+def _rx(q: str | None) -> dict[str, Any] | None:
     q = (q or "").strip()
     return {"$regex": re.escape(q[:100]), "$options": "i"} if q else None
 
 
-async def _c(coll, query: Dict[str, Any]) -> int:
+async def _c(coll, query: dict[str, Any]) -> int:
     """count_documents that never takes the dashboard down."""
     try:
         return int(await coll.count_documents(query))
@@ -78,22 +78,22 @@ async def _c(coll, query: Dict[str, Any]) -> int:
         return 0
 
 
-async def _a(coll, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+async def _a(coll, pipeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
     try:
         return [d async for d in coll.aggregate(pipeline)]
     except Exception:
         return []
 
 
-async def _recent(coll, query: Dict[str, Any], sort_field: str, limit: int,
-                  projection: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
+async def _recent(coll, query: dict[str, Any], sort_field: str, limit: int,
+                  projection: dict[str, int] | None = None) -> list[dict[str, Any]]:
     try:
         return [_clean(d) async for d in coll.find(query, projection).sort(sort_field, -1).limit(limit)]
     except Exception:
         return []
 
 
-async def _with_org_names(db, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+async def _with_org_names(db, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Add organization_name to feed rows that only carry organization_id."""
     ids = {str(r["organization_id"]) for r in rows if r.get("organization_id")}
     oids = [ObjectId(i) for i in ids if ObjectId.is_valid(i)]
@@ -143,7 +143,7 @@ async def super_admin_dashboard(
     now = utcnow()
     d1, d7, d30 = now - timedelta(days=1), now - timedelta(days=7), now - timedelta(days=30)
 
-    org_stats: Dict[str, int] = {}
+    org_stats: dict[str, int] = {}
     for doc in await _a(db.organizations, [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]):
         org_stats[str(doc["_id"])] = int(doc.get("count") or 0)
     total_orgs = sum(org_stats.values())
@@ -151,12 +151,16 @@ async def super_admin_dashboard(
     # Money is never added across currencies: every amount is grouped by
     # currency first; the historic single-number fields are only filled
     # when exactly one currency is involved (None otherwise).
-    from app.api.routes.super_admin_platform import (currency_totals, norm_currency,
-                                                     single_amount, single_currency)
+    from app.api.routes.super_admin_platform import (
+        currency_totals,
+        norm_currency,
+        single_amount,
+        single_currency,
+    )
     sub_rows = await _a(db.subscriptions, [
         {"$group": {"_id": {"s": "$status", "c": "$currency"}, "count": {"$sum": 1},
                     "total_amount": {"$sum": "$amount"}}}])
-    sub_stats: Dict[str, Dict[str, Any]] = {}
+    sub_stats: dict[str, dict[str, Any]] = {}
     for doc in sub_rows:
         st = str((doc.get("_id") or {}).get("s"))
         entry = sub_stats.setdefault(st, {"count": 0, "amount_by_currency": {}})
@@ -177,7 +181,7 @@ async def super_admin_dashboard(
     mrr_by_currency = currency_totals(mrr_rows)
     mrr = single_amount(mrr_by_currency)
 
-    pay: Dict[str, Dict[str, Any]] = {}
+    pay: dict[str, dict[str, Any]] = {}
     for doc in await _a(db.payments, [
             {"$group": {"_id": {"s": "$status", "c": "$currency"}, "n": {"$sum": 1},
                         "amount": {"$sum": "$amount"}}}]):
@@ -350,9 +354,9 @@ ORG_STATUSES = {"active", "suspended", "demo", "cancelled", "disabled", "archive
 
 @router.get("/organizations")
 async def list_organizations(
-    status: Optional[str] = Query(None, description="Filter by status"),
-    search: Optional[str] = Query(None, description="Search by name or slug"),
-    plan: Optional[str] = Query(None),
+    status: str | None = Query(None, description="Filter by status"),
+    search: str | None = Query(None, description="Search by name or slug"),
+    plan: str | None = Query(None),
     include_archived: bool = False,
     sort: str = "-created_at",
     page: int = Query(1, ge=1),
@@ -362,7 +366,7 @@ async def list_organizations(
     """List organizations with filtering, sorting and pagination (archived
     organizations are hidden unless requested)."""
     db = _db()
-    query: Dict[str, Any] = {}
+    query: dict[str, Any] = {}
     if status:
         query["status"] = status
     elif not include_archived:
@@ -506,7 +510,7 @@ async def update_organization_status(
                 raise HTTPException(status_code=409, detail=(
                     "This organization has no active subscription. Confirm or extend a "
                     "subscription first (Subscriptions), or approve a demo."))
-    updates: Dict[str, Any] = {"status": new_status, "updated_at": utcnow()}
+    updates: dict[str, Any] = {"status": new_status, "updated_at": utcnow()}
     if new_status in ("suspended", "disabled") and before not in ("suspended", "disabled"):
         updates["status_before_suspension"] = before
     if body.status == "archived":
@@ -554,11 +558,11 @@ async def update_organization_status(
 
 @router.get("/users")
 async def list_users(
-    status: Optional[str] = Query(None, description="Filter by status"),
-    org_id: Optional[str] = Query(None, description="Filter by organization"),
-    search: Optional[str] = Query(None, description="Search by email or name"),
-    role: Optional[str] = Query(None, description="Organization role"),
-    platform: Optional[bool] = Query(None, description="Only platform staff"),
+    status: str | None = Query(None, description="Filter by status"),
+    org_id: str | None = Query(None, description="Filter by organization"),
+    search: str | None = Query(None, description="Search by email or name"),
+    role: str | None = Query(None, description="Organization role"),
+    platform: bool | None = Query(None, description="Only platform staff"),
     sort: str = "-created_at",
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -566,11 +570,11 @@ async def list_users(
 ):
     """List all platform users with filtering, sorting and pagination."""
     db = _db()
-    query: Dict[str, Any] = {}
+    query: dict[str, Any] = {}
     if status:
         query["status"] = status
     if org_id or role:
-        mq: Dict[str, Any] = {"status": {"$ne": "removed"}}
+        mq: dict[str, Any] = {"status": {"$ne": "removed"}}
         if org_id:
             mq["organization_id"] = org_id
         if role:
@@ -591,7 +595,7 @@ async def list_users(
     raw = [u async for u in cursor]
 
     uids = [str(u["_id"]) for u in raw]
-    mems: Dict[str, List[Dict[str, Any]]] = {}
+    mems: dict[str, list[dict[str, Any]]] = {}
     org_ids = set()
     async for m in db.organization_members.find({"user_id": {"$in": uids}, "status": {"$ne": "removed"}}):
         mems.setdefault(m["user_id"], []).append(m)
@@ -716,10 +720,10 @@ async def update_user_status(
 
 @router.get("/subscriptions")
 async def list_all_subscriptions(
-    status: Optional[str] = Query(None),
-    organization_id: Optional[str] = Query(None),
-    plan: Optional[str] = Query(None),
-    q: Optional[str] = Query(None, description="Organization name"),
+    status: str | None = Query(None),
+    organization_id: str | None = Query(None),
+    plan: str | None = Query(None),
+    q: str | None = Query(None, description="Organization name"),
     sort: str = "-created_at",
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -727,7 +731,7 @@ async def list_all_subscriptions(
 ):
     """List subscriptions across all organizations (with status history)."""
     db = _db()
-    query: Dict[str, Any] = {}
+    query: dict[str, Any] = {}
     if status == "awaiting":
         query["status"] = "pending_admin_confirmation"
     elif status == "pending":
@@ -836,16 +840,16 @@ async def archive_plan(
 
 @router.get("/audit-logs")
 async def list_audit_logs(
-    category: Optional[str] = Query(None),
-    actor_email: Optional[str] = Query(None, description="Actor email (partial match)"),
-    organization_id: Optional[str] = Query(None),
-    user_id: Optional[str] = Query(None, description="Actor user id"),
-    action: Optional[str] = Query(None, description="Action prefix, e.g. 'subscription.'"),
-    status: Optional[str] = Query(None, description="success | failure"),
-    resource_type: Optional[str] = Query(None),
-    q: Optional[str] = Query(None, description="Resource id / action text"),
-    from_: Optional[str] = Query(None, alias="from"),
-    to: Optional[str] = Query(None),
+    category: str | None = Query(None),
+    actor_email: str | None = Query(None, description="Actor email (partial match)"),
+    organization_id: str | None = Query(None),
+    user_id: str | None = Query(None, description="Actor user id"),
+    action: str | None = Query(None, description="Action prefix, e.g. 'subscription.'"),
+    status: str | None = Query(None, description="success | failure"),
+    resource_type: str | None = Query(None),
+    q: str | None = Query(None, description="Resource id / action text"),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     ctx: TenantContext = Depends(require_platform_role("super_admin")),
@@ -854,7 +858,7 @@ async def list_audit_logs(
     before-after / result. Read-only — no API edits or deletes audit rows."""
     from datetime import datetime, timezone
     db = _db()
-    query: Dict[str, Any] = {}
+    query: dict[str, Any] = {}
     if category:
         query["category"] = category
     rx = _rx(actor_email)
@@ -873,7 +877,7 @@ async def list_audit_logs(
     rq = _rx(q)
     if rq:
         query["$or"] = [{"resource_id": rq}, {"action": rq}]
-    rng: Dict[str, Any] = {}
+    rng: dict[str, Any] = {}
     for key, value, shift in (("$gte", from_, 0), ("$lt", to, 1)):
         if value:
             try:
@@ -922,7 +926,7 @@ async def impersonate_organization(
 ):
     """Time-limited, audited support view of an organization (acts as its
     Admin). A reason is mandatory."""
-    from app.auth.service import set_session_cookie, create_tracked_session
+    from app.auth.service import create_tracked_session, set_session_cookie
     from app.auth.tenant import impersonation_expiry
 
     reason = (body.reason or "").strip()
@@ -986,7 +990,12 @@ async def exit_impersonation(
     response: Response,
 ):
     """Exit impersonation and return to super admin session."""
-    from app.auth.service import session_user, set_session_cookie, clear_session_cookie, create_tracked_session
+    from app.auth.service import (
+        clear_session_cookie,
+        create_tracked_session,
+        session_user,
+        set_session_cookie,
+    )
 
     user = session_user(request)
     if not user:
@@ -1027,3 +1036,14 @@ async def exit_impersonation(
                         ip=ip, user_agent=user_agent)
 
     return {"success": True, "message": "Exited impersonation", "redirect": "/superadmin"}
+
+
+# ── Phase 6: Platform Unit Economics & Margins ─────────────────────────────
+
+@router.get("/unit-economics")
+async def get_platform_unit_economics(
+    ctx: TenantContext = Depends(require_platform_role("super_admin")),
+):
+    """Aggregate platform unit economics, action costs, and plan margins."""
+    from app.services.unit_economics import compute_plan_margins
+    return compute_plan_margins()

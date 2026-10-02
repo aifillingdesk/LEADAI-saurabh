@@ -326,6 +326,17 @@ class YouTubeScraper(SocialMediaScraper):
 
     def fetch_posts(self, url: str, max_posts: int,
                     should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+        if "/watch?v=" in url or "/shorts/" in url:
+            logger.info("[URL SEARCH] YouTube: direct video URL detected: %s", url)
+            vid = url.split("watch?v=")[-1].split("&")[0] if "watch?v=" in url else url.split("/shorts/")[-1].split("?")[0]
+            return [{
+                "id": vid,
+                "url": url,
+                "title": f"YouTube Video ({vid})",
+                "text": f"YouTube Video {vid}",
+                "date": utcnow().isoformat(),
+            }]
+
         logger.info("[URL SEARCH] YouTube: scraping videos (max %s) for %s", max_posts, url)
         return self.connector.scrape_actor(
             self._actor_id,

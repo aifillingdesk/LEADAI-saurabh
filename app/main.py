@@ -39,6 +39,7 @@ from app.api.routes.org_admin import router as org_admin_router
 from app.api.routes.super_admin_platform import router as super_admin_platform_router
 from app.api.routes.me import router as me_router
 from app.api.routes.compliance import router as compliance_router
+from app.api.routes.public_v1 import router as public_v1_router
 from app.logging_context import RequestIdFilter, RequestIdMiddleware, capture_exception
 
 logger = logging.getLogger(__name__)
@@ -370,7 +371,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
     - /static/* (static assets)
     """
     _SAFE_PATHS = {"/api/auth/login", "/health"}
-    _SAFE_PREFIXES = ("/static", "/api/public")
+    _SAFE_PREFIXES = ("/static", "/api/public", "/api/v1")
     _STATE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
     async def dispatch(self, request: Request, call_next):
@@ -432,6 +433,7 @@ app.include_router(org_admin_router)
 app.include_router(super_admin_platform_router)
 app.include_router(me_router)
 app.include_router(compliance_router)
+app.include_router(public_v1_router)
 
 
 # ── Error pages & error reporting ──────────────────────────────────────────

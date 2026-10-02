@@ -33,13 +33,15 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from app.admin.audit import aaudit
+from app.agent.search import _parse_iso, current_min_comments
 from app.auth import permissions as P
 from app.auth.tenant import (
     TenantContext,
@@ -50,13 +52,10 @@ from app.auth.tenant import (
     scope_query,
     stamp,
 )
-from app.admin.audit import aaudit
-from app.db.mongo import get_async_db
 from app.db.models import utcnow
-from app.agent.search import _parse_iso, current_min_comments
+from app.db.mongo import get_async_db
 from app.pipeline.lead_lifecycle import (
     LEAD_PRIORITIES,
-    LEAD_STATUSES,
     validate_transition,
 )
 
@@ -138,14 +137,14 @@ def _oid(value: str):
         raise HTTPException(status_code=400, detail=f"Invalid id: {value}")
 
 
-def _safe_oid(value: Any) -> Optional[ObjectId]:
+def _safe_oid(value: Any) -> ObjectId | None:
     try:
         return ObjectId(str(value))
     except Exception:
         return None
 
 
-def _resolve_platform(doc: dict, parent: Optional[dict] = None) -> str:
+def _resolve_platform(doc: dict, parent: dict | None = None) -> str:
     """Platform for any doc - never guessed, never defaulted to Facebook.
 
     Order: explicit `platform` field -> the doc's own URL -> parent doc's
@@ -154,7 +153,7 @@ def _resolve_platform(doc: dict, parent: Optional[dict] = None) -> str:
     """
     from app.social.url_detector import platform_from_url
 
-    def url_of(d: dict) -> Optional[str]:
+    def url_of(d: dict) -> str | None:
         for key in ("post_url", "comment_url", "facebook_url", "url"):
             v = d.get(key)
             if v:
@@ -180,19 +179,19 @@ def _resolve_platform(doc: dict, parent: Optional[dict] = None) -> str:
 
 # ── Tenant scoping helpers ──────────────────────────────────────────────────
 
-def _scope_kw(collection: str) -> Dict[str, Any]:
+def _scope_kw(collection: str) -> dict[str, Any]:
     return _LEAD if collection == "ai_comments" else _OWN
 
 
 def _scoped(ctx: TenantContext, collection: str,
-            query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            query: dict[str, Any] | None = None) -> dict[str, Any]:
     """``query`` restricted to what ``ctx`` may see in ``collection``."""
     return scope_query(ctx, query or {}, **_scope_kw(collection))
 
 
-async def _find_or_404(db, collection: str, query: Dict[str, Any],
+async def _find_or_404(db, collection: str, query: dict[str, Any],
                        ctx: TenantContext, request: Request,
-                       detail: Optional[str] = None) -> Dict[str, Any]:
+                       detail: str | None = None) -> dict[str, Any]:
     """Scoped find_one; 404 (+ security event when the doc exists outside the
     caller's scope) otherwise."""
     try:
@@ -204,8 +203,8 @@ async def _find_or_404(db, collection: str, query: Dict[str, Any],
         raise
 
 
-async def _find_scoped(db, collection: str, query: Dict[str, Any],
-                       ctx: TenantContext) -> Optional[Dict[str, Any]]:
+async def _find_scoped(db, collection: str, query: dict[str, Any],
+                       ctx: TenantContext) -> dict[str, Any] | None:
     """Scoped find_one for child lookups (None when out of scope)."""
     try:
         return await db[collection].find_one(_scoped(ctx, collection, query))
@@ -239,9 +238,9 @@ def _start(key: str, fn, *args) -> bool:
 
 
 async def _audit(ctx: TenantContext, request: Request, action: str, category: str,
-                 *, resource_type: Optional[str] = None,
-                 resource_id: Optional[str] = None, success: bool = True,
-                 details: Optional[Dict[str, Any]] = None) -> None:
+                 *, resource_type: str | None = None,
+                 resource_id: str | None = None, success: bool = True,
+                 details: dict[str, Any] | None = None) -> None:
     """Best-effort tenant audit record for a user action."""
     try:
         from app.admin.audit import aaudit, request_meta
@@ -447,23 +446,23 @@ async def start_url_search(
     request: Request,
     url: str = Query(..., min_length=4, max_length=300,
                      description="Facebook page, Instagram profile, YouTube channel or LinkedIn company URL"),
-    max_posts: Optional[int] = Query(None, ge=1,
+    max_posts: int | None = Query(None, ge=1,
                                      description="Posts to scrape (default/cap from admin limits)"),
-    max_comments_per_post: Optional[int] = Query(None, ge=1,
+    max_comments_per_post: int | None = Query(None, ge=1,
                                                  description="Comments to scrape per post (admin-capped)"),
     filter_mode: str = Query("all", description="all | preset | custom"),
-    preset: Optional[str] = Query(None,
+    preset: str | None = Query(None,
                                   description="Preset key or saved rule id (filter_mode=preset)"),
-    include_keywords: Optional[str] = Query(None,
+    include_keywords: str | None = Query(None,
                                             description="Comma-separated keywords (filter_mode=custom)"),
-    exclude_keywords: Optional[str] = Query(None,
+    exclude_keywords: str | None = Query(None,
                                             description="Comma-separated keywords to veto"),
-    categories: Optional[str] = Query(None,
+    categories: str | None = Query(None,
                                       description="Comma-separated category keys (filter_mode=custom)"),
     match_mode: str = Query("any", description="any | all | category | advanced"),
-    industry: Optional[str] = Query(None, description="Selected industry / domain"),
-    business_type: Optional[str] = Query(None, description="Selected business type"),
-    target_customer: Optional[str] = Query(None, description="Target customer type"),
+    industry: str | None = Query(None, description="Selected industry / domain"),
+    business_type: str | None = Query(None, description="Selected business type"),
+    target_customer: str | None = Query(None, description="Target customer type"),
     ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
 ):
     """Start a URL-based social lead search. Poll GET /api/search/{run_id}.
@@ -474,9 +473,9 @@ async def start_url_search(
     ``filter_mode=all`` (default) sets no per-run filter, so the admin's
     active rule applies when one is configured (otherwise every comment is
     processed)."""
-    from app.social.url_detector import detect_social_url, UrlError
+    from app.admin.settings import effective_limits, get_bool, is_platform_enabled
+    from app.social.url_detector import UrlError, detect_social_url
     from app.social.url_search import UrlSearchThread
-    from app.admin.settings import effective_limits, is_platform_enabled, get_bool
 
     db = _db_or_503()
 
@@ -728,10 +727,10 @@ async def url_search_report(run_id: str, request: Request,
 @router.get("/pages")
 async def list_pages(
     request: Request,
-    run_id: Optional[str] = Query(None),
-    q: Optional[str] = Query(None, description="filter by page name"),
-    category: Optional[str] = Query(None),
-    city: Optional[str] = Query(None),
+    run_id: str | None = Query(None),
+    q: str | None = Query(None, description="filter by page name"),
+    category: str | None = Query(None),
+    city: str | None = Query(None),
     contact: bool = Query(False, description="only pages with phone or email"),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=200),
@@ -771,11 +770,11 @@ async def get_page(page_id: str, request: Request,
 
 @router.post("/pages/{page_id}/posts")
 async def collect_posts(page_id: str, request: Request,
-                        max_posts: Optional[int] = Query(None, ge=1),
+                        max_posts: int | None = Query(None, ge=1),
                         ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE))):
     """Collect posts of the selected page via the platform's Apify actor."""
-    from app.agent.search import collect_page_posts
     from app.admin.settings import effective_limits
+    from app.agent.search import collect_page_posts
 
     db = _db_or_503()
     await _find_or_404(db, "facebook_pages", {"_id": _oid(page_id)}, ctx, request)
@@ -863,11 +862,11 @@ async def get_post(post_id: str, request: Request,
 
 @router.post("/posts/{post_id}/comments")
 async def collect_comments(post_id: str, request: Request,
-                           max_comments: Optional[int] = Query(None, ge=1),
+                           max_comments: int | None = Query(None, ge=1),
                            ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE))):
     """Collect comments of the selected post + run AI analysis (ai_comments)."""
-    from app.agent.search import collect_post_comments
     from app.admin.settings import effective_limits
+    from app.agent.search import collect_post_comments
 
     db = _db_or_503()
     await _find_or_404(db, "facebook_posts", {"_id": _oid(post_id)}, ctx, request)
@@ -893,8 +892,8 @@ async def list_post_comments(
     filter_type: str = Query("all", description="all | leads | contact | hot | warm | pricing | inquiry"),
     only_leads: bool = Query(False, description="show only valuable comments (is_lead)"),
     contact_only: bool = Query(False, description="only comments with phone or email"),
-    q: Optional[str] = Query(None, description="Search text in comment, name, phone, email"),
-    quality: Optional[str] = Query(None, description="hot | warm | cold"),
+    q: str | None = Query(None, description="Search text in comment, name, phone, email"),
+    quality: str | None = Query(None, description="hot | warm | cold"),
     sort_by: str = Query("score", description="score | newest | reactions | oldest"),
     offset: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=1000),
@@ -1196,9 +1195,9 @@ def _csv_response(rows: list, columns: list, filename: str,
 async def export_csv(
     scope: str,
     request: Request,
-    run_id: Optional[str] = Query(None),
-    page_id: Optional[str] = Query(None),
-    post_id: Optional[str] = Query(None),
+    run_id: str | None = Query(None),
+    page_id: str | None = Query(None),
+    post_id: str | None = Query(None),
     only_leads: bool = Query(True),
     ctx: TenantContext = Depends(require_org_permission(P.EXPORTS_CREATE)),
 ):
@@ -1313,20 +1312,20 @@ def _lead_oid(lead_id: str) -> ObjectId:
 
 
 async def _get_lead_or_404(db, lead_id: str, ctx: TenantContext,
-                           request: Request) -> Dict[str, Any]:
+                           request: Request) -> dict[str, Any]:
     return await _find_or_404(db, "ai_comments", {"_id": _lead_oid(lead_id)}, ctx, request)
 
 
 @router.get("/leads")
 async def list_leads(
     request: Request,
-    status: Optional[str] = Query(None),
-    priority: Optional[str] = Query(None),
-    platform: Optional[str] = Query(None),
-    intent: Optional[str] = Query(None),
-    min_score: Optional[int] = Query(None),
-    max_score: Optional[int] = Query(None),
-    search: Optional[str] = Query(None),
+    status: str | None = Query(None),
+    priority: str | None = Query(None),
+    platform: str | None = Query(None),
+    intent: str | None = Query(None),
+    min_score: int | None = Query(None),
+    max_score: int | None = Query(None),
+    search: str | None = Query(None),
     sort: str = Query("score"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -1402,8 +1401,8 @@ async def get_lead(lead_id: str, request: Request,
     return result
 
 
-async def _resolve_assignee(db, ctx: TenantContext, body: Dict[str, Any]
-                            ) -> Optional[Dict[str, Any]]:
+async def _resolve_assignee(db, ctx: TenantContext, body: dict[str, Any]
+                            ) -> dict[str, Any] | None:
     """Resolve the requested assignee to an ACTIVE member of the caller's
     organization. Returns None for "unassign"; raises 400 otherwise."""
     raw = body.get("assigned_user_id") if "assigned_user_id" in body else body.get("assigned_to")
@@ -1640,9 +1639,9 @@ async def update_lead_follow_up(lead_id: str, fu_index: int, body: dict, request
 @router.get("/leads/stats/summary")
 async def lead_stats_summary(
     request: Request,
-    platform: Optional[str] = Query(None),
-    from_date: Optional[str] = Query(None),
-    to_date: Optional[str] = Query(None),
+    platform: str | None = Query(None),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
     ctx: TenantContext = Depends(require_org_permission(P.LEADS_VIEW)),
 ):
     """Get lead statistics summary with conversion rates and score metrics."""
@@ -1763,23 +1762,23 @@ async def lead_stats_summary(
 
 class SearchPresetCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
-    industry: Optional[str] = Field(None, max_length=100)
-    business_type: Optional[str] = Field(None, max_length=100)
-    target_customer: Optional[str] = Field(None, max_length=100)
-    keywords: List[str] = Field(default_factory=list)
-    exclude_keywords: List[str] = Field(default_factory=list)
+    industry: str | None = Field(None, max_length=100)
+    business_type: str | None = Field(None, max_length=100)
+    target_customer: str | None = Field(None, max_length=100)
+    keywords: list[str] = Field(default_factory=list)
+    exclude_keywords: list[str] = Field(default_factory=list)
     match_mode: str = Field(default="any")
-    notes: Optional[str] = Field(None, max_length=300)
+    notes: str | None = Field(None, max_length=300)
     is_shared: bool = Field(default=False)
 
 
 @router.get("/business-context/catalog")
 async def get_business_context_catalog(request: Request):
     """Return the generic domain taxonomy catalog plus organization defaults (if session present)."""
-    from app.pipeline.domain_intelligence import get_taxonomy_catalog
     from app.auth.service import session_user
-    from app.auth.tenant import resolve_tenant_context, org_match
+    from app.auth.tenant import org_match, resolve_tenant_context
     from app.db.mongo import get_sync_db
+    from app.pipeline.domain_intelligence import get_taxonomy_catalog
 
     catalog = get_taxonomy_catalog()
     org_defaults = {}
@@ -1820,7 +1819,7 @@ async def list_search_presets(
 ):
     """List saved search presets accessible to this user within the organization."""
     db = _db_or_503()
-    query: Dict[str, Any] = {
+    query: dict[str, Any] = {
         "organization_id": org_match(ctx.organization_id),
     }
     if not ctx.can_view_all_org_data:
@@ -1881,4 +1880,123 @@ async def delete_search_preset(
 
     await db.search_presets.delete_one({"_id": oid})
     return {"success": True, "deleted_id": preset_id}
+
+
+# ── Phase 6: Scheduled / Recurring Scans & Bulk URL Search ─────────────────
+
+class ScheduledScanCreate(BaseModel):
+    url: str
+    frequency: str = "daily"
+    interval_hours: int | None = None
+    only_new_posts: bool = True
+    max_posts: int = Field(20, ge=1, le=100)
+    max_comments_per_post: int = Field(30, ge=1, le=200)
+
+
+@router.post("/search/scheduled")
+async def create_scheduled_search_run(
+    data: ScheduledScanCreate,
+    ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
+):
+    """Create a recurring scheduled search scan."""
+    db = _db_or_503()
+    from app.services.scheduler import create_scheduled_scan
+    try:
+        doc = create_scheduled_scan(
+            db.delegate,
+            organization_id=ctx.organization_id,
+            user_id=ctx.user_id,
+            url=data.url,
+            frequency=data.frequency,
+            interval_hours=data.interval_hours,
+            only_new_posts=data.only_new_posts,
+            max_posts=data.max_posts,
+            max_comments_per_post=data.max_comments_per_post,
+            created_by=ctx.email,
+        )
+        return {"success": True, "scan": _serialize(doc)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/search/scheduled")
+async def get_scheduled_search_runs(
+    ctx: TenantContext = Depends(require_org_permission(P.SEARCH_VIEW)),
+):
+    """List scheduled scans for the tenant organization."""
+    db = _db_or_503()
+    from app.services.scheduler import list_scheduled_scans
+    scans = list_scheduled_scans(db.delegate, ctx.organization_id)
+    return {"items": _serialize(scans), "total": len(scans)}
+
+
+@router.delete("/search/scheduled/{scan_id}")
+async def remove_scheduled_search_run(
+    scan_id: str,
+    request: Request,
+    ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
+):
+    """Cancel and delete a scheduled search scan."""
+    db = _db_or_503()
+    oid = _safe_oid(scan_id)
+    id_q = {"$or": [{"_id": oid}, {"scan_id": scan_id}]} if oid else {"scan_id": scan_id}
+    await _find_or_404(db, "scheduled_scans", id_q, ctx, request, detail="Scheduled scan not found")
+    from app.services.scheduler import delete_scheduled_scan
+    deleted = delete_scheduled_scan(db.delegate, scan_id, ctx.organization_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Scheduled scan not found")
+    return {"success": True, "deleted_id": scan_id}
+
+
+class BulkSearchCreate(BaseModel):
+    urls: list[str]
+    max_posts: int = Field(20, ge=1, le=100)
+    max_comments_per_post: int = Field(30, ge=1, le=200)
+
+
+@router.post("/search/bulk")
+async def create_bulk_search_runs(
+    data: BulkSearchCreate,
+    ctx: TenantContext = Depends(require_org_permission(P.SEARCH_CREATE)),
+):
+    """Submit a batch of social URLs for multi-URL concurrent search runs."""
+    db = _db_or_503()
+    from app.services.scheduler import process_bulk_urls
+    res = process_bulk_urls(
+        db.delegate,
+        urls=data.urls,
+        organization_id=ctx.organization_id,
+        user_id=ctx.user_id,
+        created_by=ctx.email,
+        max_posts=data.max_posts,
+        max_comments_per_post=data.max_comments_per_post,
+    )
+    return res
+
+
+@router.get("/leads/export/xlsx")
+async def export_leads_xlsx(
+    request: Request,
+    platform: str | None = None,
+    priority: str | None = None,
+    ctx: TenantContext = Depends(require_org_permission(P.EXPORTS_CREATE)),
+):
+    """Export organization leads to Excel Spreadsheet (.xlsx/XML format) with formula escaping."""
+    db = _db_or_503()
+    q = _scoped(ctx, "ai_comments")
+    if platform:
+        q["platform"] = platform
+    if priority:
+        q["priority"] = priority
+
+    leads = [d async for d in db.ai_comments.find(q).sort("created_at", -1).limit(5000)]
+    from app.services.crm_connectors import ExcelExportService
+    xml_bytes = ExcelExportService.generate_spreadsheet_xml(leads, title=f"Leads_{ctx.organization_id[:8]}")
+
+    return Response(
+        content=xml_bytes,
+        media_type="application/vnd.ms-excel",
+        headers={"Content-Disposition": f"attachment; filename=leads_export_{utcnow().strftime('%Y%m%d')}.xls"},
+    )
+
 

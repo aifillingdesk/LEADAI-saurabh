@@ -50,7 +50,7 @@ import logging
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -127,7 +127,7 @@ TICKET_STATUSES = ("open", "in_progress", "waiting", "resolved", "closed")
 # Guards
 # ═══════════════════════════════════════════════════════════════════════════
 
-def admin_portal_enabled(org: Optional[Dict[str, Any]]) -> bool:
+def admin_portal_enabled(org: dict[str, Any] | None) -> bool:
     """Same rule as GET /api/auth/me: confirmed subscription or explicit flag."""
     org = org or {}
     return bool(org.get("admin_portal_enabled")) or org.get("status") == "active"
@@ -148,7 +148,7 @@ def _assert_portal(ctx: TenantContext) -> None:
             "message": "The Admin portal unlocks after your subscription is confirmed."})
 
 
-def require_portal(perm: Optional[str] = None):
+def require_portal(perm: str | None = None):
     """Org owner/admin of an organization whose Admin portal is enabled
     (+ an optional specific org permission)."""
     admin_dep = require_org_admin()
@@ -187,19 +187,19 @@ def _ser(doc: Any) -> Any:
     return doc
 
 
-def _oid(value: Any) -> Optional[ObjectId]:
+def _oid(value: Any) -> ObjectId | None:
     try:
         return ObjectId(str(value))
     except Exception:
         return None
 
 
-def _paged(items: List[Any], total: int, page: int, limit: int, **extra) -> Dict[str, Any]:
+def _paged(items: list[Any], total: int, page: int, limit: int, **extra) -> dict[str, Any]:
     return {"success": True, "items": items, "total": total, "page": page, "limit": limit,
             "pages": (total + limit - 1) // limit if limit else 0, **extra}
 
 
-def _parse_date(value: Optional[str], *, end: bool = False) -> Optional[datetime]:
+def _parse_date(value: str | None, *, end: bool = False) -> datetime | None:
     """ISO date/datetime -> naive UTC (Mongo stores naive UTC)."""
     if not value:
         return None
@@ -215,8 +215,8 @@ def _parse_date(value: Optional[str], *, end: bool = False) -> Optional[datetime
     return d
 
 
-def _date_filter(field: str, date_from: Optional[str], date_to: Optional[str]) -> Dict[str, Any]:
-    rng: Dict[str, Any] = {}
+def _date_filter(field: str, date_from: str | None, date_to: str | None) -> dict[str, Any]:
+    rng: dict[str, Any] = {}
     start, end = _parse_date(date_from), _parse_date(date_to, end=True)
     if start:
         rng["$gte"] = start
@@ -225,7 +225,7 @@ def _date_filter(field: str, date_from: Optional[str], date_to: Optional[str]) -
     return {field: rng} if rng else {}
 
 
-def _as_naive(v: Any) -> Optional[datetime]:
+def _as_naive(v: Any) -> datetime | None:
     if isinstance(v, datetime):
         return v.astimezone(timezone.utc).replace(tzinfo=None) if v.tzinfo else v
     if isinstance(v, (int, float)):
@@ -242,31 +242,31 @@ def _as_naive(v: Any) -> Optional[datetime]:
     return None
 
 
-def _regex(q: str) -> Dict[str, Any]:
+def _regex(q: str) -> dict[str, Any]:
     return {"$regex": re.escape(q.strip()[:120]), "$options": "i"}
 
 
-def _and(*clauses: Dict[str, Any]) -> Dict[str, Any]:
+def _and(*clauses: dict[str, Any]) -> dict[str, Any]:
     parts = [c for c in clauses if c]
     if not parts:
         return {}
     return parts[0] if len(parts) == 1 else {"$and": parts}
 
 
-def _org_q(ctx: TenantContext) -> Dict[str, Any]:
+def _org_q(ctx: TenantContext) -> dict[str, Any]:
     return {"organization_id": org_match(ctx.organization_id)}
 
 
-async def _org_doc(db, ctx: TenantContext) -> Dict[str, Any]:
+async def _org_doc(db, ctx: TenantContext) -> dict[str, Any]:
     org = await db.organizations.find_one({"_id": ObjectId(ctx.organization_id)})
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
     return org
 
 
-async def _user_map(db, ids) -> Dict[str, Dict[str, Any]]:
+async def _user_map(db, ids) -> dict[str, dict[str, Any]]:
     oids = [o for o in (_oid(i) for i in set(i for i in ids if i)) if o is not None]
-    out: Dict[str, Dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     if not oids:
         return out
     async for u in db.users.find({"_id": {"$in": oids}}, {"name": 1, "email": 1}):
@@ -274,21 +274,21 @@ async def _user_map(db, ids) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-async def _member_ids(db, ctx: TenantContext) -> List[str]:
+async def _member_ids(db, ctx: TenantContext) -> list[str]:
     return [m["user_id"] async for m in db.organization_members.find(
         {"organization_id": ctx.organization_id, "status": {"$ne": "removed"}}, {"user_id": 1})]
 
 
 async def _audit(ctx: TenantContext, request: Request, action: str, category: str, *,
-                 resource_type: Optional[str] = None, resource_id: Optional[str] = None,
-                 details: Optional[Dict[str, Any]] = None, success: bool = True) -> None:
+                 resource_type: str | None = None, resource_id: str | None = None,
+                 details: dict[str, Any] | None = None, success: bool = True) -> None:
     await aaudit(action, category, user=ctx.audit_user(), organization_id=ctx.organization_id,
                  resource_type=resource_type, resource_id=resource_id, details=details or {},
                  success=success, **request_meta(request))
 
 
 async def _get_member_or_404(db, ctx: TenantContext, user_id: str,
-                             request: Request) -> Dict[str, Any]:
+                             request: Request) -> dict[str, Any]:
     membership = await db.organization_members.find_one(
         {"organization_id": ctx.organization_id, "user_id": str(user_id),
          "status": {"$ne": "removed"}})
@@ -302,20 +302,20 @@ async def _get_member_or_404(db, ctx: TenantContext, user_id: str,
     return membership
 
 
-async def _count_by(db, coll: str, match: Dict[str, Any], field: str) -> Dict[str, int]:
-    out: Dict[str, int] = {}
+async def _count_by(db, coll: str, match: dict[str, Any], field: str) -> dict[str, int]:
+    out: dict[str, int] = {}
     async for row in db[coll].aggregate([{"$match": match},
                                          {"$group": {"_id": f"${field}", "n": {"$sum": 1}}}]):
         out[str(row["_id"]) if row["_id"] is not None else ""] = row["n"]
     return out
 
 
-def _run_platform(run: Dict[str, Any]) -> str:
+def _run_platform(run: dict[str, Any]) -> str:
     return ((run.get("intent") or {}).get("platform") or run.get("platform") or "unknown")
 
 
-def _run_row(run: Dict[str, Any], users: Dict[str, Dict[str, Any]],
-             leads: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+def _run_row(run: dict[str, Any], users: dict[str, dict[str, Any]],
+             leads: dict[str, int] | None = None) -> dict[str, Any]:
     uid = run.get("user_id") or ""
     u = users.get(uid) or {}
     started, finished = _as_naive(run.get("created_at")), _as_naive(run.get("completed_at"))
@@ -349,7 +349,7 @@ def _run_row(run: Dict[str, Any], users: Dict[str, Dict[str, Any]],
 # Context & dashboard
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _permission_catalog() -> List[Dict[str, Any]]:
+def _permission_catalog() -> list[dict[str, Any]]:
     out = []
     for group, perms in PERMISSION_CATALOG:
         items = [{"key": k, "label": label, "description": desc}
@@ -359,8 +359,8 @@ def _permission_catalog() -> List[Dict[str, Any]]:
     return out
 
 
-def _caps(org_id: str) -> Dict[str, Any]:
-    caps: Dict[str, Any] = {}
+def _caps(org_id: str) -> dict[str, Any]:
+    caps: dict[str, Any] = {}
     try:
         from app.billing.entitlements import EntitlementService
         caps = dict(EntitlementService.get_run_caps(org_id) or {})
@@ -476,7 +476,7 @@ async def overview(ctx: TenantContext = Depends(require_portal())):
     # alerts
     settings = org.get("settings") or {}
     warn_at = int(settings.get("usage_warning_percent") or 80)
-    alerts: List[Dict[str, Any]] = []
+    alerts: list[dict[str, Any]] = []
     for metric, m in (usage.get("metrics") or {}).items():
         if m.get("limit") and m.get("percentage", 0) >= warn_at:
             alerts.append({"severity": "danger" if m["percentage"] >= 100 else "warning",
@@ -539,7 +539,7 @@ async def overview(ctx: TenantContext = Depends(require_portal())):
     }
 
 
-def _lead_row(lead: Dict[str, Any], users: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def _lead_row(lead: dict[str, Any], users: dict[str, dict[str, Any]]) -> dict[str, Any]:
     assignee = users.get(lead.get("assigned_user_id") or "") or {}
     owner = users.get(lead.get("user_id") or "") or {}
     return {
@@ -573,7 +573,7 @@ def _lead_row(lead: Dict[str, Any], users: Dict[str, Dict[str, Any]]) -> Dict[st
 
 @router.get("/users")
 async def list_users(
-    q: Optional[str] = None, role: Optional[str] = None, status: Optional[str] = None,
+    q: str | None = None, role: str | None = None, status: str | None = None,
     sort: str = Query("name", pattern="^(name|email|role|status|last_login|searches|leads|joined)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
@@ -681,7 +681,7 @@ class ResetAccessBody(BaseModel):
 
 
 @router.post("/users/{user_id}/reset-access")
-async def reset_user_access(user_id: str, request: Request, body: Optional[ResetAccessBody] = None,
+async def reset_user_access(user_id: str, request: Request, body: ResetAccessBody | None = None,
                             ctx: TenantContext = Depends(require_portal(P.MEMBERS_UPDATE))):
     """Email the member a single-use password reset link (never a password).
     Optionally signs them out everywhere."""
@@ -743,7 +743,7 @@ async def reset_user_access(user_id: str, request: Request, body: Optional[Reset
 
 
 class MemberBulkBody(BaseModel):
-    ids: List[str]
+    ids: list[str]
     action: str
 
 
@@ -782,8 +782,8 @@ async def bulk_members(body: MemberBulkBody, request: Request,
             report_out_of_scope(request, ctx, "organization_members", other)
         raise HTTPException(status_code=404, detail="One or more team members were not found")
 
-    skipped: List[Dict[str, str]] = []
-    targets: List[Dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    targets: list[dict[str, Any]] = []
     for m in members:
         try:
             assert_can_manage_member(ctx, target_role=m.get("role"), target_user_id=m["user_id"])
@@ -808,7 +808,7 @@ async def bulk_members(body: MemberBulkBody, request: Request,
                 "message": f"Your plan allows {limit} team members. Upgrade to restore "
                            f"{_plural(len(restoring), 'user')}."})
 
-    updated: List[str] = []
+    updated: list[str] = []
     revoked = 0
     if targets:
         await db.organization_members.update_many(
@@ -835,13 +835,13 @@ async def bulk_members(body: MemberBulkBody, request: Request,
 @router.get("/invitations")
 async def list_invitations(
     status: str = Query("pending", pattern="^(pending|accepted|cancelled|expired|all)$"),
-    q: Optional[str] = None,
+    q: str | None = None,
     page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
     ctx: TenantContext = Depends(require_portal(P.MEMBERS_INVITE)),
 ):
     db = _db()
     now = datetime.utcnow()
-    query: Dict[str, Any] = {"organization_id": ctx.organization_id}
+    query: dict[str, Any] = {"organization_id": ctx.organization_id}
     if status == "pending":
         query.update({"status": "pending", "expires_at": {"$gt": now}})
     elif status == "expired":
@@ -899,9 +899,9 @@ async def roles(ctx: TenantContext = Depends(require_portal(P.MEMBERS_VIEW))):
 
 @router.get("/searches")
 async def list_searches(
-    q: Optional[str] = None, user_id: Optional[str] = None, platform: Optional[str] = None,
-    status: Optional[str] = None, date_from: Optional[str] = Query(None, alias="from"),
-    date_to: Optional[str] = Query(None, alias="to"),
+    q: str | None = None, user_id: str | None = None, platform: str | None = None,
+    status: str | None = None, date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
     sort: str = Query("newest", pattern="^(newest|oldest|results|status)$"),
     page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
     ctx: TenantContext = Depends(require_portal(P.SEARCH_VIEW)),
@@ -966,8 +966,8 @@ async def search_detail(run_id: str, request: Request,
 
 def _lead_filters(ctx: TenantContext, *, q=None, status=None, priority=None, platform=None,
                   quality=None, assignee=None, owner=None, min_score=None, max_score=None,
-                  date_from=None, date_to=None, run_id=None) -> Dict[str, Any]:
-    clauses: List[Dict[str, Any]] = [scope_query(ctx, {"is_lead": True}, **_LEAD)]
+                  date_from=None, date_to=None, run_id=None) -> dict[str, Any]:
+    clauses: list[dict[str, Any]] = [scope_query(ctx, {"is_lead": True}, **_LEAD)]
     if q:
         rx = _regex(q)
         clauses.append({"$or": [{"commenter_name": rx}, {"comment_text": rx}, {"page_name": rx},
@@ -992,7 +992,7 @@ def _lead_filters(ctx: TenantContext, *, q=None, status=None, priority=None, pla
         clauses.append({"user_id": str(owner)})
     if run_id:
         clauses.append({"search_run_id": run_id})
-    score: Dict[str, Any] = {}
+    score: dict[str, Any] = {}
     if min_score is not None:
         score["$gte"] = min_score
     if max_score is not None:
@@ -1005,11 +1005,11 @@ def _lead_filters(ctx: TenantContext, *, q=None, status=None, priority=None, pla
 
 @router.get("/leads")
 async def list_leads(
-    q: Optional[str] = None, status: Optional[str] = None, priority: Optional[str] = None,
-    platform: Optional[str] = None, quality: Optional[str] = None,
-    assignee: Optional[str] = None, owner: Optional[str] = None, run_id: Optional[str] = None,
-    min_score: Optional[int] = Query(None, ge=0, le=100), max_score: Optional[int] = Query(None, ge=0, le=100),
-    date_from: Optional[str] = Query(None, alias="from"), date_to: Optional[str] = Query(None, alias="to"),
+    q: str | None = None, status: str | None = None, priority: str | None = None,
+    platform: str | None = None, quality: str | None = None,
+    assignee: str | None = None, owner: str | None = None, run_id: str | None = None,
+    min_score: int | None = Query(None, ge=0, le=100), max_score: int | None = Query(None, ge=0, le=100),
+    date_from: str | None = Query(None, alias="from"), date_to: str | None = Query(None, alias="to"),
     sort: str = Query("newest", pattern="^(score|newest|oldest|updated|name)$"),
     page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
     ctx: TenantContext = Depends(require_portal(P.LEADS_VIEW)),
@@ -1057,13 +1057,13 @@ BULK_MAX = 500
 
 
 class LeadBulkBody(BaseModel):
-    ids: List[str]
+    ids: list[str]
     action: str
-    value: Optional[str] = None
-    reason: Optional[str] = ""
+    value: str | None = None
+    reason: str | None = ""
 
 
-def _bulk_ids(raw: List[Any], noun: str) -> List[str]:
+def _bulk_ids(raw: list[Any], noun: str) -> list[str]:
     ids = list(dict.fromkeys(str(i).strip() for i in (raw or []) if str(i).strip()))
     if not ids:
         raise HTTPException(status_code=422, detail=f"Select at least one {noun}")
@@ -1086,14 +1086,16 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
     Same rules as PATCH /api/leads/{id}: assignment needs ``leads.assign`` and
     an active member; status changes must be valid transitions (others are
     reported in ``skipped``). One ``update_many`` per group, one audit entry."""
+    from app.api.routes.search import _resolve_assignee
     from app.pipeline.lead_lifecycle import (
         LEAD_PRIORITIES,
-        LEAD_STATUSES as VALID_STATUSES,
         can_transition,
-        validate_transition,
         create_assignment_history_entry,
+        validate_transition,
     )
-    from app.api.routes.search import _resolve_assignee
+    from app.pipeline.lead_lifecycle import (
+        LEAD_STATUSES as VALID_STATUSES,
+    )
     action = (body.action or "").strip().lower()
     if action not in ("assign", "status", "priority"):
         raise HTTPException(status_code=422, detail="action must be assign, status or priority")
@@ -1130,8 +1132,8 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
     to_email = assignee["email"] if assignee else None
 
     now = utcnow()
-    skipped: List[Dict[str, str]] = []
-    groups: Dict[Any, List[ObjectId]] = {}
+    skipped: list[dict[str, str]] = []
+    groups: dict[Any, list[ObjectId]] = {}
     for d in docs:
         lid = str(d["_id"])
         if action == "assign":
@@ -1161,9 +1163,9 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
                 continue
             groups.setdefault(None, []).append(d["_id"])
 
-    updated: List[str] = []
+    updated: list[str] = []
     for key, group in groups.items():
-        match: Dict[str, Any] = {"_id": {"$in": group}}
+        match: dict[str, Any] = {"_id": {"$in": group}}
         if action == "assign":
             # the value we validated must still be there (no lost concurrent change)
             match["assigned_user_id"] = key if key else {"$in": [None, ""]}
@@ -1207,15 +1209,15 @@ async def bulk_leads(body: LeadBulkBody, request: Request,
 # ── Lead rules (org keywords) ───────────────────────────────────────────────
 
 class LeadRulesBody(BaseModel):
-    keywords: List[str] = []
-    exclude_keywords: List[str] = []
+    keywords: list[str] = []
+    exclude_keywords: list[str] = []
 
 
 class LeadRulesTest(BaseModel):
     text: str
 
 
-def _global_rule_summary() -> Optional[Dict[str, Any]]:
+def _global_rule_summary() -> dict[str, Any] | None:
     try:
         from app.pipeline.comment_filter import load_active_rule
         db = get_sync_db()
@@ -1235,6 +1237,7 @@ async def get_lead_rules(ctx: TenantContext = Depends(require_portal(P.SETTINGS_
     settings = (await _org_doc(db, ctx)).get("settings") or {}
     kws = settings.get("lead_keywords") or []
     import asyncio
+
     from app.pipeline.business_context import org_business_context
     biz = await asyncio.to_thread(org_business_context, ctx.organization_id)
     return {"success": True, "keywords": kws,
@@ -1301,35 +1304,38 @@ async def test_lead_rules(body: LeadRulesTest, ctx: TenantContext = Depends(requ
 
 class BusinessProfileBody(BaseModel):
     industry: str
-    custom_industry: Optional[str] = ""
-    business_type: Optional[str] = ""
-    custom_business_type: Optional[str] = ""
-    description: Optional[str] = ""
-    offerings: Optional[str] = ""
-    target_customers: Optional[str] = ""
-    target_customer_types: List[str] = []
-    primary_offerings: List[str] = []
-    lead_criteria: Optional[str] = ""
-    requirement_terms: List[str] = []
+    custom_industry: str | None = ""
+    business_type: str | None = ""
+    custom_business_type: str | None = ""
+    description: str | None = ""
+    offerings: str | None = ""
+    target_customers: str | None = ""
+    target_customer_types: list[str] = []
+    primary_offerings: list[str] = []
+    lead_criteria: str | None = ""
+    requirement_terms: list[str] = []
     filter_by_industry: bool = False
 
 
 class KeywordLibraryBody(BaseModel):
-    active_keywords: List[str] = []
-    excluded_keywords: List[str] = []
+    active_keywords: list[str] = []
+    excluded_keywords: list[str] = []
 
 
 class RecommendKeywordsBody(BaseModel):
-    industry: Optional[str] = None
-    business_type: Optional[str] = None
-    target_customers: Optional[List[str]] = None
-    products_services: Optional[List[str]] = None
-    custom_industry: Optional[str] = None
+    industry: str | None = None
+    business_type: str | None = None
+    target_customers: list[str] | None = None
+    products_services: list[str] | None = None
+    custom_industry: str | None = None
 
 
-def _business_profile_payload(org: Dict[str, Any], ctx: TenantContext) -> Dict[str, Any]:
+def _business_profile_payload(org: dict[str, Any], ctx: TenantContext) -> dict[str, Any]:
     from app.pipeline import business_context as bc
-    from app.pipeline.domain_intelligence import get_taxonomy_catalog, generate_recommendations
+    from app.pipeline.domain_intelligence import (
+        generate_recommendations,
+        get_taxonomy_catalog,
+    )
     settings = org.get("settings") or {}
     effective = bc.build_context(org)
     taxonomy = get_taxonomy_catalog()
@@ -1374,6 +1380,7 @@ async def put_business_profile(body: BusinessProfileBody, request: Request,
     search's lead analysis (AI prompt, rule vocabulary and, when enabled, the
     comment filter) uses it."""
     import asyncio
+
     from app.pipeline import business_context as bc
     industry = await asyncio.to_thread(bc.get_industry, body.industry)
     if not industry or not industry["enabled"]:
@@ -1493,9 +1500,9 @@ _DATA = {
 
 @router.get("/data/{kind}")
 async def browse_data(
-    kind: str, q: Optional[str] = None, platform: Optional[str] = None,
-    run_id: Optional[str] = None, page_id: Optional[str] = None, post_id: Optional[str] = None,
-    user_id: Optional[str] = None, sort: str = "newest",
+    kind: str, q: str | None = None, platform: str | None = None,
+    run_id: str | None = None, page_id: str | None = None, post_id: str | None = None,
+    user_id: str | None = None, sort: str = "newest",
     page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
     ctx: TenantContext = Depends(require_portal(P.SEARCH_VIEW)),
 ):
@@ -1583,8 +1590,8 @@ async def apify_summary(ctx: TenantContext = Depends(require_portal(P.SEARCH_VIE
 
 @router.get("/apify/jobs")
 async def apify_jobs(
-    status: Optional[str] = None, platform: Optional[str] = None, q: Optional[str] = None,
-    date_from: Optional[str] = Query(None, alias="from"), date_to: Optional[str] = Query(None, alias="to"),
+    status: str | None = None, platform: str | None = None, q: str | None = None,
+    date_from: str | None = Query(None, alias="from"), date_to: str | None = Query(None, alias="to"),
     page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
     ctx: TenantContext = Depends(require_portal(P.SEARCH_VIEW)),
 ):
@@ -1596,7 +1603,7 @@ async def apify_jobs(
 
 @router.get("/apify/runs")
 async def apify_runs(
-    status: Optional[str] = None,
+    status: str | None = None,
     page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
     ctx: TenantContext = Depends(require_portal(P.SEARCH_VIEW)),
 ):
@@ -1618,8 +1625,8 @@ async def apify_runs(
 # Analytics
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def _daily(db, coll: str, match: Dict[str, Any], field: str, days: List[str],
-                 value_field: Optional[str] = None, cap: int = 200000) -> Dict[str, int]:
+async def _daily(db, coll: str, match: dict[str, Any], field: str, days: list[str],
+                 value_field: str | None = None, cap: int = 200000) -> dict[str, int]:
     out = {d: 0 for d in days}
     proj = {field: 1}
     if value_field:
@@ -1636,7 +1643,7 @@ async def _daily(db, coll: str, match: Dict[str, Any], field: str, days: List[st
 
 @router.get("/analytics")
 async def analytics(
-    date_from: Optional[str] = Query(None, alias="from"), date_to: Optional[str] = Query(None, alias="to"),
+    date_from: str | None = Query(None, alias="from"), date_to: str | None = Query(None, alias="to"),
     ctx: TenantContext = Depends(require_portal()),
 ):
     db = _db()
@@ -1777,7 +1784,7 @@ _EXPORT_MAX = 50000
 
 
 @router.get("/exports")
-async def export_history(scope: Optional[str] = None, page: int = Query(1, ge=1),
+async def export_history(scope: str | None = None, page: int = Query(1, ge=1),
                          limit: int = Query(20, ge=1, le=MAX_LIMIT),
                          ctx: TenantContext = Depends(require_portal(P.EXPORTS_VIEW))):
     db = _db()
@@ -1797,12 +1804,12 @@ async def export_history(scope: Optional[str] = None, page: int = Query(1, ge=1)
 @router.get("/exports/{kind}.csv")
 async def export_csv(
     kind: str, request: Request,
-    q: Optional[str] = None, status: Optional[str] = None, platform: Optional[str] = None,
-    assignee: Optional[str] = None, run_id: Optional[str] = None,
-    date_from: Optional[str] = Query(None, alias="from"), date_to: Optional[str] = Query(None, alias="to"),
-    quality: Optional[str] = None, priority: Optional[str] = None,
-    min_score: Optional[int] = Query(None, ge=0, le=100), user_id: Optional[str] = None,
-    page_id: Optional[str] = None, post_id: Optional[str] = None,
+    q: str | None = None, status: str | None = None, platform: str | None = None,
+    assignee: str | None = None, run_id: str | None = None,
+    date_from: str | None = Query(None, alias="from"), date_to: str | None = Query(None, alias="to"),
+    quality: str | None = None, priority: str | None = None,
+    min_score: int | None = Query(None, ge=0, le=100), user_id: str | None = None,
+    page_id: str | None = None, post_id: str | None = None,
     ctx: TenantContext = Depends(require_portal(P.EXPORTS_CREATE)),
 ):
     """CSV of what the matching table shows: the same filters apply."""
@@ -1824,7 +1831,7 @@ async def export_csv(
             source=f"org_admin_export_{kind}", db=db)
 
     oq = _org_q(ctx)
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     if kind == "users":
         members = [m async for m in db.organization_members.find(
             {"organization_id": ctx.organization_id, "status": {"$ne": "removed"}})]
@@ -1926,12 +1933,12 @@ async def export_csv(
 class ClientExportLog(BaseModel):
     table: str
     rows: int = 0
-    columns: List[str] = []
-    filters: Dict[str, Any] = {}
+    columns: list[str] = []
+    filters: dict[str, Any] = {}
 
 
-def _clean_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _clean_filters(filters: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for k, v in list((filters or {}).items())[:30]:
         key = re.sub(r"[^A-Za-z0-9_.-]", "", str(k))[:40]
         if not key or v is None or v == "":
@@ -1983,7 +1990,7 @@ def _audit_query(ctx: TenantContext, action, category, user, status, q, date_fro
     return _and(*clauses)
 
 
-def _audit_row(a: Dict[str, Any]) -> Dict[str, Any]:
+def _audit_row(a: dict[str, Any]) -> dict[str, Any]:
     return {"id": str(a["_id"]), "action": a.get("action"), "category": a.get("category"),
             "actor_email": a.get("actor_email"), "actor_role": a.get("actor_role"),
             "actor_user_id": a.get("actor_user_id"), "status": a.get("status"),
@@ -1994,9 +2001,9 @@ def _audit_row(a: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.get("/audit-logs")
 async def audit_logs(
-    action: Optional[str] = None, category: Optional[str] = None, user: Optional[str] = None,
-    status: Optional[str] = None, q: Optional[str] = None,
-    date_from: Optional[str] = Query(None, alias="from"), date_to: Optional[str] = Query(None, alias="to"),
+    action: str | None = None, category: str | None = None, user: str | None = None,
+    status: str | None = None, q: str | None = None,
+    date_from: str | None = Query(None, alias="from"), date_to: str | None = Query(None, alias="to"),
     page: int = Query(1, ge=1), limit: int = Query(25, ge=1, le=MAX_LIMIT),
     ctx: TenantContext = Depends(require_portal(P.ORG_AUDIT_VIEW)),
 ):
@@ -2019,9 +2026,9 @@ async def audit_facets(ctx: TenantContext = Depends(require_portal(P.ORG_AUDIT_V
 
 @router.get("/audit-logs.csv")
 async def audit_logs_csv(
-    request: Request, action: Optional[str] = None, category: Optional[str] = None,
-    user: Optional[str] = None, status: Optional[str] = None, q: Optional[str] = None,
-    date_from: Optional[str] = Query(None, alias="from"), date_to: Optional[str] = Query(None, alias="to"),
+    request: Request, action: str | None = None, category: str | None = None,
+    user: str | None = None, status: str | None = None, q: str | None = None,
+    date_from: str | None = Query(None, alias="from"), date_to: str | None = Query(None, alias="to"),
     ctx: TenantContext = Depends(require_portal(P.ORG_AUDIT_VIEW)),
 ):
     from app.api.routes.search import _csv_response
@@ -2061,7 +2068,7 @@ class TicketStatus(BaseModel):
     status: str
 
 
-def _ticket_row(t: Dict[str, Any], full: bool = False) -> Dict[str, Any]:
+def _ticket_row(t: dict[str, Any], full: bool = False) -> dict[str, Any]:
     msgs = t.get("messages") or []
     row = {"id": str(t["_id"]), "number": t.get("number"), "subject": t.get("subject"),
            "category": t.get("category"), "priority": t.get("priority"), "status": t.get("status"),
@@ -2075,7 +2082,7 @@ def _ticket_row(t: Dict[str, Any], full: bool = False) -> Dict[str, Any]:
     return row
 
 
-async def _ticket_or_404(db, ctx: TenantContext, ticket_id: str, request: Request) -> Dict[str, Any]:
+async def _ticket_or_404(db, ctx: TenantContext, ticket_id: str, request: Request) -> dict[str, Any]:
     oid = _oid(ticket_id)
     if oid is None:
         raise HTTPException(status_code=404, detail="Ticket not found")
@@ -2089,7 +2096,7 @@ async def _ticket_or_404(db, ctx: TenantContext, ticket_id: str, request: Reques
 
 
 @router.get("/support/tickets")
-async def list_tickets(status: Optional[str] = None, q: Optional[str] = None,
+async def list_tickets(status: str | None = None, q: str | None = None,
                        page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=MAX_LIMIT),
                        ctx: TenantContext = Depends(require_portal())):
     db = _db()
@@ -2193,8 +2200,8 @@ _PREF_KEYS = ("email_notifications", "lead_assigned", "search_completed", "usage
 
 
 class ProfileBody(BaseModel):
-    name: Optional[str] = None
-    notification_preferences: Optional[Dict[str, bool]] = None
+    name: str | None = None
+    notification_preferences: dict[str, bool] | None = None
 
 
 @router.get("/profile")
@@ -2219,7 +2226,7 @@ async def update_profile(body: ProfileBody, request: Request, ctx: TenantContext
     if ctx.impersonated_by:
         raise HTTPException(status_code=403, detail="Profiles cannot be edited while impersonating")
     db = _db()
-    updates: Dict[str, Any] = {}
+    updates: dict[str, Any] = {}
     if body.name is not None:
         name = body.name.strip()[:120]
         if len(name) < 2:
@@ -2238,3 +2245,204 @@ async def update_profile(body: ProfileBody, request: Request, ctx: TenantContext
     await _audit(ctx, request, "profile.updated", "auth", resource_type="user", resource_id=ctx.user_id,
                  details={k: v for k, v in updates.items() if k != "updated_at"})
     return {"success": True, "message": "Profile saved"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 6: Lead Assignment Rules, Outbound Webhooks, and API Keys
+# ═══════════════════════════════════════════════════════════════════════════
+
+class AssignmentRuleCreate(BaseModel):
+    name: str
+    rule_type: str = "round_robin"
+    assignees: list[str]
+    criteria: dict[str, Any] | None = None
+    sla_hours: int = 24
+
+
+@router.post("/assignment-rules")
+async def create_rule(
+    body: AssignmentRuleCreate,
+    request: Request,
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE)),
+):
+    """Create automated lead assignment rule with SLA timers."""
+    db = _db()
+    from app.services.lead_assignment import create_assignment_rule
+    try:
+        rule = create_assignment_rule(
+            db.delegate,
+            organization_id=ctx.organization_id,
+            name=body.name,
+            rule_type=body.rule_type,
+            assignees=body.assignees,
+            criteria=body.criteria,
+            sla_hours=body.sla_hours,
+            created_by=ctx.email,
+        )
+        await _audit(ctx, request, "assignment_rule.created", "settings",
+                     resource_type="assignment_rule", resource_id=rule.get("rule_id"))
+        return {"success": True, "rule": _ser(rule)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/assignment-rules")
+async def list_rules(
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW)),
+):
+    """List lead assignment rules for tenant organization."""
+    db = _db()
+    from app.services.lead_assignment import list_assignment_rules
+    rules = list_assignment_rules(db.delegate, ctx.organization_id)
+    return {"items": _ser(rules), "total": len(rules)}
+
+
+async def _assert_org_item_or_404(db, coll_name: str, id_query: dict, ctx: TenantContext, request: Request, detail: str = "Not found"):
+    item = await db[coll_name].find_one({"organization_id": ctx.organization_id, **id_query})
+    if not item:
+        other = await db[coll_name].find_one(id_query, {"_id": 1, "organization_id": 1})
+        if other:
+            report_out_of_scope(request, ctx, coll_name, other)
+        raise HTTPException(status_code=404, detail=detail)
+    return item
+
+
+@router.delete("/assignment-rules/{rule_id}")
+async def delete_rule(
+    rule_id: str,
+    request: Request,
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE)),
+):
+    """Delete an assignment rule."""
+    db = _db()
+    oid = _oid(rule_id)
+    id_q = {"$or": [{"_id": oid}, {"rule_id": rule_id}]} if oid else {"rule_id": rule_id}
+    await _assert_org_item_or_404(db, "lead_assignment_rules", id_q, ctx, request, "Rule not found")
+    from app.services.lead_assignment import delete_assignment_rule
+    delete_assignment_rule(db.delegate, rule_id, ctx.organization_id)
+    await _audit(ctx, request, "assignment_rule.deleted", "settings",
+                 resource_type="assignment_rule", resource_id=rule_id)
+    return {"success": True, "deleted_id": rule_id}
+
+
+class WebhookCreate(BaseModel):
+    url: str
+    secret: str | None = None
+    events: list[str] | None = None
+
+
+@router.post("/webhooks")
+async def register_webhook(
+    body: WebhookCreate,
+    request: Request,
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE)),
+):
+    """Register an outbound webhook for tenant events."""
+    db = _db()
+    from app.services.outbound_webhooks import create_outbound_webhook
+    whk = create_outbound_webhook(
+        db.delegate,
+        organization_id=ctx.organization_id,
+        target_url=body.url,
+        secret=body.secret,
+        events=body.events,
+        created_by=ctx.email,
+    )
+    await _audit(ctx, request, "webhook.created", "settings",
+                 resource_type="webhook", resource_id=whk.get("webhook_id"))
+    return {"success": True, "webhook": _ser(whk)}
+
+
+@router.get("/webhooks")
+async def get_webhooks(
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW)),
+):
+    """List registered webhooks."""
+    db = _db()
+    from app.services.outbound_webhooks import list_outbound_webhooks
+    items = list_outbound_webhooks(db.delegate, ctx.organization_id)
+    return {"items": _ser(items), "total": len(items)}
+
+
+@router.delete("/webhooks/{webhook_id}")
+async def remove_webhook(
+    webhook_id: str,
+    request: Request,
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE)),
+):
+    """Remove a webhook."""
+    db = _db()
+    oid = _oid(webhook_id)
+    id_q = {"$or": [{"_id": oid}, {"webhook_id": webhook_id}]} if oid else {"webhook_id": webhook_id}
+    await _assert_org_item_or_404(db, "outbound_webhooks", id_q, ctx, request, "Webhook not found")
+    from app.services.outbound_webhooks import delete_outbound_webhook
+    delete_outbound_webhook(db.delegate, webhook_id, ctx.organization_id)
+    await _audit(ctx, request, "webhook.deleted", "settings",
+                 resource_type="webhook", resource_id=webhook_id)
+    return {"success": True, "deleted_id": webhook_id}
+
+
+class ApiKeyCreate(BaseModel):
+    name: str
+    scopes: list[str] | None = None
+    test_mode: bool = False
+
+
+@router.post("/api-keys")
+async def create_key(
+    body: ApiKeyCreate,
+    request: Request,
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE)),
+):
+    """Generate a new Public REST API key for the tenant."""
+    db = _db()
+    from app.services.api_keys import create_api_key
+    raw_key, doc = create_api_key(
+        db.delegate,
+        organization_id=ctx.organization_id,
+        name=body.name,
+        scopes=body.scopes,
+        created_by=ctx.email,
+        test_mode=body.test_mode,
+    )
+    await _audit(ctx, request, "api_key.created", "settings",
+                 resource_type="api_key", resource_id=doc.get("key_id"))
+    return {
+        "success": True,
+        "api_key": raw_key,
+        "key_id": doc.get("key_id"),
+        "name": doc.get("name"),
+        "prefix": doc.get("prefix"),
+        "scopes": doc.get("scopes"),
+        "message": "Copy this key now. It will not be shown again.",
+    }
+
+
+@router.get("/api-keys")
+async def get_keys(
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW)),
+):
+    """List API keys."""
+    db = _db()
+    from app.services.api_keys import list_api_keys
+    items = list_api_keys(db.delegate, ctx.organization_id)
+    return {"items": _ser(items), "total": len(items)}
+
+
+@router.delete("/api-keys/{key_id}")
+async def delete_key(
+    key_id: str,
+    request: Request,
+    ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE)),
+):
+    """Revoke an API key."""
+    db = _db()
+    oid = _oid(key_id)
+    id_q = {"$or": [{"_id": oid}, {"key_id": key_id}]} if oid else {"key_id": key_id}
+    await _assert_org_item_or_404(db, "api_keys", id_q, ctx, request, "API key not found")
+    from app.services.api_keys import revoke_api_key
+    revoke_api_key(db.delegate, key_id, ctx.organization_id)
+    await _audit(ctx, request, "api_key.revoked", "settings",
+                 resource_type="api_key", resource_id=key_id)
+    return {"success": True, "revoked_id": key_id}
+
