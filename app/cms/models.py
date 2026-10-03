@@ -430,6 +430,7 @@ DEFAULT_NAVIGATION = {
         {"label": "FAQ", "url": "/faq"},
         {"label": "About", "url": "/about"},
         {"label": "Contact", "url": "/contact"},
+        {"label": "Partners", "url": "/partners"},
     ],
     "footer": [
         {"label": "Features", "url": "/features", "group": "Product"},
@@ -553,6 +554,25 @@ async def seed_cms_defaults(db) -> None:
                      "enabled": True, "created_at": now}
                     for i, it in enumerate(items)])
             marked.append(location)
+        # one-time: "Partner Program" footer link, also for menus seeded before
+        # the partner program existed (never re-added once deleted)
+        if "footer:partners" not in done:
+            if not await db[COLL_NAVIGATION].find_one({"location": "footer", "url": "/partners"}):
+                await db[COLL_NAVIGATION].insert_one({
+                    "location": "footer", "label": "Partner Program", "url": "/partners",
+                    "group": "Company", "target": "_self", "order": 50, "enabled": True,
+                    "created_at": now})
+            marked.append("footer:partners")
+        # one-time: "Partners" in the header menu (desktop + mobile), for menus
+        # seeded before it was a default (never re-added once deleted)
+        if "header:partners" not in done:
+            if not await db[COLL_NAVIGATION].find_one({"location": "header", "url": "/partners"}):
+                last = await db[COLL_NAVIGATION].find_one({"location": "header"}, sort=[("order", -1)])
+                await db[COLL_NAVIGATION].insert_one({
+                    "location": "header", "label": "Partners", "url": "/partners", "group": "",
+                    "target": "_self", "order": int((last or {}).get("order") or 0) + 1, "enabled": True,
+                    "created_at": now})
+            marked.append("header:partners")
         await _mark_seeded(db, "navigation", marked)
     except Exception as e:
         log.warning("CMS: navigation seed failed: %s", e)

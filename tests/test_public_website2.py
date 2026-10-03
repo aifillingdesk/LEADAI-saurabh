@@ -76,6 +76,26 @@ def test_seed_creates_published_pages_navigation_faq_and_settings(client):
     assert client.get("/api/public/page/how-it-works").status_code == 200   # SEO-only page
 
 
+def test_partners_link_is_in_the_header_menu_once_and_stays_deleted(client):
+    db = get_sync_db()
+    header = client.get("/api/public/navigation").json()["header"]
+    assert [i["url"] for i in header].count("/partners") == 1
+    # a site whose header was seeded before the link existed gets it once
+    db["website_navigation"].delete_many({"location": "header", "url": "/partners"})
+    db["website_seed_state"].update_one({"_id": "navigation"}, {"$pull": {"done": "header:partners"}})
+    run(seed_cms_defaults(get_async_db()))
+    run(seed_cms_defaults(get_async_db()))
+    svc.clear_cache()
+    header = client.get("/api/public/navigation").json()["header"]
+    assert [i["url"] for i in header].count("/partners") == 1 and header[-1]["label"] == "Partners"
+    # removed by the operator: never re-added
+    items = [{"label": i["label"], "url": i["url"]} for i in header if i["url"] != "/partners"]
+    assert client.put("/api/admin/cms/navigation/header", json={"items": items}).status_code == 200
+    run(seed_cms_defaults(get_async_db()))
+    svc.clear_cache()
+    assert "/partners" not in [i["url"] for i in client.get("/api/public/navigation").json()["header"]]
+
+
 def test_seed_never_overwrites_operator_edits_or_resurrects_deleted_pages(client):
     db = get_sync_db()
     home = _page_id(db, "home")
