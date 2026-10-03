@@ -567,7 +567,10 @@ async def auth_gate(request: Request, call_next):
         or path == "/api/super-admin/impersonate/exit"
     ):
         return await call_next(request)
-    user = session_user(request)
+    # the server-side session check reads MongoDB with the sync driver: run it
+    # off the event loop so one slow round trip never stalls other requests
+    from starlette.concurrency import run_in_threadpool
+    user = await run_in_threadpool(session_user, request)
     scope = (user or {}).get("scope")
     # Partner Portal: its own session scope ("partner"); the API also accepts a
     # partner API key (validated, read-only, by the route dependencies).
@@ -791,9 +794,10 @@ async def super_admin_page(request: Request):
 
 @app.get("/org-admin")
 @app.get("/org-admin/")
-async def org_admin_page(request: Request):
+def org_admin_page(request: Request):
     """Organization Admin portal — owners/admins of an organization whose
-    Admin portal has been enabled (after Super Admin confirmation)."""
+    Admin portal has been enabled (after Super Admin confirmation).
+    Plain ``def``: the tenant lookup is sync, so it runs in the threadpool."""
     from fastapi import HTTPException as _HTTPException
     from app.auth.tenant import get_tenant_context
     try:

@@ -9,6 +9,7 @@ Provides:
 import contextvars
 import logging
 import os
+import time
 import uuid
 from typing import Any
 
@@ -38,6 +39,15 @@ class RequestIdFilter(logging.Filter):
         return True
 
 
+# Requests slower than this are logged (SLOW_REQUEST_MS, default 1000 ms) so a
+# slow page can be traced to its endpoint in the host's logs.
+try:
+    _SLOW_REQUEST_MS = float(os.getenv("SLOW_REQUEST_MS", "1000"))
+except ValueError:
+    _SLOW_REQUEST_MS = 1000.0
+_slow_log = logging.getLogger("app.slow_requests")
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Middleware that assigns a unique request ID to each HTTP request.
 
@@ -58,10 +68,17 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
         token = set_current_request_id(req_id)
         request.state.request_id = req_id
+        started = time.perf_counter()
 
         try:
             response: Response = await call_next(request)
             response.headers["X-Request-ID"] = req_id
+            ms = (time.perf_counter() - started) * 1000
+            # visible in the browser's Network tab (Timing) for every request
+            response.headers["Server-Timing"] = f"app;dur={ms:.0f}"
+            if ms >= _SLOW_REQUEST_MS and request.url.path != "/health":
+                _slow_log.warning("slow request %s %s -> %s in %.0f ms", request.method, request.url.path,
+                                  response.status_code, ms)
             return response
         finally:
             _request_id_ctx.reset(token)

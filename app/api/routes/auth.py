@@ -398,8 +398,10 @@ async def switch_organization(body: SwitchOrgRequest, request: Request, response
 # ── Me / logout ─────────────────────────────────────────────────────────────
 
 @router.get("/me")
-async def me(request: Request):
-    """Current user, re-resolved from the database (roles are never stale)."""
+def me(request: Request):
+    """Current user, re-resolved from the database (roles are never stale).
+    Plain ``def``: its database reads are sync, so FastAPI runs it in the
+    threadpool instead of blocking the event loop."""
     claims = session_user(request)
     if claims is None:
         raise HTTPException(status_code=401, detail="Not signed in")

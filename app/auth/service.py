@@ -604,11 +604,17 @@ def parse_session_value(value: Optional[str]) -> Optional[Dict[str, Any]]:
                             )
                             return None
 
-                # Touch last_active_at for sliding-window idle detection
-                db["user_sessions"].update_one(
-                    {"session_id": session_id, "revoked_at": None},
-                    {"$set": {"last_active_at": utcnow()}},
-                )
+                # Touch last_active_at for sliding-window idle detection — at
+                # most once a minute (the idle timeout is in minutes), so a
+                # page load does not cost one database write per request
+                seen = record.get("last_active_at")
+                if seen is not None and seen.tzinfo is None:
+                    seen = seen.replace(tzinfo=timezone.utc)
+                if seen is None or (datetime.now(timezone.utc) - seen).total_seconds() >= _ACTIVITY_TOUCH_SEC:
+                    db["user_sessions"].update_one(
+                        {"session_id": session_id, "revoked_at": None},
+                        {"$set": {"last_active_at": utcnow()}},
+                    )
         except Exception:
             pass  # DB outage: signature + exp above still apply
 
@@ -631,9 +637,25 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/")
 
 
+_ACTIVITY_TOUCH_SEC = 60
+
+
 def session_user(request: Request) -> Optional[Dict[str, Any]]:
-    """Current user from the session cookie, or None when signed out."""
-    return parse_session_value(request.cookies.get(COOKIE_NAME))
+    """Current user from the session cookie, or None when signed out.
+
+    The middleware and the route dependencies both ask for it; the
+    server-side session check (a database read) runs once per request and
+    is remembered on the request (keyed by the cookie value)."""
+    raw = request.cookies.get(COOKIE_NAME)
+    memo = getattr(request.state, "session_memo", None)
+    if memo is not None and memo[0] == raw:
+        return dict(memo[1]) if memo[1] is not None else None
+    user = parse_session_value(raw)
+    try:
+        request.state.session_memo = (raw, user)
+    except Exception:
+        pass
+    return dict(user) if user is not None else None
 
 
 def session_issued_at(value: Optional[str]) -> Optional[int]:

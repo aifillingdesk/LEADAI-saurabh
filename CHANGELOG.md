@@ -50,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The public REST API (`/api/v1`) was unreachable: the auth gate required a session, and the handlers awaited a non-coroutine. The per-key rate limit is now enforced.
 - Razorpay checkout overwrote the subscription amount with `plan.price_cents` (minor units, or 0 when unset), breaking payment verification.
 
+### Performance
+- **Slow admin panel on hosted MongoDB**: every request made many sequential database round trips, and some blocked the event loop, so all requests waited.
+  - The session check runs once per request instead of twice, and the `last_active_at` write happens at most once a minute.
+  - System settings reads are cached for 5 seconds, and writes clear the cache.
+  - The usage summary resolves the plan once and fetches every bonus credit in one query.
+  - `/api/auth/me`, the `/org-admin` page, `context` and `business-summary` no longer run sync database calls on the event loop.
+  - `/api/org-admin/overview` went from 101 to 54 database operations and `context` from 40 to 18, with none blocking the event loop.
+- **Request timing**: a `Server-Timing` header on every response, plus a `slow request` log line above `SLOW_REQUEST_MS` (default 1000 ms).
+
 ## [2.0.0] - 2026-10-02
 
 ### Added

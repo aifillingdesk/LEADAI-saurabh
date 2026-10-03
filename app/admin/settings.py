@@ -304,13 +304,34 @@ def _coerce(key: str, value: Any) -> Any:
     return str(value)
 
 
+# Short read cache for _sync_get. Settings are read on nearly every request
+# (maintenance flag, limits, feature switches), often many times per request;
+# against a remote MongoDB each read is a network round trip. Writes through
+# this module clear the cache at once; another worker process sees a change
+# within _CACHE_TTL seconds. Entries are tied to the database client they were
+# read from, so a different database (e.g. per-test) never sees stale values.
+_CACHE_TTL = 5.0
+_CACHE: Dict[str, Tuple[float, Any, Any]] = {}
+
+
+def clear_settings_cache() -> None:
+    _CACHE.clear()
+
+
 def _sync_get(key: str) -> Optional[Any]:
     try:
         db = get_sync_db()
         if db is None:
             return None
+        owner = getattr(db, "client", db)
+        now = time.monotonic()
+        hit = _CACHE.get(key)
+        if hit is not None and hit[0] > now and hit[1] is owner:
+            return hit[2]
         doc = db[COLLECTION].find_one({"_id": key}, {"value": 1})
-        return doc.get("value") if doc else None
+        value = doc.get("value") if doc else None
+        _CACHE[key] = (now + _CACHE_TTL, owner, value)
+        return value
     except Exception:
         return None
 
@@ -353,6 +374,7 @@ def set_setting(key: str, value: Any, by: str = "admin") -> bool:
                       "updated_at": utcnow(),
                       "updated_by": by}},
             upsert=True)
+        clear_settings_cache()
         return True
     except Exception as e:
         logger.warning(f"Failed to persist setting {key}: {e}")
@@ -366,6 +388,7 @@ def delete_setting(key: str) -> bool:
         if db is None:
             return False
         db[COLLECTION].delete_one({"_id": key})
+        clear_settings_cache()
         return True
     except Exception:
         return False
@@ -387,6 +410,7 @@ async def adelete_setting(key: str) -> bool:
         if db is None:
             return False
         await db[COLLECTION].delete_one({"_id": key})
+        clear_settings_cache()
         try:
             from app.settings.registry import invalidate_public_config_cache
             invalidate_public_config_cache()
@@ -434,6 +458,7 @@ async def aset_setting(key: str, value: Any, by: str = "admin") -> bool:
                       "updated_at": utcnow(),
                       "updated_by": by}},
             upsert=True)
+        clear_settings_cache()
         try:
             from app.settings.registry import invalidate_public_config_cache
             invalidate_public_config_cache()

@@ -5,6 +5,7 @@ Enforces feature flags, quota limits, and temporary entitlement grants.
 Raises structured `QUOTA_EXCEEDED` (HTTP 402) and `FEATURE_NOT_AVAILABLE` (HTTP 403)
 exceptions with clear upgrade guidance.
 """
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 from bson import ObjectId
@@ -298,15 +299,18 @@ class EntitlementService:
         return feature_key in features
 
     @classmethod
-    async def get_limit(cls, organization_id: str, metric: str, db=None) -> int:
-        """Calculate effective limit including base plan limits and credit grants."""
+    async def get_limit(cls, organization_id: str, metric: str, db=None,
+                        plan: Optional[Dict[str, Any]] = None) -> int:
+        """Calculate effective limit including base plan limits and credit grants.
+        Pass ``plan`` when the caller already resolved it (saves 2-3 queries)."""
         if not organization_id:
             return 999999
 
         if db is None:
             db = get_async_db()
 
-        plan = await cls.get_effective_plan(organization_id, db=db)
+        if plan is None:
+            plan = await cls.get_effective_plan(organization_id, db=db)
         base_limit = int(plan.get("limits", {}).get(metric, 0) or 0)
 
         # Add bonus credits from temporary entitlements
@@ -464,22 +468,40 @@ class EntitlementService:
         if db is None:
             db = get_async_db()
 
-        plan = await cls.get_effective_plan(organization_id, db=db)
-        usage_doc = await get_current_usage_doc(organization_id, db=db)
         s_org_id = str(organization_id)
 
-        # Count actual team members
-        member_count = 1
-        if db is not None:
-            member_count = await db.organization_members.count_documents({
+        async def _members() -> int:
+            if db is None:
+                return 1
+            return await db.organization_members.count_documents({
                 "organization_id": s_org_id,
                 "status": "active",
             })
 
+        async def _bonuses() -> Dict[str, int]:
+            # every metric's active credit grants in ONE query (get_limit adds the same grants)
+            out: Dict[str, int] = {}
+            if db is None:
+                return out
+            async for grant in db.temporary_entitlements.find({
+                    "organization_id": s_org_id, "entitlement_type": "credit",
+                    "key": {"$in": list(METRIC_TO_COUNTER_FIELD)},
+                    "$or": [{"expires_at": None}, {"expires_at": {"$gt": utcnow()}}]}):
+                try:
+                    out[grant["key"]] = out.get(grant["key"], 0) + int(grant.get("value", 0))
+                except Exception:
+                    pass
+            return out
+
+        # independent lookups run concurrently: one round trip of latency, not five
+        plan, usage_doc, member_count, bonuses = await asyncio.gather(
+            cls.get_effective_plan(organization_id, db=db),
+            get_current_usage_doc(organization_id, db=db), _members(), _bonuses())
+
         metrics_summary = {}
         for metric, counter_field in METRIC_TO_COUNTER_FIELD.items():
             used = usage_doc.get(counter_field, 0)
-            limit = await cls.get_limit(s_org_id, metric, db=db)
+            limit = int(plan.get("limits", {}).get(metric, 0) or 0) + bonuses.get(metric, 0)
             percentage = round((used / limit * 100), 1) if limit > 0 else 0
             metrics_summary[metric] = {
                 "used": used,
@@ -509,7 +531,7 @@ class EntitlementService:
                 "limits": plan.get("limits", {}),
                 "is_demo": bool(plan.get("is_demo")),
             },
-            "tokens": get_balance(s_org_id),
+            "tokens": await asyncio.to_thread(get_balance, s_org_id),   # sync driver: off the event loop
             "period": {
                 "start": usage_doc.get("period_start"),
                 "end": usage_doc.get("period_end"),

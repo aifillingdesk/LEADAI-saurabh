@@ -78,6 +78,8 @@ LOG_LEVEL=INFO
 - Minimum recommended topology: 3-node replica set (M10+ on MongoDB Atlas or self-hosted).
 - Connection Pool: Configure `maxPoolSize=50` and `minPoolSize=10`.
 - Automated Indexing: Run `python -m app.db.ensure_indexes` on deployment to verify compound indexes exist for tenant scoping.
+- **Same region as the app**: put the Atlas cluster in the same cloud region as the web service (on Render, pick the Render region closest to the Atlas region). Every request makes several database round trips; across continents each one costs 100–250 ms and the portals feel slow.
+- **Finding slow requests**: each response carries a `Server-Timing: app;dur=<ms>` header (browser DevTools → Network → Timing), and any request slower than `SLOW_REQUEST_MS` (default `1000`) is logged as `slow request <method> <path> -> <status> in <ms> ms` (logger `app.slow_requests`).
 
 ### Redis Cache & Queue
 - Use managed Redis (e.g. AWS ElastiCache or Redis Cloud) with TLS enabled.

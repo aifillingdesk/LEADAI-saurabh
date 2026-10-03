@@ -381,7 +381,8 @@ def _caps(org_id: str) -> dict[str, Any]:
 @router.get("/context")
 async def portal_context(ctx: TenantContext = Depends(require_portal())):
     db = _db()
-    org = await _org_doc(db, ctx)
+    # _caps reads the plan with the sync driver: off the event loop, concurrently
+    org, caps = await asyncio.gather(_org_doc(db, ctx), asyncio.to_thread(_caps, ctx.organization_id))
     return {"success": True,
             "organization": {"id": ctx.organization_id, "name": org.get("name"),
                              "slug": org.get("slug"), "status": org.get("status"),
@@ -391,7 +392,7 @@ async def portal_context(ctx: TenantContext = Depends(require_portal())):
                    "role": ctx.org_role, "role_label": P.SPEC_ROLE_LABELS.get(ctx.org_role),
                    "permissions": ctx.permissions,
                    "impersonated_by": ctx.impersonated_by},
-            "caps": _caps(ctx.organization_id),
+            "caps": caps,
             "lead_statuses": list(LEAD_STATUSES),
             "role_labels": {r: P.SPEC_ROLE_LABELS[r] for r in ("admin", "manager", "member", "viewer")}}
 
@@ -1451,7 +1452,7 @@ async def get_business_summary(ctx: TenantContext = Depends(require_portal(P.SET
     from app.pipeline.domain_intelligence import INDUSTRY_TAXONOMY
     db = _db()
     org = await _org_doc(db, ctx)
-    effective = bc.build_context(org)
+    effective = await asyncio.to_thread(bc.build_context, org)   # sync catalog read: off the event loop
     settings = org.get("settings") or {}
     profile = settings.get("business_profile") or {}
     active_kws = list(settings.get("lead_keywords") or profile.get("active_keywords") or [])
