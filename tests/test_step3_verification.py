@@ -1039,6 +1039,12 @@ class TestItem7AuditAndSecrets:
         from app.partners import marketing as partner_marketing
         monkeypatch.setattr(partner_marketing, "PRIVATE_DIR", str(tmp_path))
         (tmp_path / "sweep.png").write_bytes(bytes.fromhex("89504e470d0a1a0a") + bytes(16))
+        # the log endpoints read logs/app.log, which a fresh checkout (CI) doesn't have:
+        # give them a log file of their own so the sweep never depends on the machine
+        from app.api.routes import admin as admin_routes
+        log_file = tmp_path / "app.log"
+        log_file.write_text("2026-10-03 10:00:00 INFO [app.main] started\n", encoding="utf-8")
+        monkeypatch.setattr(admin_routes, "_log_file_path", lambda: str(log_file))
         values["asset_id"] = str(db.partner_marketing_assets.insert_one({
             "title": "Sweep logo", "category": "logos", "status": "published", "partner_types": ["all"],
             "storage_key": "sweep.png", "file_type": "image/png", "file_name": "sweep.png"}).inserted_id)
