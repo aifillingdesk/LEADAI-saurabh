@@ -121,7 +121,7 @@
 .btn:disabled { opacity:0.5; cursor:not-allowed; pointer-events:none; }
 .btn-primary {
   background: linear-gradient(135deg, var(--primary-fill) 0%, var(--primary-dark) 100%);
-  color:#fff; box-shadow:0 0 20px rgba(139,92,246,0.30);
+  color:var(--on-primary); box-shadow:0 6px 20px var(--primary-soft);
 }
 .btn-primary:hover { background:linear-gradient(135deg,var(--primary-fill-hover) 0%,var(--primary-dark) 100%); box-shadow:var(--glow-strong); transform:translateY(-1px); }
 .btn-secondary {
@@ -366,7 +366,7 @@
 .sidebar-footer { padding:var(--spacing-md); border-top:1px solid var(--border); }
 .sidebar-user { display:flex; align-items:center; gap:10px; padding:8px; border-radius:var(--radius-md); cursor:pointer; }
 .sidebar-user:hover { background:var(--surface); }
-.sidebar-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,var(--primary-fill),var(--primary-dark)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:var(--text-sm); color:#fff; flex-shrink:0; }
+.sidebar-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,var(--primary-fill),var(--primary-dark)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:var(--text-sm); color:var(--on-primary); flex-shrink:0; }
 .sidebar-username { font-size:var(--text-sm); font-weight:600; }
 .sidebar-role { font-size:var(--text-xs); color:var(--text-muted); }
 
@@ -386,7 +386,7 @@
   border-radius:var(--radius-md); padding:6px 12px;
   min-width:240px; transition:all var(--transition-fast);
 }
-.topbar-search:focus-within { border-color:var(--border-hover); box-shadow:0 0 0 3px rgba(139,92,246,0.10); }
+.topbar-search:focus-within { border-color:var(--border-hover); box-shadow:0 0 0 3px var(--primary-soft); }
 .topbar-search input { background:none; border:none; outline:none; color:var(--text-primary); font-size:var(--text-sm); flex:1; }
 .topbar-search input::placeholder { color:var(--text-muted); }
 
@@ -531,9 +531,9 @@
 }
 .brand-mark {
   width:32px; height:32px; flex-shrink:0; border-radius:9px;
-  display:inline-flex; align-items:center; justify-content:center; color:#fff;
-  background:linear-gradient(135deg,#f0a531 0%, var(--primary) 58%, var(--primary-dark) 100%);
-  box-shadow:0 4px 14px rgba(124,58,237,0.30), inset 0 1px 0 rgba(255,255,255,0.25);
+  display:inline-flex; align-items:center; justify-content:center; color:var(--on-primary);
+  background:linear-gradient(135deg,var(--accent) 0%, var(--primary-fill) 55%, var(--primary) 100%);
+  box-shadow:0 4px 14px var(--primary-soft), inset 0 1px 0 rgba(255,255,255,0.35);
 }
 .brand-mark svg { width:17px; height:17px; }
 .brand-actions { display:flex; align-items:center; gap:var(--spacing-sm); }
@@ -579,7 +579,7 @@
 }
 .auth-card::before {
   content:''; position:absolute; top:0; left:24px; right:24px; height:1px;
-  background:linear-gradient(90deg,transparent,var(--primary),#f0a531,transparent); opacity:0.7;
+  background:linear-gradient(90deg,transparent,var(--primary),var(--secondary),transparent); opacity:0.7;
 }
 .auth-card-wide { max-width:560px; }
 .auth-header { margin-bottom:28px; }
@@ -615,7 +615,7 @@
 .auth-icon.tone-info    { background:var(--info-soft);    color:var(--info-text);    border-color:var(--info-border); }
 .error-code {
   font-size:clamp(3.5rem, 14vw, 5.5rem); font-weight:800; line-height:1; letter-spacing:-0.04em;
-  background:linear-gradient(135deg,var(--primary) 0%,#f0a531 100%);
+  background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);
   -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
   margin-bottom:12px;
 }
@@ -1522,7 +1522,7 @@ fieldset:disabled .form-input, fieldset:disabled .form-select, fieldset:disabled
 
 /* ── Plan Card ───────────────────────────────────────────────── */
 .plan-card {
-  background:linear-gradient(135deg, var(--primary-fill) 0%, var(--primary-dark) 100%);
+  background:linear-gradient(135deg, var(--brand-deep) 0%, var(--brand-deep-2) 100%);
   border-radius:var(--radius-lg);
   padding:16px;
   color:#fff;

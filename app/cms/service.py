@@ -677,7 +677,7 @@ def clean_setting(key: str, value: Any) -> Any:
     if kind == "color":
         color = clean_text(value, key, 7)
         if color and not _COLOR_RE.match(color):
-            raise _bad(f"{key} must be a hex colour like #8b5cf6")
+            raise _bad(f"{key} must be a hex colour like #2e9573")
         return color
     return clean_text(value, key, 1000 if key == "cookie_notice" else 300)
 

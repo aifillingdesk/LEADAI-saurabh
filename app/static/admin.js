@@ -440,12 +440,12 @@ function sparkSvg(points, w = 110, h = 30) {
   const step = w / (vals.length - 1 || 1);
   const pts = vals.map((v, i) => `${(i * step).toFixed(1)},${(h - 3 - ((v - min) / span) * (h - 8)).toFixed(1)}`);
   return `<svg class="adm-kpi-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
-    <polyline points="${pts.join(" ")}" fill="none" stroke="#f0a531" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+    <polyline points="${pts.join(" ")}" fill="none" stroke="#2e9573" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
   </svg>`;
 }
 
 function areaSvg(labels, values, opts = {}) {
-  const { w = 860, h = 210, color = "#f0a531", id = "goldArea" } = opts;
+  const { w = 860, h = 210, color = "#2e9573", id = "goldArea" } = opts;
   const vals = values.map(Number);
   const n = vals.length;
   const padL = 10, padR = 10, padT = 12, padB = 24;
@@ -469,13 +469,13 @@ function areaSvg(labels, values, opts = {}) {
     <path d="${area}" fill="url(#${id})"/>
     <path d="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     ${ticks.map((i) => `
-      <text x="${x(i).toFixed(1)}" y="${h - 7}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" fill="#66607f" font-size="10" font-family="JetBrains Mono, monospace">${esc(labels[i] || "")}</text>`).join("")}
+      <text x="${x(i).toFixed(1)}" y="${h - 7}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" fill="#55655e" font-size="10" font-family="JetBrains Mono, monospace">${esc(labels[i] || "")}</text>`).join("")}
   </svg>`;
 }
 
 function dualAreaSvg(labels, primary, secondary, opts = {}) {
   // primary → amber, secondary → muted slate
-  const { w = 860, h = 210, pColor = "#f0a531", sColor = "#9c96b3", id = "dualGoldArea" } = opts;
+  const { w = 860, h = 210, pColor = "#2e9573", sColor = "#8a968f", id = "dualGoldArea" } = opts;
   const n = primary.length;
   const padL = 10, padR = 10, padT = 12, padB = 24;
   const iw = w - padL - padR, ih = h - padT - padB;
@@ -497,7 +497,7 @@ function dualAreaSvg(labels, primary, secondary, opts = {}) {
     <path d="${path(secondary)}" fill="none" stroke="${sColor}" stroke-width="1.6" stroke-dasharray="4 4" stroke-linecap="round"/>
     <path d="${path(primary)}" fill="none" stroke="${pColor}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
     ${ticks.map((i) => `
-      <text x="${x(i).toFixed(1)}" y="${h - 7}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" fill="#66607f" font-size="10" font-family="JetBrains Mono, monospace">${esc(labels[i] || "")}</text>`).join("")}
+      <text x="${x(i).toFixed(1)}" y="${h - 7}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" fill="#55655e" font-size="10" font-family="JetBrains Mono, monospace">${esc(labels[i] || "")}</text>`).join("")}
   </svg>`;
 }
 
@@ -532,7 +532,7 @@ function vbarsSvg(labels, values, opts = {}) {
         ${ov && ov[i] ? `<rect x="${(cx - bw / 2).toFixed(1)}" y="${(padT + ih - bhO).toFixed(1)}" width="${bw.toFixed(1)}" height="${bhO.toFixed(1)}" rx="3" fill="#e5484d" opacity="0.9"/>` : ""}`;
     }).join("")}
     ${ticks.map((i) => `
-      <text x="${(padL + i * step + step / 2).toFixed(1)}" y="${h - 7}" text-anchor="middle" fill="#66607f" font-size="10" font-family="JetBrains Mono, monospace">${esc(labels[i] || "")}</text>`).join("")}
+      <text x="${(padL + i * step + step / 2).toFixed(1)}" y="${h - 7}" text-anchor="middle" fill="#55655e" font-size="10" font-family="JetBrains Mono, monospace">${esc(labels[i] || "")}</text>`).join("")}
   </svg>`;
 }
 
@@ -5461,8 +5461,8 @@ function settFieldHtml(spec) {
           <label>${esc(spec.label)} ${badge}</label>
           ${hint}
           <div class="adm-sett-color-row">
-            <input type="color" class="adm-color-pick" data-key="${esc(key)}" value="${esc(value || "#7c5cff")}" ${ro ? "disabled" : ""}>
-            <input class="adm-input" data-key="${esc(key)}" data-hex="1" value="${esc(value || "")}" placeholder="#7c5cff" ${ro ? "disabled" : ""} style="max-width:140px">
+            <input type="color" class="adm-color-pick" data-key="${esc(key)}" value="${esc(value || "#2e9573")}" ${ro ? "disabled" : ""}>
+            <input class="adm-input" data-key="${esc(key)}" data-hex="1" value="${esc(value || "")}" placeholder="#2e9573" ${ro ? "disabled" : ""} style="max-width:140px">
           </div>
         </div>`;
     case "json":
@@ -5500,8 +5500,8 @@ function settFieldHtml(spec) {
 function renderBrandPreview() {
   const v = (k) => SETT.values[k];
   const logo = v("branding.logo_primary");
-  const primary = v("branding.colors.primary") || "#7c5cff";
-  const accent = v("branding.colors.accent") || "#f0a531";
+  const primary = v("branding.colors.primary") || "#2e9573";
+  const accent = v("branding.colors.accent") || "#d9a441";
   return `
     <div class="adm-card">
       <div class="adm-card-title">Live preview <span class="adm-hint">(updates as you type — save to apply app-wide)</span></div>

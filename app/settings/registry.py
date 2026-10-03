@@ -156,12 +156,12 @@ SETTINGS: List[SettingSpec] = [
        label="Apple touch icon", is_public=True),
     _s("branding.colors.primary", "branding", "Colors", "color",
        label="Primary color", is_public=True,
-       description="Replaces the violet accent everywhere (brand, AI highlights).",
-       placeholder="#7c5cff"),
+       description="The brand colour of the staff console (light mint green by default).",
+       placeholder="#2e9573"),
     _s("branding.colors.accent", "branding", "Colors", "color",
        label="Accent color", is_public=True,
-       description="Replaces the amber accent (value, lead highlights).",
-       placeholder="#f0a531"),
+       description="The warm accent (value, lead highlights).",
+       placeholder="#d9a441"),
     _s("branding.colors.success", "branding", "Colors", "color",
        label="Success color", is_public=True, placeholder="#1fae6a"),
     _s("branding.colors.warning", "branding", "Colors", "color",
@@ -572,7 +572,7 @@ def validate_value(spec: SettingSpec, value: Any) -> Tuple[Any, Optional[str]]:
     if t == "color":
         text = str(value).strip()
         if text and not _HEX_RE.match(text):
-            return value, "Must be a hex color like #7c5cff"
+            return value, "Must be a hex color like #2e9573"
         return text, None
     if t == "url":
         text = str(value).strip()
@@ -715,8 +715,8 @@ async def build_public_config(get: Optional[Callable[[str], Any]] = None,
             "favicon": s("branding.favicon"),
             "apple_touch_icon": s("branding.apple_touch_icon"),
             "colors": {
-                "primary": s("branding.colors.primary", "#7c5cff"),
-                "accent": s("branding.colors.accent", "#f0a531"),
+                "primary": s("branding.colors.primary", "#2e9573"),
+                "accent": s("branding.colors.accent", "#d9a441"),
                 "success": s("branding.colors.success", "#1fae6a"),
                 "warning": s("branding.colors.warning", "#f0a531"),
                 "danger": s("branding.colors.danger", "#e5484d"),
@@ -775,4 +775,4 @@ async def build_public_config(get: Optional[Callable[[str], Any]] = None,
     }
     if get is None and all_settings is None:
         _PUBLIC_CONFIG_CACHE = (now, payload)
-    return payload
+    return payload

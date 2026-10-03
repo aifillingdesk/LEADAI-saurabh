@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Marketing center with private file uploads, categories, per-partner visibility, email templates and download tracking.
   - Coupon and fraud notifications.
   - Partner API: an index endpoint, notifications readable with an API key, and key usage tracking.
+- **New look: cream + light mint green** (every portal: website, sign-in, user dashboard, Org Admin, Super Admin, Partner Portal, staff console):
+  - Light cream + mint is now the default; dark mode is deep forest with mint glows and cream text. The light/dark toggle and a person's saved choice still apply.
+  - Colours come from `app/static/design/tokens.css`. The staff console's own palette, the dashboard's brand colours and the remaining hard-coded violets were moved to it.
+  - Primary buttons are light mint with dark-green text. Text meets WCAG AA contrast in both themes.
+  - Default brand colours (`branding.colors.*`, website `primary_color`) are now mint (`#2e9573`) and warm gold (`#d9a441`). Values an operator saved are kept.
 - **Administrators can change other people's sign-in details** (`app/auth/credentials.py`):
   - Organization Admin: **Change email** and **Set password** on a member's page (`PATCH /api/org-admin/users/{id}/email`, `POST /api/org-admin/users/{id}/password`).
     - The existing rules apply: the owner is protected, only the owner manages admins, and you can't change your own account here.

@@ -137,8 +137,8 @@ class Organization(BaseModel):
 
     branding: Dict[str, Any] = Field(
         default_factory=lambda: {
-            "primary_color": "#8b5cf6",
-            "accent_color": "#ec4899",
+            "primary_color": "#2e9573",
+            "accent_color": "#9fe3c7",
             "company_name": "",
         }
     )

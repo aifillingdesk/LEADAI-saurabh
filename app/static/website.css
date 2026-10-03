@@ -389,7 +389,7 @@
   box-shadow:var(--shadow-lg), var(--glow);
 }
 @media (min-width: 1100px) { .plans { padding-top:8px; } .plan.popular { transform:translateY(-8px); } .plan.popular:hover { transform:translateY(-12px); } }
-.plan-badge { background:linear-gradient(135deg, var(--primary-hover), var(--primary-dark)); box-shadow:0 6px 18px rgba(124,58,237,0.35); }
+.plan-badge { background:linear-gradient(135deg, var(--primary-hover), var(--primary-dark)); box-shadow:0 6px 18px rgba(46,149,115,0.35); }
 .plan .btn { margin-top:auto; width:100%; }
 .plan-price { flex-wrap:nowrap; }
 .plan-price strong { font-size:clamp(2rem, 2.6vw, 2.4rem); white-space:nowrap; }

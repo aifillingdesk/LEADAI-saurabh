@@ -251,7 +251,7 @@ def test_schema_categories_shape():
 def test_public_config_defaults_when_unset():
     cfg = asyncio.run(R.build_public_config(lambda key: None))
     assert cfg["app"]["name"] == "LeadAI"
-    assert cfg["branding"]["colors"]["primary"] == "#7c5cff"
+    assert cfg["branding"]["colors"]["primary"] == "#2e9573"   # cream + mint brand
     assert cfg["maintenance"]["enabled"] is False
     assert cfg["features"]["url_search"] is True
     assert cfg["defaults"]["comment_filter_mode"] == "all"

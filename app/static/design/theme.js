@@ -7,7 +7,7 @@
 (async function LeadAITheme() {
   const CACHE_KEY = 'leadai_theme_v1';
   const CACHE_TTL = 300000; // 5 min
-  const MODE_KEY = 'leadai_color_mode'; // 'light' | 'dark' (absent = follow OS)
+  const MODE_KEY = 'leadai_color_mode'; // 'light' | 'dark' (absent = the brand look: light)
   const BG_VARS = ['--bg-primary', '--bg-secondary', '--bg-tertiary'];
   let lastBranding = null;
 
@@ -18,15 +18,10 @@
       return v === 'light' || v === 'dark' ? v : null;
     } catch (_) { return null; }
   }
-  function systemMode() {
-    try {
-      return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-    } catch (_) { return 'dark'; }
-  }
   function effectiveMode() {
     const attr = document.documentElement.getAttribute('data-theme');
     if (attr === 'light' || attr === 'dark') return attr;
-    return systemMode();
+    return 'light';
   }
   function syncToggles() {
     const mode = effectiveMode();
@@ -43,7 +38,8 @@
       root.setAttribute('data-theme', mode);
       try { localStorage.setItem(MODE_KEY, mode); } catch (_) {}
     } else {
-      root.removeAttribute('data-theme');
+      // no explicit choice: back to the brand look (cream + mint)
+      root.setAttribute('data-theme', 'light');
       try { localStorage.removeItem(MODE_KEY); } catch (_) {}
     }
     // Branding background overrides are dark-palette values: only apply them in dark.
@@ -54,9 +50,11 @@
   // Apply the saved preference as early as possible (avoids a flash when
   // theme.js is loaded in <head>). A page may pin data-theme itself; the
   // user's explicit choice wins.
+  // Cream + mint (light) is the brand look; dark only when the person chose it.
   (function initMode() {
     const saved = storedMode();
-    if (saved) document.documentElement.setAttribute('data-theme', saved);
+    const pinned = document.documentElement.getAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', saved || pinned || 'light');
   })();
 
   function applyTheme(data) {

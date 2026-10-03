@@ -858,8 +858,8 @@
         <form class="oa-card oa-form" data-form novalidate><div class="oa-form-grid">
           ${fld('company_name', 'Company display name', b.company_name || org.name, 'text', ro, 'maxlength="120"')}
           ${fld('logo_url', 'Organization logo URL', org.logo_url, 'url', ro, 'placeholder="https://…/logo.png"')}
-          ${colorFld('primary_color', 'Primary colour', b.primary_color || '#8b5cf6', ro)}
-          ${colorFld('accent_color', 'Accent colour', b.accent_color || '#a78bfa', ro)}
+          ${colorFld('primary_color', 'Primary colour', b.primary_color || '#2e9573', ro)}
+          ${colorFld('accent_color', 'Accent colour', b.accent_color || '#9fe3c7', ro)}
           <div class="oa-field span-2"><span class="oa-label">Preview</span><div class="oa-brand-preview" data-preview></div></div>
         </div>${editable ? '<div class="oa-form-foot"><button type="submit" class="btn btn-primary">Save branding</button></div>' : readonlyNote()}</form>`;
       } else {

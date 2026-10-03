@@ -27,7 +27,7 @@
       logo_primary: "", logo_dark: "", logo_light: "", logo_compact: "",
       logo_login: "", logo_email: "", favicon: "", apple_touch_icon: "",
       colors: {
-        primary: "#7c5cff", accent: "#f0a531", success: "#1fae6a",
+        primary: "#2e9573", accent: "#d9a441", success: "#1fae6a",
         warning: "#f0a531", danger: "#e5484d", info: "#3b82f6",
       },
       theme: "light", font: "inter", white_label: false,
