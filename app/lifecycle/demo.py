@@ -222,6 +222,8 @@ def approve(req_id: str, *, actor: str, overrides: Optional[Dict[str, Any]] = No
                f"You have {cfg['tokens']} tokens for {cfg['duration_days']} days.\n\n"
                f"Sign in here: {absolute_url('/login')}\n\n— The LeadAI team",
                kind="demo_approved", organization_id=org_id)
+    from app.partners.referrals import on_demo_approved
+    on_demo_approved(org_id)  # partner referral funnel: signed_up -> demo
     return get_request(req_id)
 
 

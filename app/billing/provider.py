@@ -212,7 +212,14 @@ class RazorpayBillingProvider(BillingProvider):
                                       plan: dict[str, Any], customer_email: str,
                                       success_url: str, cancel_url: str) -> dict[str, Any]:
         db = get_async_db()
-        price_cents = plan.get("price_cents", 0)
+        # the subscription amount (major units, after any coupon) is what the
+        # customer owes; Razorpay orders are in minor units (paise). The
+        # stored amount stays in major units — webhooks convert back (/100)
+        # before record_payment_verified compares them.
+        if subscription.get("amount") is not None:
+            price_cents = int(round(float(subscription["amount"]) * 100))
+        else:
+            price_cents = int(plan.get("price_cents") or 0)
         currency = (plan.get("currency") or "INR").upper()
         order_id = f"order_{secrets.token_hex(10)}"
         res = db.subscriptions.update_one(
@@ -221,7 +228,6 @@ class RazorpayBillingProvider(BillingProvider):
                 "provider": self.name,
                 "checkout_session_id": order_id,
                 "currency": currency,
-                "amount": price_cents,
             }}
         )
         import inspect
@@ -254,6 +260,7 @@ class RazorpayBillingProvider(BillingProvider):
         event_name = parsed.get("event", "unknown")
         payload_obj = parsed.get("payload", {})
         payment_obj = payload_obj.get("payment", {}).get("entity", {})
+        refund_obj = payload_obj.get("refund", {}).get("entity", {})
         sub_id = payment_obj.get("notes", {}).get("subscription_id")
 
         return {
@@ -269,6 +276,8 @@ class RazorpayBillingProvider(BillingProvider):
                     "amount_total": payment_obj.get("amount"),
                     "customer_email": payment_obj.get("email"),
                     "currency": payment_obj.get("currency", "INR"),
+                    # refund.processed: the refunded amount of THIS refund (minor units)
+                    "refund_amount": refund_obj.get("amount") if refund_obj else None,
                 }
             }
         }
@@ -386,6 +395,11 @@ async def _handle_webhook_event(event_type: str, event: dict[str, Any], provider
                 await asyncio.to_thread(
                     renew_subscription, get_sync_db(), sub, source="stripe_invoice",
                     amount=(paid / 100) if isinstance(paid, (int, float)) else None)
+    elif event_type in ("charge.refunded", "refund.processed", "payment.refunded",
+                        "charge.dispute.created", "payment.dispute.created"):
+        # refunds / chargebacks: invoice + payments updated, partner commission reversed
+        from app.billing.refunds import refund_from_provider_event
+        await refund_from_provider_event(obj, provider=provider, chargeback="dispute" in event_type, db=db)
     elif event_type == "customer.subscription.deleted":
         sub = await _sub_from_metadata(obj, db)
         if sub:

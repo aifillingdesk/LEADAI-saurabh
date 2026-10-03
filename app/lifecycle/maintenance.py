@@ -82,6 +82,9 @@ def renew_subscription(db, sub: Dict[str, Any], *, source: str, actor: str = "sy
     audit("subscription.renewed", "billing", user=actor, organization_id=org_id,
           resource_type="subscription", resource_id=str(sub["_id"]),
           details={"period_end": new_end.isoformat(), "source": source, "tokens": tokens})
+    from app.partners.commissions import on_subscription_renewed
+    on_subscription_renewed(sub, amount=amount if amount is not None else float(sub.get("amount") or 0),
+                            period_start=start, db=db)
     from app.events.notifications import notify_org_admins
     notify_org_admins(org_id, "subscription_renewed", "Subscription renewed",
                       f"Your {plan.get('name') or 'plan'} renewed until {new_end:%d %b %Y}.",
@@ -131,6 +134,8 @@ def run_lifecycle_sweep(db=None, *, dry_run: bool = False, planned: Optional[lis
         audit("subscription.ended", "billing", user="system", organization_id=org_id,
               resource_type="subscription", resource_id=str(sub["_id"]),
               details={"reason": "cancelled_at_period_end"})
+        from app.partners.commissions import on_subscription_ended
+        on_subscription_ended(sub, reason="cancelled_at_period_end", db=db)
         notify_org_admins(org_id, "subscription_cancelled", "Your subscription has ended",
                           "It was cancelled at the end of the billing period. Choose a plan to continue.",
                           severity="warning", email=True, link="/dashboard#billing")
@@ -231,6 +236,17 @@ async def _sweeper_loop() -> None:
             await asyncio.to_thread(automatic_pass)
         except Exception as e:  # never let the loop die
             logger.warning("[lifecycle] sweep failed: %s", e)
+        try:
+            # partner commissions past their hold period become payable
+            from app.partners.commissions import release_matured
+            await asyncio.to_thread(release_matured)
+            from app.partners.tiers import evaluate_if_due
+            await asyncio.to_thread(evaluate_if_due)
+            from app.db.mongo import get_sync_db
+            from app.partners.sales import expire_deals
+            await asyncio.to_thread(expire_deals, get_sync_db())
+        except Exception as e:
+            logger.warning("[partners] commission release failed: %s", e)
         await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
 
 

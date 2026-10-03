@@ -2863,6 +2863,7 @@
     flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+    handshake: '<path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/>',
     tool: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"/>'
   };
   var EXT = '<svg class="sa-ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
@@ -3007,6 +3008,7 @@
     try { setCount('demo', (await api('/api/super-admin/demo-requests?status=pending&limit=1')).total || 0); } catch (e) {}
     try { setCount('queue', (await api('/api/super-admin/subscriptions/queue?limit=1')).total || 0); } catch (e) {}
     try { setCount('support', (await api('/api/super-admin/support/tickets?status=active&limit=1')).total || 0); } catch (e) {}
+    EXT_COUNTS.forEach(function (fn) { try { fn(); } catch (e) {} });
   }
   function renderBell() {
     var pop = $('#saBellPop'), items = S.bell || [];
@@ -3090,6 +3092,29 @@
       }
     } catch (e) { /* 401 handled in api() */ }
   }
+
+  // ── extension point: other scripts (e.g. super-admin-partners.js) add a
+  // menu group + routes using this portal's own UI kit (no second admin UI)
+  var EXT_COUNTS = [];
+  window.SAKit = {
+    api: api, qs: qs, esc: esc, pill: pill, badge: badge, fmtN: fmtN, fmtMoney: fmtMoney, fmtDate: fmtDate,
+    fmtDT: fmtDT, ago: ago, titleCase: titleCase, short: short, header: header, kpi: kpi, tabs: tabs,
+    listView: listView, lineChart: lineChart, barList: barList, bindCharts: bindCharts, openModal: openModal, confirmDialog: confirmDialog, openDrawer: openDrawer,
+    toast: toast, busy: busy, emptyState: emptyState, errorState: errorState, skeleton: skeleton,
+    go: go, route: route, setCount: setCount, $: $, $$: $$, STATUS_TONE: STATUS_TONE, PILL_LABEL: PILL_LABEL,
+    me: function () { return S.me; },
+    /** register(groupName, afterGroup, items:[[route,label,icon,countKey]], routes:{key:[view,title,detailView]}, countFn) */
+    register: function (group, after, items, routes, countFn) {
+      var at = MENU.findIndex(function (g) { return g[0] === after; });
+      MENU.splice(at < 0 ? MENU.length : at + 1, 0, [group, items]);
+      items.forEach(function (i) { GROUP_OF[i[0]] = group; });
+      Object.keys(routes).forEach(function (k) { ROUTES[k] = routes[k]; });
+      if (countFn) EXT_COUNTS.push(countFn);
+      renderNav();
+      if (routes[parseHash().key]) route();
+      if (countFn) countFn();
+    }
+  };
 
   function init() {
     renderNav();

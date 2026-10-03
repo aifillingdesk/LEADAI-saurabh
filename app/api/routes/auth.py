@@ -91,6 +91,7 @@ class SignupRequest(BaseModel):
     industry: Optional[str] = None
     plan: Optional[str] = None             # plan chosen on the pricing page (interest only)
     accepted_terms: Optional[bool] = None  # Terms & Privacy consent from the form
+    ref_code: Optional[str] = None         # partner referral code (?ref= on the signup page)
 
 
 class SwitchOrgRequest(BaseModel):
@@ -140,6 +141,14 @@ async def signup(body: SignupRequest, request: Request):
                               message=body.message, ip=ip, source="signup",
                               industry=body.industry, requested_plan=body.plan,
                               accepted_terms=bool(body.accepted_terms))
+    # Partner attribution: signed referral cookie (from /r/{code}) or a typed code
+    if res.get("organization_id"):
+        from app.partners.constants import REF_COOKIE
+        from app.partners.referrals import attribute_signup
+        await asyncio.to_thread(
+            attribute_signup, organization_id=res["organization_id"], user_id=None,
+            email=body.email, company=company, phone=body.phone, ip=ip,
+            cookie_value=request.cookies.get(REF_COOKIE), ref_code=body.ref_code)
     # Email verification token generation on signup (Phase 4)
     db = get_sync_db()
     if db is not None:
@@ -216,6 +225,12 @@ async def login(body: LoginRequest, request: Request, response: Response):
                         auth_error = site_err
                 elif err:
                     auth_error = err
+    elif body.scope == "partner":
+        # Partners / applicants: same users collection, partner-scope session
+        from app.partners.auth import verify_partner_login
+        user, err = verify_partner_login(email, body.password)
+        if user is None and err and err != "Invalid email or password":
+            auth_error = err
     else:
         # Admins and users are database accounts only (RBAC + invitations).
         saas_user, err = verify_saas_user_login(email, body.password, scope="site")
@@ -234,7 +249,14 @@ async def login(body: LoginRequest, request: Request, response: Response):
                                       "Your organization is suspended."),
         "No active organization membership": (403, "no_active_organization",
                                               "Your account is not part of an active organization."),
+        "Not a partner account": (403, "not_a_partner",
+                                  "This account is not a LeadAI partner. Apply at /partners."),
+        "Partner application rejected": (403, "partner_rejected",
+                                         "Your partner application was not approved."),
+        "Partner suspended": (403, "partner_suspended", "Your partner account is suspended."),
     }
+    if body.scope == "partner" and user is None:
+        _partner_auth_event(email, "login", False, auth_error or "invalid_credentials", ip, user_agent)
     if user is None:
         if auth_error in blocking:
             status, code, msg = blocking[auth_error]
@@ -255,10 +277,14 @@ async def login(body: LoginRequest, request: Request, response: Response):
                      user_agent=user_agent, details={"scope": body.scope})
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # RFC 6238 TOTP Two-Factor Authentication check if enabled
-    if user.get("totp_enabled"):
-        totp_secret = user.get("totp_secret")
+    # RFC 6238 TOTP Two-Factor Authentication. The flag and secret live on the
+    # users record (never in session claims), so read them from the database.
+    totp_record = _totp_record(user)
+    if totp_record and totp_record.get("totp_enabled"):
+        totp_secret = totp_record.get("totp_secret")
         if not body.totp_code:
+            if body.scope == "partner":
+                _partner_auth_event(email, "2fa_required", True, None, ip, user_agent)
             return JSONResponse(
                 {"success": False, "requires_2fa": True, "message": "Two-factor authentication code required"},
                 status_code=200,
@@ -267,6 +293,8 @@ async def login(body: LoginRequest, request: Request, response: Response):
         if not totp_secret or not verify_totp_code(totp_secret, body.totp_code):
             record_login_failure(ip)
             log_security_event("totp_failed", "medium", actor_email=email, ip=ip, path=str(request.url.path))
+            if body.scope == "partner":
+                _partner_auth_event(email, "login", False, "invalid_2fa_code", ip, user_agent)
             raise HTTPException(status_code=401, detail="Invalid two-factor authentication code")
 
     reset_login_attempts(ip)
@@ -275,7 +303,46 @@ async def login(body: LoginRequest, request: Request, response: Response):
     set_session_cookie(response, tracked_user)
     await aaudit("auth.login", "auth", user=tracked_user, ip=ip, user_agent=user_agent,
                  details={"scope": user.get("scope")})
+    if user.get("scope") == "partner":
+        _partner_auth_event(email, "login", True, None, ip, user_agent,
+                            session_id=(tracked_user.get("session_id") or "")[:12])
     return {"success": True, "user": public_user(tracked_user)}
+
+
+def _partner_auth_event(email: str, action: str, success: bool, reason: Optional[str], ip: Optional[str],
+                        user_agent: Optional[str], session_id: Optional[str] = None) -> None:
+    """Partner sign-in activity for the Super Admin (only for real partner /
+    applicant accounts; unknown emails are covered by security events)."""
+    try:
+        db = get_sync_db()
+        u = db["users"].find_one({"email": (email or "").lower()}, {"_id": 1}) if db is not None else None
+        if not u:
+            return
+        from app.partners import constants as PK
+        uid = str(u["_id"])
+        p = db[PK.PARTNERS].find_one({"user_id": uid}, {"_id": 1})
+        if not p and not db[PK.APPLICATIONS].find_one({"user_id": uid}, {"_id": 1}):
+            return
+        from app.partners.activity import record
+        record("auth", action, partner_id=str(p["_id"]) if p else None, user_id=uid, email=email, ip=ip,
+               user_agent=user_agent, success=success,
+               details={k: v for k, v in (("reason", reason), ("session", session_id)) if v})
+    except Exception:
+        pass
+
+
+def _totp_record(user: dict) -> Optional[dict]:
+    db = get_sync_db()
+    if db is None:
+        return None
+    try:
+        if user.get("user_id") and ObjectId.is_valid(str(user["user_id"])):
+            return db["users"].find_one({"_id": ObjectId(str(user["user_id"]))},
+                                        {"totp_enabled": 1, "totp_secret": 1})
+        return db["users"].find_one({"email": (user.get("email") or "").lower()},
+                                    {"totp_enabled": 1, "totp_secret": 1})
+    except Exception:
+        return None
 
 
 # ── Organization switch ─────────────────────────────────────────────────────
@@ -375,6 +442,9 @@ async def logout(request: Request, response: Response):
     if user and user.get("session_id"):
         revoke_session(user["session_id"], revoked_by="user_logout")
         await aaudit("auth.logout", "auth", user=user, **request_meta(request))
+        if user.get("scope") == "partner":
+            meta = request_meta(request)
+            _partner_auth_event(user.get("email") or "", "logout", True, None, meta["ip"], meta["user_agent"])
     clear_session_cookie(response)
     return {"success": True}
 

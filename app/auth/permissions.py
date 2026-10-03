@@ -39,6 +39,10 @@ SYSTEM_MANAGE = "system.manage"
 AUDIT_VIEW = "audit.view"
 IMPERSONATE_USER = "impersonate.user"
 
+# Partner / reseller program (applications, partners, commissions, payouts)
+PARTNERS_VIEW = "partners.view"
+PARTNERS_MANAGE = "partners.manage"
+
 # ── Granular Organization Permissions (Customer SaaS Workspace) ──────────────
 WORKSPACE_VIEW = "workspace.view"
 WORKSPACE_MANAGE = "workspace.manage"
@@ -85,6 +89,7 @@ PLATFORM_ROLE_PERMISSIONS: Dict[str, FrozenSet[str]] = {
         APIFY_VIEW, APIFY_MANAGE,
         SYSTEM_VIEW, SYSTEM_MANAGE,
         AUDIT_VIEW, IMPERSONATE_USER,
+        PARTNERS_VIEW, PARTNERS_MANAGE,
     }),
     "operations_admin": frozenset({
         PLATFORM_VIEW,
@@ -92,12 +97,14 @@ PLATFORM_ROLE_PERMISSIONS: Dict[str, FrozenSet[str]] = {
         USERS_VIEW, USERS_UPDATE, USERS_SUSPEND,
         AUDIT_VIEW, IMPERSONATE_USER,
         SYSTEM_VIEW,
+        PARTNERS_VIEW,
     }),
     "billing_admin": frozenset({
         PLATFORM_VIEW,
         ORGS_VIEW,
         BILLING_VIEW, BILLING_MANAGE,
         AUDIT_VIEW,
+        PARTNERS_VIEW,
     }),
     "support_admin": frozenset({
         PLATFORM_VIEW,
@@ -105,6 +112,7 @@ PLATFORM_ROLE_PERMISSIONS: Dict[str, FrozenSet[str]] = {
         USERS_VIEW,
         AUDIT_VIEW,
         IMPERSONATE_USER,
+        PARTNERS_VIEW,
     }),
     "technical_admin": frozenset({
         PLATFORM_VIEW,

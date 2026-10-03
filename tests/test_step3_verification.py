@@ -267,7 +267,9 @@ def _all_routes():
 
 
 # Route families a tenant (site-scope) session can reach.
-_NON_TENANT = ("/api/admin/", "/api/super-admin/", "/api/comment-filters/", "/api/public/", "/api/compliance/", "/api/v1/")
+# (/api/partner/ = Partner Portal: partner-scope sessions only, isolation in test_partners.py)
+_NON_TENANT = ("/api/admin/", "/api/super-admin/", "/api/comment-filters/", "/api/public/", "/api/compliance/", "/api/v1/",
+               "/api/partner/")
 
 
 def _tenant_routes():
@@ -1005,7 +1007,7 @@ class TestItem7AuditAndSecrets:
         assert list(_scan_json({"token_hash": "f00"}))
         assert not list(_scan_json({"api_key": "••••0001", "secret": True, "api_key_set": True}))
 
-    def test_super_admin_get_responses_have_no_secrets(self, world):
+    def test_super_admin_get_responses_have_no_secrets(self, world, monkeypatch, tmp_path):
         client, db = world["client"], world["db"]
         _plant_secrets(db)
         sa = _super(db)
@@ -1024,6 +1026,22 @@ class TestItem7AuditAndSecrets:
         assert r.status_code == 200, r.text
         sa = {**sa, ENV_UNLOCK_COOKIE: r.cookies[ENV_UNLOCK_COOKIE]}
         values = _admin_get_values(world)
+        # a real partner (application -> approval) so the partner routes are swept too
+        from app.partners import service as partner_service
+        partner_service.ensure_program_defaults(db)
+        app_ref = partner_service.submit_application({
+            "name": "Sweep Partner", "email": "sweep-partner@example.com", "password": PASSWORD,
+            "accepted_terms": True, "payout_info": {"method": "paypal", "paypal_email": "pay@example.com"}},
+            ip="203.0.113.9")
+        partner = partner_service.approve_application(app_ref["id"], actor="test")
+        values.update({"app_id": app_ref["id"], "partner_id": partner["id"]})
+        # a marketing asset with a privately stored file (served by /assets/{asset_id}/file)
+        from app.partners import marketing as partner_marketing
+        monkeypatch.setattr(partner_marketing, "PRIVATE_DIR", str(tmp_path))
+        (tmp_path / "sweep.png").write_bytes(bytes.fromhex("89504e470d0a1a0a") + bytes(16))
+        values["asset_id"] = str(db.partner_marketing_assets.insert_one({
+            "title": "Sweep logo", "category": "logos", "status": "published", "partner_types": ["all"],
+            "storage_key": "sweep.png", "file_type": "image/png", "file_name": "sweep.png"}).inserted_id)
         values.update({"version": "1", "location": "header", "model_id": "gemini-test",
                        "prompt_id": str(db.ai_prompts.find_one()["_id"]),
                        "rule_id": str(db[RULES_COLLECTION].find_one()["_id"])})

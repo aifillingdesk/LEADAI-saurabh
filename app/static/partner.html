@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Partner Portal · LeadAI</title>
+  <meta name="robots" content="noindex,nofollow"/>
+  <meta name="referrer" content="no-referrer"/>
+  <meta name="color-scheme" content="dark light"/>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✦</text></svg>">
+  <link rel="stylesheet" href="/static/design/tokens.css"/>
+  <link rel="stylesheet" href="/static/design/components.css"/>
+  <link rel="stylesheet" href="/static/org-admin.css"/>
+  <script src="/static/design/theme.js" defer></script>
+  <style>
+    .pp-link { display:flex; gap:8px; align-items:center; }
+    .pp-link input { flex:1; min-width:0; font-family:var(--font-mono); font-size:var(--text-xs); }
+    .pp-range { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
+    .pp-range input { width:auto; min-width:0; padding:6px 10px; height:36px; }
+    .pp-bars { display:flex; align-items:flex-end; gap:2px; height:140px; padding:8px 0; border-bottom:1px solid var(--border-subtle); }
+    .pp-bars span { flex:1; background:var(--chart-1, var(--primary)); border-radius:3px 3px 0 0; min-height:1px; opacity:.85; }
+    .pp-bars span:hover { opacity:1; }
+    .pp-axis { display:flex; justify-content:space-between; font-size:var(--text-xs); color:var(--text-muted); margin-top:6px; }
+    .pp-money { font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+    .pp-asset { display:flex; flex-direction:column; gap:8px; }
+    .pp-asset pre { white-space:pre-wrap; background:var(--surface); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:10px; font-size:var(--text-xs); max-height:180px; overflow:auto; margin:0; }
+    .pp-asset img { max-width:100%; max-height:160px; object-fit:contain; border-radius:var(--radius-md); background:var(--surface); }
+    .pp-banner { border:1px solid var(--warning-border); background:var(--warning-soft); color:var(--warning-text); border-radius:var(--radius-lg); padding:12px 16px; margin-bottom:16px; font-size:var(--text-sm); }
+    .pp-perm { display:inline-flex; margin:2px; }
+    @media (max-width: 900px) { .oa-grid-4 { grid-template-columns:repeat(2,minmax(0,1fr)); } .oa-grid-3, .oa-grid-2 { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body class="oa">
+<a class="skip-link" href="#oa-content">Skip to content</a>
+
+<div id="oa-gate" class="oa-gate" role="status" aria-live="polite">
+  <div class="oa-card"><div class="oa-state"><span class="spinner spinner-lg" aria-hidden="true"></span><p>Loading your Partner Portal…</p></div></div>
+</div>
+
+<div id="oa-app" class="oa-shell" hidden>
+  <aside id="oa-sidebar" class="oa-sidebar" aria-label="Partner navigation">
+    <div class="oa-brand">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.1 6.4 6.4 2.1-6.4 2.1L12 19.5l-2.1-6.4L3.5 11l6.4-2.1z"/></svg></span>
+      <div class="oa-brand-text">
+        <div class="oa-brand-name" id="pp-name">Partner</div>
+        <div class="oa-brand-sub" id="pp-sub">Partner portal</div>
+      </div>
+    </div>
+    <nav class="oa-nav" id="oa-nav" aria-label="Sections"></nav>
+    <div class="oa-sidebar-foot">
+      <a href="/partners" target="_blank" rel="noopener">Partner Program ↗</a>
+      <span>LeadAI · Partners</span>
+    </div>
+  </aside>
+  <div id="oa-scrim" class="oa-scrim" aria-hidden="true"></div>
+
+  <div class="oa-main">
+    <header class="oa-topbar">
+      <button type="button" class="oa-icon-btn oa-menu-btn" id="oa-menu-btn" aria-label="Open navigation" aria-controls="oa-sidebar" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div class="oa-crumb">
+        <div class="oa-crumb-org" id="oa-crumb-org">Partner Portal</div>
+        <div class="oa-crumb-title" id="oa-crumb-title">Dashboard</div>
+      </div>
+      <span style="flex:1"></span>
+      <button type="button" class="oa-icon-btn theme-toggle" data-theme-toggle aria-label="Switch theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+      <a class="oa-icon-btn" href="#/notifications" aria-label="Notifications" style="position:relative">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <span class="oa-badge-count" id="oa-bell-count" hidden>0</span>
+      </a>
+      <div class="oa-rel">
+        <button type="button" class="oa-profile-btn" id="oa-profile-btn" aria-haspopup="true" aria-expanded="false" aria-controls="oa-profile-pop">
+          <span class="oa-avatar" id="oa-avatar" aria-hidden="true">P</span>
+          <span class="oa-profile-name" id="oa-profile-name">Partner</span>
+        </button>
+        <div class="oa-pop oa-menu" id="oa-profile-pop" hidden role="menu">
+          <div class="oa-pop-head oa-menu-head"><span id="oa-menu-name">Partner</span><small class="oa-muted oa-small" id="oa-menu-email"></small></div>
+          <a class="oa-pop-item" role="menuitem" href="#/settings">Settings &amp; security</a>
+          <a class="oa-pop-item" role="menuitem" href="#/support">Help &amp; support</a>
+          <div class="oa-menu-sep"></div>
+          <button type="button" class="oa-pop-item" role="menuitem" id="oa-logout">Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="oa-content" class="oa-content" tabindex="-1"></main>
+  </div>
+</div>
+
+<div id="oa-modal-root"></div>
+<div class="oa-toasts" id="oa-toasts" role="status" aria-live="polite"></div>
+<script src="/static/partner.js" defer></script>
+</body>
+</html>

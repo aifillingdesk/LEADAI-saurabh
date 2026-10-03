@@ -482,3 +482,39 @@ async def email_outbox(status: Optional[str] = None, kind: Optional[str] = None,
     for item in res["items"]:
         item["body"] = redact_email_body(item.get("body"))
     return {"success": True, **res}
+
+
+# ── Invoices & refunds ─────────────────────────────────────────────────────
+
+class RefundBody(BaseModel):
+    amount: Optional[float] = None      # empty = the whole remaining amount
+    reason: str = ""
+    chargeback: bool = False
+
+
+@router.get("/invoices")
+async def list_invoices(organization_id: Optional[str] = None, subscription_id: Optional[str] = None,
+                        status: Optional[str] = None, page: int = Query(1, ge=1),
+                        limit: int = Query(25, ge=1, le=200), ctx: TenantContext = Depends(SUPER)):
+    db = _db()
+    query: Dict[str, Any] = {}
+    if organization_id:
+        query["organization_id"] = organization_id
+    if subscription_id:
+        query["subscription_id"] = subscription_id
+    if status:
+        query["status"] = status
+    res = await _page(db.invoices, query, page=page, limit=limit, sort="-created_at")
+    return {"success": True, **res}
+
+
+@router.post("/invoices/{invoice_id}/refund")
+async def refund_invoice_route(invoice_id: str, body: RefundBody, request: Request,
+                               ctx: TenantContext = Depends(SUPER)):
+    """Record a refund (or chargeback) of a paid invoice. Updates the invoice
+    and payment records and reverses / claws back the partner commission
+    earned on that payment. Audited."""
+    from app.billing.refunds import refund_invoice
+    res = await refund_invoice(invoice_id, amount=body.amount, reason=body.reason,
+                               actor=ctx.audit_user(), source="super_admin", chargeback=body.chargeback)
+    return {"success": True, "refund": res}

@@ -101,9 +101,11 @@ async def _payment_event(db, sub: Dict[str, Any], event: str, **data) -> None:
 
 
 async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: str,
-                         *, actor: Dict[str, Any], db=None) -> Dict[str, Any]:
+                         *, actor: Dict[str, Any], db=None,
+                         coupon_code: Optional[str] = None) -> Dict[str, Any]:
     """Customer picked a plan: create a PENDING_PAYMENT subscription + pending
-    payment. Never activates anything."""
+    payment. Never activates anything. A partner ``coupon_code`` discounts the
+    amount the provider charges (validated here, redeemed on confirmation)."""
     if db is None:
         db = get_async_db()
     if db is None:
@@ -117,6 +119,25 @@ async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: st
     if price <= 0:
         raise HTTPException(status_code=422, detail="This plan cannot be purchased")
     s_org_id = str(organization_id)
+    coupon = None
+    import asyncio
+    if coupon_code and coupon_code.strip():
+        from app.partners.coupons import validate_for_checkout
+        coupon = await asyncio.to_thread(validate_for_checkout, coupon_code, organization_id=s_org_id,
+                                         plan_slug=plan["slug"], price=price,
+                                         currency=plan.get("currency"))
+    # partner pricing for referred organizations — never stacked with a coupon
+    from app.partners.coupons import partner_price_for
+    partner_pricing = await asyncio.to_thread(partner_price_for, organization_id=s_org_id,
+                                              plan_slug=plan["slug"], price=price,
+                                              currency=plan.get("currency"))
+    if partner_pricing and (not coupon or partner_pricing["discount_amount"] > coupon["discount_amount"]):
+        coupon = None
+        price = partner_pricing["final_amount"]
+    else:
+        partner_pricing = None
+        if coupon:
+            price = coupon["final_amount"]
     now = utcnow()
     # supersede older unpaid checkouts
     await db.subscriptions.update_many(
@@ -129,7 +150,8 @@ async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: st
         "billing_cycle": billing_cycle, "currency": plan.get("currency"), "amount": price,
         "requested_by": actor.get("user_id"), "requested_by_email": actor.get("email"),
         "started_at": None, "current_period_start": None, "current_period_end": None,
-        "cancel_at_period_end": False, "cancelled_at": None,
+        "cancel_at_period_end": False, "cancelled_at": None, "coupon": coupon,
+        "partner_pricing": partner_pricing,
         "status_history": [{"from": None, "to": PENDING_PAYMENT, "at": now,
                             "by": actor.get("email")}],
         "created_at": now, "updated_at": now,
@@ -146,7 +168,11 @@ async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: st
     from app.admin.audit import aaudit
     await aaudit("plan.selected", "billing", user=actor, organization_id=s_org_id,
                  resource_type="subscription", resource_id=str(sub["_id"]),
-                 details={"plan": plan["slug"], "cycle": billing_cycle, "amount": price})
+                 details={"plan": plan["slug"], "cycle": billing_cycle, "amount": price,
+                          "coupon": (coupon or {}).get("code"),
+                          "partner_pricing": (partner_pricing or {}).get("name")})
+    from app.partners.referrals import on_checkout_started
+    await asyncio.to_thread(on_checkout_started, s_org_id, str(sub["_id"]))
     return {"subscription": sub, "payment": pay, "plan": plan}
 
 
@@ -180,6 +206,9 @@ async def record_payment_verified(subscription_id: str, *, provider: str,
                          provider_payment_id=provider_payment_id, amount=amount, source=source)
     sub = await _transition(db, sub, PENDING_ADMIN_CONFIRMATION, actor=actor,
                             note="awaiting super admin confirmation")
+    import asyncio
+    from app.partners.referrals import on_payment_verified
+    await asyncio.to_thread(on_payment_verified, str(sub.get("organization_id")), str(sub["_id"]))
     from app.admin.audit import aaudit
     await aaudit("payment.received", "billing", user=actor,
                  organization_id=sub.get("organization_id"), resource_type="payment",
@@ -276,6 +305,10 @@ async def confirm_subscription(subscription_id: str, *, actor: Dict[str, Any],
                  reason=f"{plan['name']} plan activated", expires_at=period_end, reset=True)
     from app.lifecycle.demo import mark_converted
     mark_converted(s_org_id, actor=actor_email, subscription_id=sub_id)
+    # partner program: coupon redemption + referral stage "customer" + commission
+    import asyncio
+    from app.partners.commissions import on_subscription_activated
+    await asyncio.to_thread(on_subscription_activated, sub)
     from app.admin.audit import aaudit
     await aaudit("organization.activated", "lifecycle", user=actor, organization_id=s_org_id,
                  resource_type="organization", resource_id=s_org_id,
@@ -322,6 +355,10 @@ async def set_subscription_status(subscription_id: str, target: str, *,
     sub = await _transition(db, sub, target, actor=actor.get("email", "super_admin"),
                             extra=extra, note=reason)
     org_id = sub["organization_id"]
+    if target in (CANCELLED, EXPIRED) and was in (ACTIVE, SUSPENDED, "trialing", "past_due"):
+        import asyncio
+        from app.partners.commissions import on_subscription_ended
+        await asyncio.to_thread(on_subscription_ended, sub, reason=target)
     if was in (ACTIVE, SUSPENDED, "trialing", "past_due"):
         org_status = {SUSPENDED: "suspended", ACTIVE: "active",
                       EXPIRED: "cancelled", CANCELLED: "cancelled"}.get(target)
@@ -355,6 +392,20 @@ async def set_subscription_status(subscription_id: str, target: str, *,
                             "payment — issue the refund.", severity="warning",
                             link="/superadmin#/payments")
     return _clean_sub(sub)
+
+
+_PARTNER_INTERNAL_KEYS = ("partner_id", "coupon_id", "pricing_rule_id")
+
+
+def customer_view(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """A subscription as the CUSTOMER may see it: the coupon / partner-pricing
+    discount they got stays visible, the referring partner's internal ids
+    never leave the platform (partners and organizations are isolated)."""
+    out = _clean_sub(doc)
+    for key in ("coupon", "partner_pricing"):
+        if isinstance(out.get(key), dict):
+            out[key] = {k: v for k, v in out[key].items() if k not in _PARTNER_INTERNAL_KEYS}
+    return out
 
 
 def _clean_sub(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -462,7 +513,7 @@ async def get_organization_subscription(organization_id: str, db=None) -> Dict[s
         sort=[("created_at", -1)])
     pending_clean = None
     if pending:
-        pending_clean = _clean_sub(pending)
+        pending_clean = customer_view(pending)
         pending_clean["plan"] = await get_plan_by_slug_or_id(pending.get("plan_id"), db=db)
 
     now = utcnow()
@@ -486,7 +537,7 @@ async def get_organization_subscription(organization_id: str, db=None) -> Dict[s
             "pending": pending_clean,
         }
 
-    sub_cleaned = _clean_sub(sub)
+    sub_cleaned = customer_view(sub)
     sub_cleaned["pending"] = pending_clean
     plan = await get_plan_by_slug_or_id(sub.get("plan_id"), db=db)
     sub_cleaned["plan"] = plan
@@ -700,6 +751,10 @@ async def cancel_subscription(
             )
         except Exception:
             pass
+        import asyncio
+        from app.partners.commissions import on_subscription_ended
+        ended = await db.subscriptions.find_one({"_id": sub["_id"]})
+        await asyncio.to_thread(on_subscription_ended, ended or sub, reason="cancelled")
 
     return await get_organization_subscription(s_org_id, db=db)
 

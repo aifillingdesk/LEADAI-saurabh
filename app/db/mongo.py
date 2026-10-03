@@ -447,6 +447,58 @@ def ensure_indexes():
         _create_index_safe(db.notifications, [("audience", ASCENDING), ("user_id", ASCENDING), ("created_at", DESCENDING)])
         _create_index_safe(db.notifications, [("read_by", ASCENDING), ("created_at", DESCENDING)])
 
+        # ── Partner program ─────────────────────────────────────────────
+        # uniqueness: one partner per user, unique public codes, one referral
+        # (= partner customer) per organization, one commission per payment
+        # period, one coupon redemption per organization.
+        _create_index_safe(db.partners, [("user_id", ASCENDING)], unique=True)
+        _create_index_safe(db.partners, [("referral_code", ASCENDING)], unique=True)
+        _create_index_safe(db.partners, [("partner_code", ASCENDING)], unique=True)
+        _create_index_safe(db.partners, [("status", ASCENDING), ("partner_type", ASCENDING)])
+        _create_index_safe(db.partner_applications, [("user_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_applications, [("status", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_referrals, [("organization_id", ASCENDING)], unique=True)
+        _create_index_safe(db.partner_referrals, [("partner_id", ASCENDING), ("signed_up_at", DESCENDING)])
+        _create_index_safe(db.partner_referrals, [("partner_id", ASCENDING), ("stage", ASCENDING)])
+        _create_index_safe(db.partner_referral_clicks, [("partner_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_referral_clicks, [("partner_id", ASCENDING), ("visitor_id", ASCENDING),
+                                                        ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_campaigns, [("partner_id", ASCENDING), ("slug", ASCENDING)], unique=True)
+        _create_index_safe(db.partner_commissions, [("subscription_id", ASCENDING), ("period_key", ASCENDING)],
+                           unique=True, partialFilterExpression={"kind": "commission"})
+        _create_index_safe(db.partner_commissions, [("partner_id", ASCENDING), ("status", ASCENDING),
+                                                    ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_commissions, [("status", ASCENDING), ("hold_until", ASCENDING)])
+        _create_index_safe(db.partner_commissions, [("payout_id", ASCENDING)], sparse=True)
+        _create_index_safe(db.partner_wallets, [("partner_id", ASCENDING)], unique=True)
+        _create_index_safe(db.partner_wallet_transactions, [("partner_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_payouts, [("partner_id", ASCENDING), ("status", ASCENDING)])
+        _create_index_safe(db.partner_payouts, [("status", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_coupons, [("code", ASCENDING)], unique=True)
+        _create_index_safe(db.partner_coupons, [("partner_id", ASCENDING)])
+        _create_index_safe(db.partner_coupon_usages, [("coupon_id", ASCENDING), ("organization_id", ASCENDING)],
+                           unique=True)
+        _create_index_safe(db.api_keys, [("partner_id", ASCENDING)], sparse=True)
+        _create_index_safe(db.partner_activity, [("at", DESCENDING)])
+        _create_index_safe(db.partner_activity, [("partner_id", ASCENDING), ("at", DESCENDING)])
+        _create_index_safe(db.partner_activity, [("kind", ASCENDING), ("at", DESCENDING)])
+        _create_index_safe(db.partner_activity, [("expires_at", ASCENDING)], expireAfterSeconds=0)
+        _create_index_safe(db.partner_deals, [("partner_id", ASCENDING), ("status", ASCENDING)])
+        _create_index_safe(db.partner_deals, [("contact_email", ASCENDING)])
+        _create_index_safe(db.partner_deals, [("status", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_tasks, [("partner_id", ASCENDING), ("status", ASCENDING)])
+        _create_index_safe(db.partner_tasks, [("status", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.partner_fraud_flags, [("status", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.user_sessions, [("scope", ASCENDING), ("user_id", ASCENDING)])
+        _create_index_safe(db.partner_pricing, [("status", ASCENDING), ("scope", ASCENDING)])
+        _create_index_safe(db.partner_commissions, [("invoice_id", ASCENDING)], sparse=True)
+        _create_index_safe(db.partner_commissions, [("referral_id", ASCENDING), ("status", ASCENDING)])
+        # refunds: invoice of a subscription, payment by provider reference
+        _create_index_safe(db.invoices, [("subscription_id", ASCENDING), ("created_at", DESCENDING)])
+        _create_index_safe(db.payments, [("provider_payment_id", ASCENDING)], sparse=True)
+        _create_index_safe(db.audit_logs, [("category", ASCENDING), ("details.partner_id", ASCENDING),
+                                           ("at", DESCENDING)])
+
         logger.info("MongoDB indexes verified successfully.")
     except Exception as e:
         logger.warning(f"MongoDB index verification skipped at startup (Connection timeout): {e}")

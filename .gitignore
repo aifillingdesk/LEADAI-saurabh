@@ -19,3 +19,6 @@ build/
 htmlcov/
 .mongodump/
 *.dump
+
+# partner marketing files (private, served by permission-checked endpoints)
+data/

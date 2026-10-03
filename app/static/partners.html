@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Partner Program · LeadAI</title>
+  <meta name="description" content="Join the LeadAI Partner Program as an affiliate or reseller and earn recurring commission on every customer you bring."/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;display=swap"/>
+  <link rel="stylesheet" href="/static/design/tokens.css"/>
+  <link rel="stylesheet" href="/static/design/components.css"/>
+  <link rel="stylesheet" href="/static/website.css"/>
+  <script src="/static/design/theme.js"></script>
+  <style>
+    .pp-facts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-top:8px; }
+    .pp-fact { background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-lg); padding:18px; text-align:center; }
+    .pp-fact b { display:block; font-size:var(--text-2xl); font-weight:800; color:var(--text-primary); letter-spacing:-0.02em; }
+    .pp-fact span { color:var(--text-secondary); font-size:var(--text-sm); }
+    .pp-types { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:18px; }
+    .pp-type { background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-lg); padding:20px; }
+    .pp-type h3 { font-size:var(--text-lg); font-weight:700; color:var(--text-primary); margin:0 0 6px; }
+    .pp-type p { color:var(--text-secondary); margin:0; line-height:1.6; }
+    .pp-steps { counter-reset:s; list-style:none; padding:0; margin:18px 0 0; display:grid; gap:10px; }
+    .pp-steps li { counter-increment:s; display:flex; gap:12px; align-items:flex-start; color:var(--text-secondary); line-height:1.55; }
+    .pp-steps li::before { content:counter(s); flex:0 0 28px; height:28px; border-radius:50%; display:grid; place-items:center; background:var(--primary-subtle, rgba(124,92,255,.15)); color:var(--text-link); font-weight:700; font-size:var(--text-sm); }
+    .pp-legend { font-size:var(--text-sm); font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin:22px 0 10px; }
+    .pp-legend:first-of-type { margin-top:0; }
+    .pp-radio { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .pp-radio label { display:flex; gap:10px; align-items:flex-start; padding:12px; border:1px solid var(--border-subtle); border-radius:var(--radius-md); cursor:pointer; color:var(--text-secondary); }
+    .pp-radio label:has(input:checked) { border-color:var(--primary); background:var(--primary-subtle, rgba(124,92,255,.08)); }
+    .pp-radio b { color:var(--text-primary); display:block; }
+    .pp-check { display:flex; gap:10px; align-items:flex-start; color:var(--text-secondary); font-size:var(--text-sm); line-height:1.5; margin-top:14px; }
+    .pp-check input { margin-top:3px; }
+    details.pp-more { margin-top:10px; border:1px dashed var(--border-subtle); border-radius:var(--radius-md); padding:10px 14px; }
+    details.pp-more summary { cursor:pointer; color:var(--text-link); font-weight:600; font-size:var(--text-sm); }
+    .pp-signin { text-align:center; margin-top:16px; color:var(--text-secondary); font-size:var(--text-sm); }
+    @media (max-width: 760px) { .pp-facts { grid-template-columns:1fr 1fr; } .pp-types, .pp-radio { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="site">
+  <div id="site-announcement" hidden></div>
+  <header class="site-header" id="site-header">
+    <div class="wrap site-header-inner">
+      <a class="site-brand" href="/website"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name" data-brand-name>LeadAI</span></a>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <header class="page-hero">
+      <div class="wrap">
+        <p class="eyebrow">Partner Program</p>
+        <h1>Grow with LeadAI</h1>
+        <p>Refer businesses or resell LeadAI to your clients and earn commission on every subscription they pay for.</p>
+        <div class="cta-row"><a class="btn btn-primary" href="#apply">Apply now</a><a class="btn btn-secondary" href="/login?partner=1">Partner sign in</a></div>
+      </div>
+    </header>
+
+    <section class="section section-tight" aria-labelledby="pp-how">
+      <div class="wrap">
+        <div class="pp-facts" id="pp-facts" aria-busy="true">
+          <div class="pp-fact"><div class="sk" style="height:30px"></div></div><div class="pp-fact"><div class="sk" style="height:30px"></div></div>
+          <div class="pp-fact"><div class="sk" style="height:30px"></div></div><div class="pp-fact"><div class="sk" style="height:30px"></div></div>
+        </div>
+        <div class="pp-types" id="pp-types"></div>
+        <h2 id="pp-how" style="margin-top:36px;font-size:var(--text-2xl);font-weight:800;color:var(--text-primary)">How it works</h2>
+        <ol class="pp-steps">
+          <li>Apply below. Our team reviews every application, usually within a few business days.</li>
+          <li>Once approved, sign in to the Partner Portal to get your referral link, campaign links and marketing kit.</li>
+          <li>Businesses you refer request a demo through your link — or, as a reseller, you onboard them yourself.</li>
+          <li>When they subscribe and their payment is confirmed, you earn commission. Request a payout when your balance reaches the minimum.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section section-tight" id="apply" aria-labelledby="form-title">
+      <div class="wrap" style="max-width:760px">
+        <div class="form-card">
+          <div id="form-view">
+            <h2 id="form-title">Partner application</h2>
+            <div class="alert alert-danger" id="form-alert" role="alert" hidden><div class="alert-body"><p id="form-alert-text"></p></div></div>
+            <div class="alert alert-warning" id="closed-alert" role="status" hidden><div class="alert-body"><p>Partner applications are currently closed. Please check back later or <a class="link" href="/contact?topic=partnership">contact us</a>.</p></div></div>
+            <form id="apply-form" class="auth-form" novalidate>
+              <p class="pp-legend">Partnership type</p>
+              <div class="pp-radio" role="radiogroup" aria-label="Partnership type">
+                <label><input type="radio" name="partner_type" value="affiliate" checked/><span><b>Affiliate</b>Share referral links, earn on referred customers.</span></label>
+                <label><input type="radio" name="partner_type" value="reseller"/><span><b>Reseller</b>Onboard and manage customers directly.</span></label>
+              </div>
+
+              <p class="pp-legend">About you</p>
+              <div class="form-grid">
+                <div class="form-group"><label class="form-label" for="ap-name">Full name</label>
+                  <input class="form-input" id="ap-name" autocomplete="name" maxlength="120" required data-error="ap-name-err" aria-describedby="ap-name-err"/><p class="field-error" id="ap-name-err"></p></div>
+                <div class="form-group"><label class="form-label" for="ap-email">Email</label>
+                  <input class="form-input" type="email" id="ap-email" autocomplete="email" maxlength="200" required data-error="ap-email-err" aria-describedby="ap-email-err"/><p class="field-error" id="ap-email-err"></p></div>
+                <div class="form-group"><label class="form-label" for="ap-company">Company / business <span class="optional">(optional)</span></label>
+                  <input class="form-input" id="ap-company" autocomplete="organization" maxlength="160"/></div>
+                <div class="form-group"><label class="form-label" for="ap-phone">Phone <span class="optional">(optional)</span></label>
+                  <input class="form-input" type="tel" id="ap-phone" autocomplete="tel" maxlength="30" data-error="ap-phone-err" aria-describedby="ap-phone-err"/><p class="field-error" id="ap-phone-err"></p></div>
+                <div class="form-group"><label class="form-label" for="ap-country">Country</label>
+                  <input class="form-input" id="ap-country" autocomplete="country-name" maxlength="80"/></div>
+                <div class="form-group"><label class="form-label" for="ap-city">City</label>
+                  <input class="form-input" id="ap-city" autocomplete="address-level2" maxlength="80"/></div>
+                <div class="form-group"><label class="form-label" for="ap-website">Website <span class="optional">(optional)</span></label>
+                  <input class="form-input" type="url" id="ap-website" placeholder="https://" maxlength="300" data-error="ap-website-err" aria-describedby="ap-website-err"/><p class="field-error" id="ap-website-err"></p></div>
+                <div class="form-group"><label class="form-label" for="ap-btype">Business type</label>
+                  <select class="form-select form-input" id="ap-btype">
+                    <option value="">Choose…</option><option>Marketing agency</option><option>Consultant</option><option>Software reseller</option>
+                    <option>Content creator / influencer</option><option>System integrator</option><option>Other</option>
+                  </select></div>
+              </div>
+
+              <p class="pp-legend">Your plan</p>
+              <div class="form-group"><label class="form-label" for="ap-exp">Sales / marketing experience</label>
+                <textarea class="form-input form-textarea" id="ap-exp" rows="3" maxlength="2000" data-error="ap-exp-err" aria-describedby="ap-exp-err"></textarea><p class="field-error" id="ap-exp-err"></p></div>
+              <div class="form-group"><label class="form-label" for="ap-plan">How will you promote LeadAI?</label>
+                <textarea class="form-input form-textarea" id="ap-plan" rows="3" maxlength="3000" data-error="ap-plan-err" aria-describedby="ap-plan-err"></textarea><p class="field-error" id="ap-plan-err"></p></div>
+              <div class="form-grid">
+                <div class="form-group"><label class="form-label" for="ap-li">LinkedIn <span class="optional">(optional)</span></label><input class="form-input" type="url" id="ap-li" placeholder="https://linkedin.com/in/…" maxlength="300"/></div>
+                <div class="form-group"><label class="form-label" for="ap-tw">Other profile <span class="optional">(optional)</span></label><input class="form-input" type="url" id="ap-tw" placeholder="https://…" maxlength="300"/></div>
+              </div>
+
+              <details class="pp-more">
+                <summary>Tax &amp; payout details (optional now — required before your first payout)</summary>
+                <div class="form-grid" style="margin-top:12px">
+                  <div class="form-group"><label class="form-label" for="ap-legal">Legal name</label><input class="form-input" id="ap-legal" maxlength="120"/></div>
+                  <div class="form-group"><label class="form-label" for="ap-taxid">Tax ID (PAN / VAT / EIN)</label><input class="form-input" id="ap-taxid" maxlength="60" autocomplete="off"/></div>
+                  <div class="form-group"><label class="form-label" for="ap-method">Payout method</label><select class="form-select form-input" id="ap-method"><option value="">Choose…</option></select></div>
+                  <div class="form-group"><label class="form-label" for="ap-dest" id="ap-dest-label">Payout destination</label><input class="form-input" id="ap-dest" maxlength="120" autocomplete="off" placeholder="PayPal email, UPI ID or account number"/></div>
+                </div>
+              </details>
+
+              <p class="pp-legend">Partner account</p>
+              <div class="form-group"><label class="form-label" for="ap-pw">Password</label>
+                <input class="form-input" type="password" id="ap-pw" autocomplete="new-password" data-error="ap-pw-err" aria-describedby="ap-pw-err ap-pw-hint"/>
+                <p class="form-hint" id="ap-pw-hint">8+ characters with an uppercase letter and a number. Already a LeadAI customer? Use your existing email and password.</p>
+                <p class="field-error" id="ap-pw-err"></p></div>
+              <label class="pp-check"><input type="checkbox" id="ap-terms" data-error="ap-terms-err" aria-describedby="ap-terms-err"/>
+                <span>I agree to the LeadAI Partner Program terms, the <a class="link" href="/terms" target="_blank" rel="noopener">Terms of Service</a> and the <a class="link" href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>, and confirm I won't spam or use misleading claims.</span></label>
+              <p class="field-error" id="ap-terms-err"></p>
+              <button type="submit" class="btn btn-primary btn-block" id="ap-submit" style="margin-top:16px"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Submit application</span></button>
+            </form>
+            <p class="pp-signin">Already applied? <a class="link" href="/login?partner=1">Sign in to check your status</a></p>
+          </div>
+          <div id="success-view" hidden tabindex="-1">
+            <div class="auth-icon tone-success" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+            <h2>Application received</h2>
+            <p class="text-secondary" id="success-text"></p>
+            <div class="cta-row" style="margin-top:20px"><a class="btn btn-primary" href="/login?partner=1">Check application status</a><a class="btn btn-secondary" href="/website">Back to the website</a></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer" id="site-footer"></footer>
+</div>
+
+<script src="/static/website.js"></script>
+<script>
+(function () {
+  'use strict';
+  const S = window.LeadAISite;
+  const UI = window.LeadAIUI;
+  const $ = id => document.getElementById(id);
+  const money = (v) => Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+  function fact(value, label) {
+    return S.h('div', { class: 'pp-fact' }, S.h('b', { text: value }), S.h('span', { text: label }));
+  }
+
+  async function boot() {
+    S.initChrome(null);
+    const res = await UI.api('/api/public/partners/program');
+    const facts = S.clear($('pp-facts'));
+    facts.removeAttribute('aria-busy');
+    if (!res.ok) {
+      facts.appendChild(fact('—', 'Program details are unavailable right now'));
+      return;
+    }
+    const p = res.data.program;
+    const c = p.commission;
+    facts.appendChild(fact(c ? (c.type === 'percentage' ? c.value + '%' : money(c.value)) : '—', 'commission per payment'));
+    facts.appendChild(fact(c && c.recurring ? (c.duration_months ? c.duration_months + ' mo' : 'Lifetime') : 'First payment', 'recurring commission'));
+    facts.appendChild(fact(p.attribution_window_days + ' days', 'referral cookie window'));
+    facts.appendChild(fact(money(p.min_payout), 'minimum payout'));
+    const types = S.clear($('pp-types'));
+    (p.partner_types || []).forEach(t => types.appendChild(S.h('div', { class: 'pp-type' }, S.h('h3', { text: t.name }), S.h('p', { text: t.summary }))));
+    const sel = $('ap-method');
+    (p.payout_methods || []).forEach(m => sel.appendChild(S.h('option', { value: m, text: m.replace(/_/g, ' ').replace(/\b\w/g, x => x.toUpperCase()) })));
+    if (!p.applications_open) { $('apply-form').hidden = true; $('closed-alert').hidden = false; }
+  }
+
+  const f = { name: $('ap-name'), email: $('ap-email'), phone: $('ap-phone'), website: $('ap-website'),
+    experience: $('ap-exp'), promotion_plan: $('ap-plan'), password: $('ap-pw'), terms: $('ap-terms') };
+  const URL_RE = /^https?:\/\/\S{3,}$/i;
+  function validate() {
+    const e = {};
+    if (!f.name.value.trim()) e.name = 'Enter your name.';
+    if (!UI.isEmail(f.email.value)) e.email = 'Enter a valid email address.';
+    if (f.phone.value.trim() && !/^[+()\-.\s\d]{6,30}$/.test(f.phone.value.trim())) e.phone = 'Use digits, spaces and + ( ) - only.';
+    if (f.website.value.trim() && !URL_RE.test(f.website.value.trim())) e.website = 'Use a full URL starting with https://';
+    if (f.experience.value.trim().length < 10) e.experience = 'Tell us a little about your experience.';
+    if (f.promotion_plan.value.trim().length < 10) e.promotion_plan = 'Tell us how you plan to promote LeadAI.';
+    if (!f.password.value) e.password = 'Choose a password (or enter your existing LeadAI password).';
+    if (!f.terms.checked) e.terms = 'Please accept the Partner Program terms.';
+    return e;
+  }
+  function showAlert(msg) { $('form-alert-text').textContent = msg; $('form-alert').hidden = !msg; }
+
+  function payoutInfo() {
+    const method = $('ap-method').value, dest = $('ap-dest').value.trim();
+    if (!method || !dest) return null;
+    if (method === 'paypal') return { method, paypal_email: dest };
+    if (method === 'upi') return { method, upi_id: dest };
+    return { method, account_number: dest, account_name: $('ap-legal').value.trim() || undefined };
+  }
+
+  $('apply-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    showAlert('');
+    Object.values(f).forEach(i => UI.fieldError(i, ''));
+    const errs = validate();
+    if (Object.keys(errs).length) {
+      Object.keys(errs).forEach(k => UI.fieldError(f[k], errs[k]));
+      f[Object.keys(errs)[0]].focus();
+      return;
+    }
+    const socials = {};
+    if ($('ap-li').value.trim()) socials.linkedin = $('ap-li').value.trim();
+    if ($('ap-tw').value.trim()) socials.other = $('ap-tw').value.trim();
+    const tax = ($('ap-legal').value.trim() || $('ap-taxid').value.trim())
+      ? { legal_name: $('ap-legal').value.trim() || undefined, tax_id: $('ap-taxid').value.trim() || undefined } : null;
+    const body = {
+      partner_type: (document.querySelector('input[name=partner_type]:checked') || {}).value || 'affiliate',
+      name: f.name.value.trim(), email: f.email.value.trim(), company: $('ap-company').value.trim() || null,
+      phone: f.phone.value.trim() || null, country: $('ap-country').value.trim() || null, city: $('ap-city').value.trim() || null,
+      website: f.website.value.trim() || null, business_type: $('ap-btype').value || null,
+      experience: f.experience.value.trim(), promotion_plan: f.promotion_plan.value.trim(),
+      social_profiles: socials, tax_info: tax, payout_info: payoutInfo(),
+      password: f.password.value, accepted_terms: f.terms.checked,
+    };
+    const btn = $('ap-submit');
+    UI.setBusy(btn, true, 'Submitting…');
+    const res = await UI.api('/api/public/partners/apply', { method: 'POST', body });
+    UI.setBusy(btn, false);
+    if (res.ok && res.data.success) {
+      $('form-view').hidden = true;
+      $('success-text').textContent = res.data.message || '';
+      $('success-view').hidden = false;
+      $('success-view').focus();
+      return;
+    }
+    if (res.networkError) { showAlert('Network error — check your connection and try again. Your answers are still here.'); return; }
+    const code = UI.errorCode(res.data);
+    const msg = UI.errorMessage(res.data, res.status === 429 ? 'Too many applications from this network. Please try again later.' : 'We couldn’t submit your application. Please try again.');
+    if (code === 'account_exists') { UI.fieldError(f.password, msg); f.password.focus(); return; }
+    if (/password/i.test(msg)) { UI.fieldError(f.password, msg); f.password.focus(); return; }
+    if (/email/i.test(msg) && !/payout|paypal/i.test(msg)) { UI.fieldError(f.email, msg); f.email.focus(); return; }
+    showAlert(msg);
+  });
+
+  boot();
+})();
+</script>
+</body>
+</html>

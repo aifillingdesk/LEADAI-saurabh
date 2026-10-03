@@ -1013,7 +1013,7 @@ async def exit_impersonation(
         revoke_session(user["session_id"], revoked_by="impersonation_exit")
 
     original_user = {
-        "user_id": user["user_id"],
+        "user_id": user.get("impersonator_user_id") or user["user_id"],
         "email": impersonated_by,
         "name": "Admin",
         "role": "super_admin",
@@ -1035,7 +1035,12 @@ async def exit_impersonation(
                         details={"organization_id": user.get("organization_id")},
                         ip=ip, user_agent=user_agent)
 
-    return {"success": True, "message": "Exited impersonation", "redirect": "/superadmin"}
+    back = (f"/superadmin#/partners/{user['partner_id']}" if user.get("scope") == "partner" and user.get("partner_id")
+            else "/superadmin")
+    if user.get("scope") == "partner" and user.get("partner_id"):
+        from app.partners.service import paudit
+        paudit("partner.impersonation.stop", user["partner_id"], actor=impersonated_by)
+    return {"success": True, "message": "Exited impersonation", "redirect": back}
 
 
 # ── Phase 6: Platform Unit Economics & Margins ─────────────────────────────

@@ -105,7 +105,8 @@ def authenticate_api_key(
 
     key_hash = _hash_key(raw_key)
     key_doc = db[COLL_API_KEYS].find_one({"key_hash": key_hash, "is_active": True})
-    if not key_doc:
+    # partner keys (owner_type="partner") never authenticate against the org API
+    if not key_doc or key_doc.get("owner_type") == "partner" or not key_doc.get("organization_id"):
         raise HTTPException(status_code=401, detail="Invalid or revoked API key")
 
     # Scope check
@@ -122,4 +123,5 @@ def authenticate_api_key(
         "organization_id": key_doc["organization_id"],
         "name": key_doc.get("name"),
         "scopes": key_doc.get("scopes", []),
+        "rate_limit_per_minute": key_doc.get("rate_limit_per_minute", 60),
     }

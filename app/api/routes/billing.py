@@ -37,7 +37,7 @@ from app.billing.provider import (
     process_billing_webhook,
 )
 from app.billing.subscriptions import (
-    _clean_sub,
+    customer_view,
     cancel_subscription,
     get_organization_subscription,
     reactivate_subscription,
@@ -53,6 +53,7 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 class CheckoutRequest(BaseModel):
     plan_slug: str
     billing_cycle: str = "monthly"
+    coupon_code: Optional[str] = None      # partner coupon (discount + attribution)
 
 
 class MockPayRequest(BaseModel):
@@ -101,7 +102,7 @@ async def create_checkout(body: CheckoutRequest, request: Request,
     checkout. Nothing is activated here."""
     db = get_async_db()
     started = await start_checkout(ctx.tenant_id, body.plan_slug, body.billing_cycle,
-                                   actor=ctx.audit_user(), db=db)
+                                   actor=ctx.audit_user(), db=db, coupon_code=body.coupon_code)
     sub = started["subscription"]
     provider = get_billing_provider()
     session = await provider.create_checkout_session(
@@ -113,6 +114,7 @@ async def create_checkout(body: CheckoutRequest, request: Request,
         "plan_name": started["plan"]["name"], "plan_slug": started["plan"]["slug"],
         "billing_cycle": body.billing_cycle, "amount": sub["amount"],
         "currency": sub.get("currency"),
+        "coupon": customer_view(sub).get("coupon"),
         "message": "Complete the payment. Your plan activates after our team confirms it.",
     }}
 
@@ -132,7 +134,7 @@ async def checkout_status(session_id: str, request: Request,
     from app.billing.plans import get_plan_by_slug_or_id
     plan = await get_plan_by_slug_or_id(sub.get("plan_id"), db=db)
     return {"success": True, "checkout": {
-        "session_id": session_id, "subscription": _clean_sub(sub),
+        "session_id": session_id, "subscription": customer_view(sub),
         "status": sub["status"], "payment_status": (payment or {}).get("status"),
         "plan": {"name": (plan or {}).get("name"), "slug": sub.get("plan_id")},
         "mock": sub.get("provider") == "mock" and mock_payments_enabled(),

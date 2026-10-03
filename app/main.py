@@ -40,6 +40,10 @@ from app.api.routes.super_admin_platform import router as super_admin_platform_r
 from app.api.routes.me import router as me_router
 from app.api.routes.compliance import router as compliance_router
 from app.api.routes.public_v1 import router as public_v1_router
+from app.api.routes.partner_portal import router as partner_portal_router
+from app.api.routes.partner_public import router as partner_public_router
+from app.api.routes.super_admin_partners import router as super_admin_partners_router
+from app.api.routes.super_admin_access import router as super_admin_access_router
 from app.logging_context import RequestIdFilter, RequestIdMiddleware, capture_exception
 
 logger = logging.getLogger(__name__)
@@ -137,6 +141,10 @@ async def _run_startup_tasks():
             await loop.run_in_executor(None, migrate_to_multi_tenant, sdb)
 
         adb = get_async_db()
+        if sdb is not None:
+            from app.partners.service import ensure_program_defaults
+            await loop.run_in_executor(None, ensure_program_defaults, sdb)
+
         if adb is not None:
             from app.billing.plans import ensure_default_plans
             await ensure_default_plans(adb)
@@ -434,6 +442,11 @@ app.include_router(super_admin_platform_router)
 app.include_router(me_router)
 app.include_router(compliance_router)
 app.include_router(public_v1_router)
+# super_admin_partners before any catch-all; partner portal + public program/referral links
+app.include_router(super_admin_partners_router)
+app.include_router(super_admin_access_router)
+app.include_router(partner_portal_router)
+app.include_router(partner_public_router)
 
 
 # ── Error pages & error reporting ──────────────────────────────────────────
@@ -541,18 +554,49 @@ async def auth_gate(request: Request, call_next):
     _PUBLIC_PAGES = {"/signup", "/contact", "/website", "/features", "/pricing", "/about",
                      "/faq", "/privacy", "/terms", "/request-demo", "/demo-pending",
                      "/forgot-password", "/reset-password", "/403", "/404",
-                     "/how-it-works", "/cookies", "/testimonials", "/sitemap.xml", "/robots.txt"}
+                     "/how-it-works", "/cookies", "/testimonials", "/sitemap.xml", "/robots.txt",
+                     "/partners"}
     if (
         path.startswith(("/static", "/api/auth", "/api/public", "/api/billing/plans", "/api/billing/webhook", "/api/invitations", "/api/business-context/catalog"))
         or path in _OPEN_PAGES
         or path in _PUBLIC_PAGES
         or path.startswith("/invite/")
+        or path.startswith("/r/")                 # partner referral links (public)
+        or path.startswith("/api/v1/")            # public REST API: X-API-Key checked by the routes
         or path == "/api/admin/impersonate/exit"
         or path == "/api/super-admin/impersonate/exit"
     ):
         return await call_next(request)
     user = session_user(request)
     scope = (user or {}).get("scope")
+    # Partner Portal: its own session scope ("partner"); the API also accepts a
+    # partner API key (validated, read-only, by the route dependencies).
+    if portal_path == "/partner" or path.startswith("/api/partner/"):
+        import time as _time
+        from app.partners.activity import record_request
+        started = _time.perf_counter()
+        if path.startswith("/api/partner/") and _partner_api_key(request):
+            response = await call_next(request)
+            record_request(request, response.status_code, started)
+            return response
+        if scope != "partner":
+            if path.startswith("/api/"):
+                return JSONResponse({"success": False, "error": "unauthorized",
+                                     "message": "Partner sign-in required"}, status_code=401)
+            return RedirectResponse("/login?partner=1", status_code=303)
+        response = await _call_as(request, call_next, user)
+        # every Partner Portal page / API request goes to the Super Admin's activity log
+        record_request(request, response.status_code, started)
+        return response
+    if scope == "partner" and path.startswith(("/api/super-admin/", "/api/admin/", "/api/org-admin/")):
+        # a partner session probing admin / organization APIs: refused below, reviewed here
+        from app.partners.fraud import raise_flag
+        from app.events.security import security_event_from_request
+        security_event_from_request(request, "partner_privilege_probe", "high",
+                                    details={"path": path, "actor": (user or {}).get("email")})
+        raise_flag("privilege_probe", partner_id=None, severity="high", subject_type="user",
+                   subject_id=str((user or {}).get("user_id") or ""), details={"path": path,
+                                                                               "email": (user or {}).get("email")})
     super_admin_area = portal_path == "/superadmin" or path.startswith("/api/super-admin/")
     admin_area = portal_path == "/admin" or (
         path.startswith(("/api/admin/", "/api/comment-filters/"))
@@ -613,6 +657,15 @@ async def auth_gate(request: Request, call_next):
             target = "/login" if path in ("/", "/dashboard") else "/login?next=" + quote(back, safe="")
         return RedirectResponse(target, status_code=303)
     return await _call_as(request, call_next, user)
+
+
+def _partner_api_key(request: Request) -> bool:
+    from app.partners.constants import API_KEY_PREFIX
+    raw = request.headers.get("x-api-key") or ""
+    auth = request.headers.get("authorization") or ""
+    if not raw and auth.lower().startswith("bearer "):
+        raw = auth.split(" ", 1)[1].strip()
+    return raw.startswith(API_KEY_PREFIX)
 
 
 async def _call_as(request: Request, call_next, user):
@@ -750,6 +803,20 @@ async def org_admin_page(request: Request):
     if ctx.org_role not in ("owner", "admin"):
         return _static_status("403.html", 403, request)
     return _static("org-admin.html", request)
+
+
+@app.get("/partner")
+@app.get("/partner/")
+async def partner_portal_page(request: Request):
+    """Partner Portal — partner-scope sessions only (enforced by auth_gate);
+    applicants see their application status, active partners the portal."""
+    return _static("partner.html", request)
+
+
+@app.get("/partners")
+async def partner_program_page(request: Request):
+    """Public partner program page + application form."""
+    return _static("partners.html", request)
 
 
 @app.get("/")

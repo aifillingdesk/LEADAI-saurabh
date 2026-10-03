@@ -159,12 +159,15 @@ def _check_impersonation(claims: Dict[str, Any]) -> None:
 
 
 def _impersonated_org_context(claims: Dict[str, Any], db) -> TenantContext:
-    """Super Admin support view of an organization (acts as its Admin)."""
+    """Super Admin view of an organization: acts as its OWNER with every
+    organization permission. The organization's own role-permission
+    overrides never restrict the Super Admin."""
     org_id = str(claims.get("organization_id") or "")
     org = db.organizations.find_one({"_id": _oid(org_id)}) if _oid(org_id) else None
     if org is None:
         _forbid("no_active_organization", "Organization not found.")
-    perms = resolve_org_permissions("admin", org, None)
+    from app.auth.permissions import ORG_ROLE_PERMISSIONS
+    perms = set().union(*ORG_ROLE_PERMISSIONS.values())
     return TenantContext(
         user_id=str(claims.get("user_id") or claims.get("email")),
         email=(claims.get("email") or "").lower(),
@@ -173,7 +176,7 @@ def _impersonated_org_context(claims: Dict[str, Any], db) -> TenantContext:
         organization_name=org.get("name", ""),
         organization_slug=org.get("slug", ""),
         organization_status=org.get("status", ""),
-        org_role="admin",
+        org_role="owner",
         impersonated_by=claims.get("impersonated_by"),
         impersonation_reason=claims.get("impersonation_reason"),
         session_id=claims.get("session_id"),
@@ -189,6 +192,10 @@ def resolve_tenant_context(claims: Dict[str, Any], db=None) -> TenantContext:
     if db is None:
         db = get_sync_db()
     scope = claims.get("scope", "site")
+    if scope == "partner":
+        # Partner Portal sessions never resolve to an organization, even when
+        # the same person is also a member of one (fail closed).
+        _forbid("partner_session", "Partner sessions cannot access organization data", 403)
 
     if claims.get("impersonated_by"):
         _check_impersonation(claims)

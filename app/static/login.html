@@ -520,6 +520,17 @@
           </div>
         </div>
 
+        <div class="field" id="totpField" hidden>
+          <label class="field-label" for="loginTotp">Authentication code</label>
+          <div class="input-shell">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+            </svg>
+            <input type="text" id="loginTotp" class="form-input" placeholder="6-digit code from your authenticator app"
+                   inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+          </div>
+        </div>
+
         <div class="options-row">
           <label class="remember">
             <input type="checkbox" id="rememberMe" checked>
@@ -551,6 +562,7 @@
       </form>
 
       <p class="alt-row" id="demoRow">New to LeadAI? <a href="/request-demo">Request a demo</a></p>
+      <p class="alt-row" id="partnerRow" hidden>Not a partner yet? <a href="/partners">Apply to the Partner Program</a></p>
 
       <p class="foot-note" data-brand-footer>Protected by secure authentication · LeadAI © 2026</p>
       <p class="foot-note foot-meta" data-brand-company></p>
@@ -566,7 +578,8 @@
     const urlParams = new URLSearchParams(location.search);
     const isAdminLogin = urlParams.get("admin") === "1";
     const isSuperAdminLogin = urlParams.get("superadmin") === "1";
-    const loginScope = isSuperAdminLogin ? "admin" : (isAdminLogin ? "admin" : "site");
+    const isPartnerLogin = urlParams.get("partner") === "1";
+    const loginScope = isSuperAdminLogin ? "admin" : (isAdminLogin ? "admin" : (isPartnerLogin ? "partner" : "site"));
 
     function initAppConfig() {
       if (window.AppConfig) {
@@ -577,6 +590,12 @@
             if (h) h.textContent = "Super Admin Portal";
             const s = document.querySelector("[data-brand-login-subtext]");
             if (s) s.textContent = "Sign in to the platform control center.";
+          } else if (isPartnerLogin) {
+            document.title = "Partner sign in · " + ((cfg && cfg.app.name) || "LeadAI");
+            const h = document.querySelector("[data-brand-login-heading]");
+            if (h) h.textContent = "Partner Portal";
+            const s = document.querySelector("[data-brand-login-subtext]");
+            if (s) s.textContent = "Sign in to manage your referrals, customers and commissions.";
           } else if (isAdminLogin) {
             document.title = "Admin sign in · " + ((cfg && cfg.app.name) || "LeadAI");
             const h = document.querySelector("[data-brand-login-heading]");
@@ -598,7 +617,8 @@
 
     $("loginEmail").placeholder = (isSuperAdminLogin || isAdminLogin) ? "admin@company.com" : "you@company.com";
     // "Request a demo" is for new customers — not shown on the admin portals.
-    if (isAdminLogin || isSuperAdminLogin) $("demoRow").hidden = true;
+    if (isAdminLogin || isSuperAdminLogin || isPartnerLogin) $("demoRow").hidden = true;
+    if (isPartnerLogin) $("partnerRow").hidden = false;
 
     // ── Safe post-login redirect: only same-site relative paths ──
     function safeNext(path) {
@@ -726,6 +746,14 @@
         case "no_active_organization":
           return showError("Your account isn't part of an active workspace. Ask your team admin to invite you again, or contact support.",
             { linkHref: "/contact", linkText: "Contact support" });
+        case "not_a_partner":
+          return showError("This account isn't a LeadAI partner yet.", { linkHref: "/partners", linkText: "Apply to the Partner Program" });
+        case "partner_rejected":
+          return showError("Your partner application wasn't approved. If you think this is a mistake, get in touch.",
+            { linkHref: "/contact?topic=partnership", linkText: "Contact us" });
+        case "partner_suspended":
+          return showError("Your partner account is suspended. Contact the LeadAI partner team to restore access.",
+            { linkHref: "/contact?topic=partnership", linkText: "Contact us" });
       }
       if (status === 401) return showError(msg || "Invalid email or password.");
       if (status === 403) return showError(msg || "You don't have access to this sign-in portal.");
@@ -746,6 +774,7 @@
         return nextPath;
       }
 
+      if (user.scope === "partner") return "/partner";
       if (user.platform_role === "super_admin") return "/superadmin";
       if (isPlatformAdmin) return "/admin";
 
@@ -799,12 +828,21 @@
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ email, password, scope: loginScope }),
+          body: JSON.stringify({ email, password, scope: loginScope,
+                                 totp_code: $("totpField").hidden ? undefined : ($("loginTotp").value.trim() || undefined) }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           explainFailure(res.status, data);
           reset();
+          return;
+        }
+        if (data.requires_2fa) {
+          // two-factor accounts: ask for the authenticator code, then sign in again
+          reset();
+          $("totpField").hidden = false;
+          showNotice("Enter the 6-digit code from your authenticator app to finish signing in.", "info");
+          $("loginTotp").focus();
           return;
         }
         label.textContent = "Redirecting…";
