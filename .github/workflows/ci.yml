@@ -119,3 +119,36 @@ jobs:
         run: |
           # the portals' JavaScript lives in app/static (served at /static)
           find app/static -name "*.js" -print -exec node --check {} +
+
+  deploy:
+    name: Deploy to VPS (leadorbit.aifilingdesk.com)
+    # only pushes to main of the production repo, and only after every check passed
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'saurabh95710/LEADAI'
+    needs: [lint-and-format, test, frontend-validation]
+    runs-on: ubuntu-latest
+    # one deploy at a time; a newer push waits rather than racing the running one
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://leadorbit.aifilingdesk.com
+    steps:
+      - name: Set up SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Pull the tested commit and restart the app
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          # deploy exactly the commit CI tested, then run the script from that commit
+          ssh -i ~/.ssh/deploy_key "$VPS_USER@$VPS_HOST" \
+            "cd ~/leadai && git fetch --quiet origin main && git reset --hard ${GITHUB_SHA} && bash scripts/deploy_vps.sh"
