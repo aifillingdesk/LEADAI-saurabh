@@ -27,6 +27,7 @@ _SENSITIVE_FIELDS: frozenset = frozenset({
     "hashed_password",
     "password_hash",
     "password",
+    "totp_secret",          # 2FA seed: whoever has it can generate codes
     "session_secret",
     "admin_password_hash",
     "panel_admin_password_hash",

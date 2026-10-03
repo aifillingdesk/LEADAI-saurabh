@@ -2489,7 +2489,7 @@ async def change_password(body: ChangePasswordRequest,
     validate_password(body.new_password)
     await db[coll].update_one({"_id": record["_id"]}, {"$set": {
         "password_hash": hash_password(body.new_password), "password_changed_at": utcnow(),
-        "updated_at": utcnow()}})
+        "must_change_password": False, "updated_at": utcnow()}})
     await a.aaudit("security.change_password", "security", user=admin,
                    details={"email": email})
     return {"success": True,

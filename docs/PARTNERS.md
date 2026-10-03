@@ -87,6 +87,8 @@ The Super Admin holds every permission:
 - **API keys and webhooks**: **API keys & webhooks** (`/api/super-admin/api-keys`, `/api/super-admin/webhooks`) lists every organization and partner key and every outbound webhook. The Super Admin can revoke keys and disable or enable webhooks, effective immediately; the owner is notified and the action audited.
 - **Customer API and Partner API**: the Super Admin can **issue** an API key for any organization (choosing the scopes) or any partner (`POST /api/super-admin/api-keys`, reason required). Issuing a partner key can also grant that partner API access. The key is shown once, marked as issued by the Super Admin, audited, and the owner is notified.
 
+- **Partner sign-in**: the partner page has **Change email** and **Set password**. Changing the email also updates the partner record and the application. A password set this way is temporary by default: the partner must choose their own at the next sign-in. Both actions sign the partner out everywhere and are audited (`partner.email_changed`, `partner.password_set`).
+
 ## Fraud review
 
 Suspicious signals open a **fraud flag** (`partner_fraud_flags`) for Super Admin review: self-referral, the partner's own network, duplicate customer, conflicting attribution, tampered referral cookie, click flood, coupon abuse, chargeback, cross-partner access, a partner session probing admin APIs, an invalid or revoked API key, and actions denied by permissions.

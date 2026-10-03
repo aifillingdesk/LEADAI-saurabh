@@ -18,7 +18,7 @@ import logging
 import re
 import secrets
 from datetime import timedelta
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -298,6 +298,10 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     reset_login_attempts(ip)
     clear_account_failures(email)
+    # an administrator set this password: the person must choose their own first
+    from app.auth.credentials import must_change_password
+    if must_change_password(user):
+        user = {**user, "must_change_password": True}
     tracked_user = create_tracked_session(user, ip=ip, user_agent=user_agent)
     set_session_cookie(response, tracked_user)
     await aaudit("auth.login", "auth", user=tracked_user, ip=ip, user_agent=user_agent,
@@ -305,7 +309,10 @@ async def login(body: LoginRequest, request: Request, response: Response):
     if user.get("scope") == "partner":
         _partner_auth_event(email, "login", True, None, ip, user_agent,
                             session_id=(tracked_user.get("session_id") or "")[:12])
-    return {"success": True, "user": public_user(tracked_user)}
+    out: Dict[str, Any] = {"success": True, "user": public_user(tracked_user)}
+    if tracked_user.get("must_change_password"):
+        out.update({"must_change_password": True, "redirect": "/change-password"})
+    return out
 
 
 def _partner_auth_event(email: str, action: str, success: bool, reason: Optional[str], ip: Optional[str],
@@ -527,28 +534,42 @@ def _hash_token(token: str) -> str:
 
 @router.post("/password/change")
 async def change_password(body: ChangePasswordRequest, request: Request, response: Response):
+    """Change your own password (current password required). Works for every
+    account kind; clears an administrator's "must change password" flag."""
     user = session_user(request)
-    if not user or not user.get("user_id"):
+    if not user:
         raise HTTPException(status_code=401, detail="Sign in required")
+    from app.auth.credentials import own_account
+    from app.auth.superadmin import is_superadmin_email
+    if is_superadmin_email(user.get("email")) and not user.get("user_id"):
+        raise HTTPException(status_code=409, detail=(
+            "The Super Admin password is set by SUPERADMIN_PASSWORD in the hosting environment "
+            "and cannot be changed in the app."))
     from app.lifecycle.demo import validate_password
     validate_password(body.new_password)
     db = get_sync_db()
-    record = db["users"].find_one({"_id": ObjectId(str(user["user_id"]))})
+    coll, record = own_account(user, db)
     if not record:
         raise HTTPException(status_code=404, detail="Account not found")
     ok, _ = _verify_and_migrate_password(body.current_password, record.get("password_hash") or "")
     if not ok:
         log_security_event("password_change_failed", "medium", actor_email=user.get("email"),
-                           actor_user_id=str(user["user_id"]), ip=request_meta(request)["ip"])
+                           actor_user_id=str(user.get("user_id") or ""), ip=request_meta(request)["ip"])
         raise HTTPException(status_code=400, detail="Current password is incorrect")
-    db["users"].update_one({"_id": record["_id"]}, {"$set": {
+    if body.new_password == body.current_password:
+        raise HTTPException(status_code=422, detail="Choose a password different from the current one")
+    db[coll].update_one({"_id": record["_id"]}, {"$set": {
         "password_hash": hash_password(body.new_password), "password_changed_at": utcnow(),
-        "updated_at": utcnow()}})
+        "must_change_password": False, "updated_at": utcnow()}})
     # sign out every other session
+    owner = str(record["_id"]) if coll == "users" else f"env:{(record.get('email') or '').lower()}"
     db["user_sessions"].update_many(
-        {"user_id": str(record["_id"]), "revoked_at": None,
-         "session_id": {"$ne": user.get("session_id")}},
+        {"user_id": owner, "revoked_at": None, "session_id": {"$ne": user.get("session_id")}},
         {"$set": {"revoked_at": utcnow(), "revoked_by": "password_change"}})
+    if user.get("must_change_password"):
+        # this session stays signed in, now without the restriction
+        user.pop("must_change_password", None)
+        set_session_cookie(response, user)
     meta = request_meta(request)
     await aaudit("auth.password_changed", "auth", user=user, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "message": "Password updated. Other sessions were signed out."}
@@ -607,6 +628,7 @@ async def reset_password(body: ResetRequest, request: Request):
     uid = ObjectId(doc["user_id"])
     db["users"].update_one({"_id": uid}, {"$set": {
         "password_hash": hash_password(body.new_password), "password_changed_at": now,
+        "must_change_password": False,          # they chose this password themselves
         "updated_at": now}})
     revoke_user_sessions(doc["user_id"], revoked_by="password_reset")
     record = db["users"].find_one({"_id": uid}, {"email": 1})

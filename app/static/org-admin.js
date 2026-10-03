@@ -1219,6 +1219,64 @@
       catch (err) { toast(err.message, 'error'); }
     });
   }
+  // ── Sign-in details of a member (owner/admin) ─────────────────────────────
+  // A strong temporary password: 14 characters with upper, lower, digit, symbol.
+  function genPassword() {
+    const sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%*?-'];
+    const all = sets.join('');
+    const rnd = (n) => { const a = new Uint32Array(n); crypto.getRandomValues(a); return Array.from(a); };
+    const chars = sets.map((set, i) => set[rnd(1)[0] % set.length]).concat(rnd(10).map(x => all[x % all.length]));
+    const r = rnd(chars.length);
+    for (let i = chars.length - 1; i > 0; i--) { const j = r[i] % (i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+    return chars.join('');
+  }
+  function credentialForm(o) {
+    // o: {title, body, submit, run(root) -> Promise<result>, done(result)}
+    openModal({ title: o.title, body: `<form data-cred novalidate>${o.body}<p class="oa-err" data-err role="alert" style="color:var(--danger);margin:10px 0 0"></p></form>`,
+      foot: `<button type="button" class="btn btn-secondary" data-close>Cancel</button><button type="button" class="btn btn-primary" data-go>${esc(o.submit)}</button>`,
+      onMount(root, close) {
+        const go = $('[data-go]', root), err = $('[data-err]', root);
+        const submit = async () => {
+          err.textContent = '';
+          busy(go, true, 'Saving…');
+          try { const r = await o.run(root); close(); o.done(r); }
+          catch (e) { err.textContent = e.message; busy(go, false); }
+        };
+        go.onclick = submit;
+        $('[data-cred]', root).onsubmit = (e) => { e.preventDefault(); submit(); };
+        if (o.mount) o.mount(root);
+      } });
+  }
+  function setPasswordModal(u) {
+    credentialForm({ title: 'Set password — ' + (u.name || u.email), submit: 'Set password',
+      body: `<p class="oa-small" style="margin:0 0 12px;color:var(--text-secondary)">${esc(u.email)} is signed out of every device. Give them the new password yourself — it is never emailed and won't be shown again.</p>
+        <div class="oa-field"><label for="np-pw">New password</label><div class="oa-color"><input class="form-input oa-mono" id="np-pw" name="pw" type="text" autocomplete="off" spellcheck="false" minlength="8" required/><button type="button" class="btn btn-secondary btn-sm" data-gen>Generate</button><button type="button" class="btn btn-secondary btn-sm" data-copy>Copy</button></div><span class="oa-hint">At least 8 characters with an uppercase letter and a number.</span></div>
+        <label class="oa-switch" style="border:0"><input type="checkbox" data-must checked/><span class="oa-switch-text"><b>Make them choose their own at the next sign-in</b><span>Recommended — the password you set only works once.</span></span></label>
+        <label class="oa-switch" style="border:0"><input type="checkbox" data-notify checked/><span class="oa-switch-text"><b>Email them that their password changed</b><span>The email never contains the password.</span></span></label>`,
+      mount(root) {
+        const pw = $('#np-pw', root);
+        $('[data-gen]', root).onclick = () => { pw.value = genPassword(); pw.select(); };
+        $('[data-copy]', root).onclick = () => { if (pw.value && navigator.clipboard) navigator.clipboard.writeText(pw.value).then(() => toast('Password copied', 'success')); };
+      },
+      run(root) {
+        const pw = $('#np-pw', root).value;
+        if (pw.length < 8 || pw.toLowerCase() === pw || !/\d/.test(pw)) return Promise.reject(new Error('Use at least 8 characters with an uppercase letter and a number.'));
+        return api(`/api/org-admin/users/${encodeURIComponent(u.user_id)}/password`, { method: 'POST',
+          body: { password: pw, must_change: $('[data-must]', root).checked, notify: $('[data-notify]', root).checked } });
+      },
+      done(r) { toast(r.message || 'Password set.', 'success'); route(); } });
+  }
+  function changeEmailModal(u) {
+    credentialForm({ title: 'Change sign-in email — ' + (u.name || u.email), submit: 'Change email',
+      body: `<p class="oa-small" style="margin:0 0 12px;color:var(--text-secondary)">They are signed out everywhere and sign in with the new email from now on. Both the old and the new address get a notice.</p>
+        <div class="oa-field"><label for="ce-email">New email</label><input class="form-input" id="ce-email" type="email" autocomplete="off" spellcheck="false" required value="${attr(u.email)}"/></div>`,
+      run(root) {
+        const email = $('#ce-email', root).value.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return Promise.reject(new Error('Enter a valid email address.'));
+        return api(`/api/org-admin/users/${encodeURIComponent(u.user_id)}/email`, { method: 'PATCH', body: { email } });
+      },
+      done(r) { toast(r.message || 'Email changed.', 'success'); S.members = null; route(); } });
+  }
   async function renderUserDetail(v, uid) {
     const [d, roles] = await Promise.all([api('/api/org-admin/users/' + encodeURIComponent(uid || '')), api('/api/org-admin/roles').catch(() => null)]);
     if (!v.alive()) return;
@@ -1227,7 +1285,7 @@
     const roleOpts = [['member', 'User'], ['manager', 'Manager'], ['viewer', 'Viewer']].concat(isOwner() ? [['admin', 'Admin']] : []);
     const reason = u.is_me ? 'This is your own account — manage it from Profile & security.' : u.role === 'owner' ? 'The organization owner cannot be modified.' : (!manageable ? 'Only the organization owner can modify another Admin.' : '');
     const actions = manageable ? [
-      can('members.update') ? `<button type="button" class="btn btn-secondary" data-reset>${ico('lock')} Reset access</button>` : '',
+      can('members.update') ? `<button type="button" class="btn btn-secondary" data-email>${ico('user')} Change email</button><button type="button" class="btn btn-secondary" data-setpw>${ico('lock')} Set password</button><button type="button" class="btn btn-secondary" data-reset>${ico('lock')} Reset access</button>` : '',
       can('members.suspend') && u.status === 'active' ? '<button type="button" class="btn btn-secondary" data-status="inactive">Deactivate</button><button type="button" class="btn btn-danger" data-status="suspended">Suspend</button>' : '',
       can('members.suspend') && u.status !== 'active' ? '<button type="button" class="btn btn-primary" data-status="active">Restore access</button>' : '',
       can('members.delete') ? '<button type="button" class="btn btn-danger" data-remove>Remove</button>' : '',
@@ -1267,6 +1325,10 @@
       if (!(await confirmDialog(text[0], text[1], { danger: st !== 'active', confirm: text[2] }))) return;
       patch({ status: st }, b, st === 'active' ? 'Access restored.' : 'User ' + (st === 'inactive' ? 'deactivated.' : 'suspended.'));
     });
+    const em = $('[data-email]', v.el);
+    if (em) em.onclick = () => changeEmailModal(u);
+    const sp = $('[data-setpw]', v.el);
+    if (sp) sp.onclick = () => setPasswordModal(u);
     const rs = $('[data-reset]', v.el);
     if (rs) rs.onclick = async () => {
       const res = await confirmDialog('Reset access?', `We'll email ${u.email} a secure one-time link to set a new password. No password is shown or sent.`, { confirm: 'Send reset link', extra: '<label class="oa-switch" style="border:0"><input type="checkbox" data-rev checked/><span class="oa-switch-text"><b>Sign them out everywhere</b><span>Ends all of their current sessions now.</span></span></label>', collect: (root) => ({ revoke: $('[data-rev]', root).checked }) });

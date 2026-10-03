@@ -846,7 +846,8 @@
           return;
         }
         label.textContent = "Redirecting…";
-        location.href = destinationFor(data.user || {});
+        // an administrator set this password: choose your own before anything else
+        location.href = data.must_change_password ? "/change-password" : destinationFor(data.user || {});
       } catch (e) {
         showError("Network error during sign-in — check your connection and try again.");
         reset();

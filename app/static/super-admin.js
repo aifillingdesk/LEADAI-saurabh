@@ -1119,10 +1119,85 @@
       } });
   }
 
+  // ── Sign-in details of any account: set password / change email ──────────
+  // A strong temporary password: 14 characters with upper, lower, digit, symbol.
+  function genPassword() {
+    var sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%*?-'];
+    var all = sets.join(''), rnd = function (n) { var a = new Uint32Array(n); crypto.getRandomValues(a); return Array.prototype.slice.call(a); };
+    var chars = sets.map(function (set) { return set[rnd(1)[0] % set.length]; }).concat(rnd(10).map(function (x) { return all[x % all.length]; }));
+    var r = rnd(chars.length);
+    for (var i = chars.length - 1; i > 0; i--) { var j = r[i] % (i + 1), t = chars[i]; chars[i] = chars[j]; chars[j] = t; }
+    return chars.join('');
+  }
+  /** setPasswordDialog(url, who) — POST {password, must_change, notify, reason} to url */
+  async function setPasswordDialog(url, who) {
+    var r = await openModal({ title: 'Set password', submitLabel: 'Set password', danger: true, body:
+      '<p style="margin:0;color:var(--text-secondary)"><b>' + esc(who) + '</b> is signed out of every device. Give them the new password yourself — it is never emailed and won\'t be shown again.</p>' +
+      '<div class="sa-field"><label for="spPw">New password</label><div class="sa-row" style="gap:6px;flex-wrap:nowrap"><input class="form-input sa-mono" id="spPw" name="password" type="text" autocomplete="off" spellcheck="false" required minlength="8">' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-gen>Generate</button><button type="button" class="btn btn-secondary btn-sm" data-copy>Copy</button></div>' +
+      '<span class="hint">At least 8 characters with an uppercase letter and a number.</span></div>' +
+      '<label class="sa-check"><input type="checkbox" name="must_change" checked> Make them choose their own password at the next sign-in (recommended)</label>' +
+      '<label class="sa-check"><input type="checkbox" name="notify" checked> Email them that their password changed (never the password itself)</label>' +
+      '<div class="sa-field"><label for="spReason">Reason</label><input class="form-input" id="spReason" name="reason" maxlength="300"><span class="hint">Recorded in the audit log.</span></div>',
+      onOpen: function (form) {
+        var pw = $('#spPw', form);
+        $('[data-gen]', form).onclick = function () { pw.value = genPassword(); pw.select(); };
+        $('[data-copy]', form).onclick = function () { if (pw.value && navigator.clipboard) navigator.clipboard.writeText(pw.value).then(function () { toast('Password copied'); }); };
+      },
+      onSubmit: function (f, fd) {
+        var pw = String(fd.get('password') || '');
+        if (pw.length < 8 || pw.toLowerCase() === pw || !/\d/.test(pw)) throw new Error('Use at least 8 characters with an uppercase letter and a number.');
+        return api(url, { method: 'POST', body: { password: pw, must_change: !!fd.get('must_change'), notify: !!fd.get('notify'), reason: String(fd.get('reason') || '') } });
+      } });
+    if (r) toast(r.message || 'Password set');
+    return r;
+  }
+  /** changeEmailDialog(url, current) — PATCH {email, reason} to url */
+  async function changeEmailDialog(url, current) {
+    var r = await openModal({ title: 'Change sign-in email', submitLabel: 'Change email', danger: true, body:
+      '<p style="margin:0;color:var(--text-secondary)">They are signed out everywhere and sign in with the new email from now on. Both the old and the new address are told about the change.</p>' +
+      '<div class="sa-field"><label for="ceEmail">New email</label><input class="form-input" id="ceEmail" name="email" type="email" required value="' + esc(current || '') + '"></div>' +
+      '<div class="sa-field"><label for="ceReason">Reason</label><input class="form-input" id="ceReason" name="reason" maxlength="300"></div>',
+      onSubmit: function (f, fd) {
+        var email = String(fd.get('email') || '').trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address.');
+        return api(url, { method: 'PATCH', body: { email: email, reason: String(fd.get('reason') || '') } });
+      } });
+    if (r) toast(r.message || 'Email changed');
+    return r;
+  }
+
   async function viewAdmins(root, q) {
-    root.innerHTML = header('Admins', 'Organization owners and admins across all organizations. Approving an admin = approving their organization\'s demo or subscription.',
-      '<a class="btn btn-secondary btn-sm" href="#/demo">Demo queue</a><a class="btn btn-secondary btn-sm" href="#/subscriptions?status=awaiting">Confirmation queue</a>') + '<div id="aList"></div>';
-    listView($('#aList', root), {
+    root.innerHTML = header('Admins', 'Organization owners and admins across all organizations, and the platform staff accounts. Approving an admin = approving their organization\'s demo or subscription.',
+      '<a class="btn btn-secondary btn-sm" href="#/demo">Demo queue</a><a class="btn btn-secondary btn-sm" href="#/subscriptions?status=awaiting">Confirmation queue</a>') + '<div id="aTabs"></div>';
+    tabs($('#aTabs', root), [['org', 'Organization admins'], ['staff', 'Platform staff']], q.tab || 'org', function (key, el) {
+      if (key === 'staff') return staffList(el);
+      el.innerHTML = '<div id="aList"></div>';
+      orgAdminList($('#aList', el), q);
+    });
+  }
+
+  function staffList(el) {
+    return listView(el, {
+      url: function (p) { return '/api/super-admin/staff' + qs({ q: p.q }); },
+      filters: [{ key: 'q', label: 'Search staff email or name…' }],
+      columns: [
+        { label: 'Staff account', render: function (a) { return '<span class="cell-main">' + esc(a.name || a.email) + '</span><span class="cell-sub">' + esc(a.email) + '</span>'; } },
+        { label: 'Role', render: function (a) { return esc(titleCase(a.role || 'viewer')); } },
+        { label: 'Status', render: function (a) { return pill(a.enabled === false ? 'disabled' : 'active') + (a.must_change_password ? ' ' + pill('warning', 'Must set own password') : ''); } },
+        { label: 'Last login', render: function (a) { return esc(ago(a.last_login)); } },
+        { label: 'Password changed', render: function (a) { return esc(a.password_changed_at ? fmtDate(a.password_changed_at) : '—'); } },
+        { label: '', cls: 'num', render: function () { return '<div class="row-actions"><button type="button" class="btn btn-secondary btn-xs" data-em>Change email</button><button type="button" class="btn btn-secondary btn-xs" data-pw>Set password</button></div>'; } }
+      ],
+      bindRow: function (tr, a, reload) {
+        $('[data-em]', tr).onclick = function () { changeEmailDialog('/api/super-admin/staff/' + encodeURIComponent(a.id) + '/email', a.email).then(function (r) { if (r) reload(); }, function (e) { toast(e.message, 'error'); }); };
+        $('[data-pw]', tr).onclick = function () { setPasswordDialog('/api/super-admin/staff/' + encodeURIComponent(a.id) + '/password', a.email).then(function (r) { if (r) reload(); }, function (e) { toast(e.message, 'error'); }); };
+      },
+      empty: { title: 'No platform staff accounts', desc: 'Staff accounts are created in the platform console.' } });
+  }
+
+  function orgAdminList(host, q) {
+    listView(host, {
       url: function (p) { return '/api/super-admin/admins' + qs({ page: p.page, limit: p.limit, sort: p.sort, q: p.q, role: p.role, status: p.status }); },
       sort: '-joined_at', initial: { q: q.q || '' }, key: 'admins', exportUrl: function () { return reportUrl('admins'); },
       filters: [{ key: 'q', label: 'Search admin email, name or organization…' },
@@ -1137,11 +1212,12 @@
         { label: 'Last login', render: function (a) { return esc(ago(a.last_login)); } },
         { label: 'Joined', sort: 'joined_at', render: function (a) { return esc(fmtDate(a.joined_at)); } },
         { label: '', cls: 'num', render: function (a) {
-          return '<div class="row-actions"><button type="button" class="btn btn-secondary btn-xs" data-reset>Reset access</button>' +
+          return '<div class="row-actions"><button type="button" class="btn btn-secondary btn-xs" data-pw>Set password</button><button type="button" class="btn btn-secondary btn-xs" data-reset>Reset access</button>' +
             (a.user_status === 'active' ? '<button type="button" class="btn btn-danger btn-xs" data-st="suspended">Suspend</button>' : '<button type="button" class="btn btn-secondary btn-xs" data-st="active">Activate</button>') + '</div>'; } }
       ],
       bindRow: function (tr, a, reload) {
         $('[data-reset]', tr).onclick = function () { resetAccess(a.user_id, a.email).catch(function (e) { toast(e.message, 'error'); }); };
+        $('[data-pw]', tr).onclick = function () { setPasswordDialog('/api/super-admin/users/' + encodeURIComponent(a.user_id) + '/password', a.email).then(function (r) { if (r) reload(); }, function (e) { toast(e.message, 'error'); }); };
         $$('[data-st]', tr).forEach(function (b) { b.onclick = function () { userStatusAction({ id: a.user_id, email: a.email, name: a.name }, b.getAttribute('data-st'), reload).catch(function (e) { toast(e.message, 'error'); }); }; });
       },
       empty: { title: 'No admins found' }
@@ -1193,7 +1269,7 @@
     setTitle(u.name || u.email, 'Customers › Users');
     root.innerHTML = '<div class="sa-row sa-small" style="margin-bottom:6px"><a class="sa-link" href="#/users">← Users</a></div>' +
       header(u.name || u.email, u.email + ' · joined ' + fmtDate(u.created_at),
-        pill(u.status || 'active') + (protectedAcct ? pill('info', 'Super Admin') : '<button type="button" class="btn btn-secondary btn-sm" id="udEmail">Change email</button><button type="button" class="btn btn-secondary btn-sm" id="udReset">Reset access</button><button type="button" class="btn btn-secondary btn-sm" id="udRevoke">Sign out everywhere</button>' +
+        pill(u.status || 'active') + (protectedAcct ? pill('info', 'Super Admin') : '<button type="button" class="btn btn-secondary btn-sm" id="udEmail">Change email</button><button type="button" class="btn btn-secondary btn-sm" id="udPw">Set password</button><button type="button" class="btn btn-secondary btn-sm" id="udReset">Reset access</button><button type="button" class="btn btn-secondary btn-sm" id="udRevoke">Sign out everywhere</button>' +
           ((u.status || 'active') !== 'active' ? '<button type="button" class="btn btn-secondary btn-sm" data-st="active">Activate</button>' : '<button type="button" class="btn btn-danger btn-sm" data-st="suspended">Suspend</button>') +
           (u.status !== 'disabled' ? '<button type="button" class="btn btn-danger btn-sm" data-st="disabled">Deactivate</button>' : ''))) +
       '<div class="sa-grid sa-kpis">' +
@@ -1202,14 +1278,8 @@
       kpi('Active sessions', fmtN(u.active_sessions)) + kpi('Last login', ago(u.last_login)) + '</div>' +
       '<div class="sa-section" id="udTabs"></div>';
     if (!protectedAcct) {
-      $('#udEmail', root).onclick = async function () {
-        var r = await openModal({ title: 'Change sign-in email', submitLabel: 'Change email', danger: true, body:
-          '<p style="margin:0;color:var(--text-secondary)">The user is signed out everywhere and both the old and the new address are told about the change.</p>' +
-          '<div class="sa-field"><label for="ceEmail">New email</label><input class="form-input" id="ceEmail" name="email" type="email" required value="' + esc(u.email) + '"></div>' +
-          '<div class="sa-field"><label for="ceReason">Reason</label><input class="form-input" id="ceReason" name="reason" maxlength="300"></div>',
-          onSubmit: function (f, fd) { return api('/api/super-admin/users/' + encodeURIComponent(id) + '/email', { method: 'PATCH', body: { email: String(fd.get('email') || '').trim(), reason: String(fd.get('reason') || '') } }); } });
-        if (r) { toast(r.message || 'Email changed'); reload(); }
-      };
+      $('#udEmail', root).onclick = function () { changeEmailDialog('/api/super-admin/users/' + encodeURIComponent(id) + '/email', u.email).then(function (r) { if (r) reload(); }, function (e) { toast(e.message, 'error'); }); };
+      $('#udPw', root).onclick = function () { setPasswordDialog('/api/super-admin/users/' + encodeURIComponent(id) + '/password', u.email).then(function (r) { if (r) reload(); }, function (e) { toast(e.message, 'error'); }); };
       $('#udReset', root).onclick = function () { resetAccess(id, u.email).catch(function (e) { toast(e.message, 'error'); }); };
       $('#udRevoke', root).onclick = async function () {
         var r = await confirmDialog({ title: 'Sign out everywhere', message: 'Revokes every active session of ' + u.email + '.', confirmLabel: 'Revoke sessions', reason: 'optional' });
@@ -3101,6 +3171,7 @@
     fmtDT: fmtDT, ago: ago, titleCase: titleCase, short: short, header: header, kpi: kpi, tabs: tabs,
     listView: listView, lineChart: lineChart, barList: barList, bindCharts: bindCharts, openModal: openModal, confirmDialog: confirmDialog, openDrawer: openDrawer,
     toast: toast, busy: busy, emptyState: emptyState, errorState: errorState, skeleton: skeleton,
+    setPasswordDialog: setPasswordDialog, changeEmailDialog: changeEmailDialog,
     go: go, route: route, setCount: setCount, $: $, $$: $$, STATUS_TONE: STATUS_TONE, PILL_LABEL: PILL_LABEL,
     me: function () { return S.me; },
     /** register(groupName, afterGroup, items:[[route,label,icon,countKey]], routes:{key:[view,title,detailView]}, countFn) */

@@ -859,6 +859,8 @@
     var p = (await api(B + '/' + encodeURIComponent(id))).partner;
     var st = p.stats || {};
     var actions = m.can_manage ? (p.status === 'active' ? '<button type="button" class="btn btn-primary btn-sm" id="pdTask">Assign task</button>' : '') + '<button type="button" class="btn btn-secondary btn-sm" id="pdEdit">Edit</button>' +
+      '<button type="button" class="btn btn-secondary btn-sm" id="pdEmail">Change email</button>' +
+      '<button type="button" class="btn btn-secondary btn-sm" id="pdPw">Set password</button>' +
       '<button type="button" class="btn btn-secondary btn-sm" id="pdViewAs">View as partner</button>' +
       '<button type="button" class="btn btn-secondary btn-sm" id="pdSignout">Force sign-out' + (p.active_sessions ? ' (' + p.active_sessions + ')' : '') + '</button>' +
       (p.status === 'active' ? '<button type="button" class="btn btn-danger btn-sm" id="pdSuspend">Suspend</button>' : '<button type="button" class="btn btn-primary btn-sm" id="pdReactivate">Reactivate</button>') : '';
@@ -965,6 +967,8 @@
       if (c.reason.length < 5) { K.toast('Give a reason of at least 5 characters', 'error'); return; }
       try { var r = await api(B + '/' + id + '/impersonate', { method: 'POST', body: { reason: c.reason } }); location.href = r.redirect; } catch (e) { K.toast(e.message, 'error'); }
     });
+    bind('#pdEmail', function () { K.changeEmailDialog(B + '/' + id + '/email', p.email).then(function (r) { if (r) reload(); }, function (e) { K.toast(e.message, 'error'); }); });
+    bind('#pdPw', function () { K.setPasswordDialog(B + '/' + id + '/password', p.email).then(function (r) { if (r) reload(); }, function (e) { K.toast(e.message, 'error'); }); });
     bind('#pdTask', function () { assignTask({ id: id, name: p.company || p.name }).then(function (r) { if (r) { K.toast(r.message || 'Task assigned'); location.hash = '#/partners/' + id + '?tab=tasks'; } }); });
     bind('#pdSignout', async function () {
       var c = await K.confirmDialog({ title: 'Force sign-out', message: 'Every Partner Portal session of this partner ends now. They can sign in again unless suspended.', confirmLabel: 'Sign out everywhere', reason: 'optional' });

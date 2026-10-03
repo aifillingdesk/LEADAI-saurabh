@@ -687,6 +687,7 @@ def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "platform_role": user.get("platform_role"),
         "impersonated_by": user.get("impersonated_by"),
         "impersonation_reason": user.get("impersonation_reason"),
+        "must_change_password": bool(user.get("must_change_password")),
     }
 
 

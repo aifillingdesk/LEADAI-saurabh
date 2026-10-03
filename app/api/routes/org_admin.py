@@ -681,6 +681,92 @@ class ResetAccessBody(BaseModel):
     revoke_sessions: bool = True
 
 
+async def _own_account_or_409(db, ctx: TenantContext, user_id: str, request: Request, what: str) -> dict:
+    """The member's account, when this organization alone controls it.
+
+    Sign-in details are global to the account: an org Admin may change them
+    only for people who belong to THIS organization alone — never for
+    platform staff, a LeadAI partner, or someone who is also a member (maybe
+    owner) of another organization. Those go to the person or LeadAI support."""
+    from app.events.security import security_event_from_request
+    record = await db.users.find_one({"_id": _oid(user_id)})
+    if not record or not record.get("email"):
+        raise HTTPException(status_code=404, detail="Team member not found")
+    other_org = await db.organization_members.find_one(
+        {"user_id": str(user_id), "organization_id": {"$ne": ctx.organization_id},
+         "status": {"$nin": ["removed", "inactive"]}}, {"_id": 1})
+    partner = await db.partners.find_one({"user_id": str(user_id)}, {"_id": 1})
+    if record.get("is_platform_admin") or other_org or partner:
+        security_event_from_request(request, "admin_reset_refused_multi_org", "medium", ctx=ctx,
+                                    details={"target_user_id": str(user_id), "action": what})
+        raise HTTPException(status_code=409, detail=(
+            "This account is also used outside your organization (another organization, the "
+            f"Partner Program or LeadAI staff), so only the person or LeadAI support can {what}."))
+    return record
+
+
+class MemberPasswordBody(BaseModel):
+    # validated after the membership check, so another org's ids answer 404 first
+    password: str = ""
+    must_change: bool = True        # temporary: they choose their own at the next sign-in
+    notify: bool = True             # email them that it changed (never the password)
+
+
+@router.post("/users/{user_id}/password")
+async def set_member_password(user_id: str, request: Request, body: MemberPasswordBody | None = None,
+                              ctx: TenantContext = Depends(require_portal(P.MEMBERS_UPDATE))):
+    """Set a member's password. Signs them out everywhere; by default they must
+    choose their own at the next sign-in. The password is never shown again."""
+    from app.auth.credentials import set_password
+    from app.events.security import security_event_from_request
+    body = body or MemberPasswordBody()
+    db = _db()
+    membership = await _get_member_or_404(db, ctx, user_id, request)
+    assert_can_manage_member(ctx, target_role=membership.get("role"),
+                             target_user_id=user_id, request=request)
+    await _own_account_or_409(db, ctx, user_id, request, "change their password")
+    res = await asyncio.to_thread(set_password, "user", user_id, body.password, actor_email=ctx.email,
+                                  by_label=f"org_admin:{ctx.email}", must_change=body.must_change,
+                                  notify=body.notify, organization_name=ctx.organization_name)
+    security_event_from_request(request, "password_set_by_admin", "low", ctx=ctx,
+                                details={"target_user_id": str(user_id)})
+    await _audit(ctx, request, "member.password_set", "team", resource_type="member",
+                 resource_id=str(user_id),
+                 details={"email": res["email"], "must_change_password": res["must_change_password"],
+                          "sessions_revoked": res["sessions_revoked"], "email_delivery": res["email_delivery"]})
+    return {"success": True, **res,
+            "message": "Password set. They were signed out everywhere"
+                       + (" and must choose their own password at the next sign-in." if body.must_change else ".")}
+
+
+class MemberEmailBody(BaseModel):
+    email: str = ""
+
+
+@router.patch("/users/{user_id}/email")
+async def change_member_email(user_id: str, request: Request, body: MemberEmailBody | None = None,
+                              ctx: TenantContext = Depends(require_portal(P.MEMBERS_UPDATE))):
+    """Change a member's sign-in email. Both addresses are told; the member is
+    signed out everywhere and signs in with the new email."""
+    from app.auth.credentials import change_email
+    body = body or MemberEmailBody()
+    db = _db()
+    membership = await _get_member_or_404(db, ctx, user_id, request)
+    assert_can_manage_member(ctx, target_role=membership.get("role"),
+                             target_user_id=user_id, request=request)
+    await _own_account_or_409(db, ctx, user_id, request, "change their sign-in email")
+    res = await asyncio.to_thread(change_email, "user", user_id, body.email, actor_email=ctx.email,
+                                  by_label=f"org_admin:{ctx.email}", organization_name=ctx.organization_name)
+    if res["changed"]:
+        await _audit(ctx, request, "member.email_changed", "team", resource_type="member",
+                     resource_id=str(user_id),
+                     details={"before": res["before"], "after": res["after"],
+                              "sessions_revoked": res["sessions_revoked"]})
+    return {"success": True, "email": res["after"], "sessions_revoked": res["sessions_revoked"],
+            "message": (f"Sign-in email changed to {res['after']}. They were signed out everywhere."
+                        if res["changed"] else "Email unchanged")}
+
+
 @router.post("/users/{user_id}/reset-access")
 async def reset_user_access(user_id: str, request: Request, body: ResetAccessBody | None = None,
                             ctx: TenantContext = Depends(require_portal(P.MEMBERS_UPDATE))):
@@ -695,23 +781,9 @@ async def reset_user_access(user_id: str, request: Request, body: ResetAccessBod
     membership = await _get_member_or_404(db, ctx, user_id, request)
     assert_can_manage_member(ctx, target_role=membership.get("role"),
                              target_user_id=user_id, request=request)
-    record = await db.users.find_one({"_id": _oid(user_id)})
-    if not record or not record.get("email"):
-        raise HTTPException(status_code=404, detail="Team member not found")
+    record = await _own_account_or_409(db, ctx, user_id, request, "reset their password")
     if record.get("status", "active") != "active":
         raise HTTPException(status_code=409, detail="This account is not active")
-    # A password is global to the account: an org Admin may reset it only
-    # for people who belong to THIS organization alone — never for platform
-    # staff or someone who is also a member (maybe owner) of another org.
-    other_org = await db.organization_members.find_one(
-        {"user_id": str(user_id), "organization_id": {"$ne": ctx.organization_id},
-         "status": {"$nin": ["removed", "inactive"]}}, {"_id": 1})
-    if record.get("is_platform_admin") or other_org:
-        security_event_from_request(request, "admin_reset_refused_multi_org", "medium", ctx=ctx,
-                                    details={"target_user_id": str(user_id)})
-        raise HTTPException(status_code=409, detail=(
-            "This person also belongs to another organization, so only they (Forgot password) "
-            "or LeadAI support can reset their password."))
     token = secrets.token_urlsafe(32)
     now = utcnow()
     await db.password_resets.update_many({"user_id": str(user_id), "used_at": None},

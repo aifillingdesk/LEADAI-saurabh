@@ -384,42 +384,105 @@ class ChangeEmailBody(BaseModel):
     reason: str = ""
 
 
+class SetPasswordBody(BaseModel):
+    password: str
+    must_change: bool = True       # temporary: they choose their own at the next sign-in
+    notify: bool = True            # email them that it changed (never the password)
+    reason: str = ""
+
+
+def _by(ctx: TenantContext) -> str:
+    return f"super_admin:{ctx.email}"
+
+
 @router.patch("/users/{user_id}/email")
 async def change_user_email(user_id: str, body: ChangeEmailBody, request: Request,
                             ctx: TenantContext = Depends(SUPER)):
-    """Change an account's sign-in email. The account is signed out everywhere
-    and both addresses are told about the change (audited before/after)."""
-    from app.auth.service import revoke_user_sessions
-    from app.auth.superadmin import is_superadmin_email
-    from app.events.email import send_email
-    db = _db()
-    oid = _oid(user_id)
-    user = await db.users.find_one({"_id": oid}) if oid else None
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    new_email = (body.email or "").strip().lower()
-    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", new_email):
-        raise HTTPException(status_code=422, detail="Enter a valid email address")
-    old_email = user.get("email") or ""
-    if new_email == old_email:
-        return {"success": True, "message": "Email unchanged", "email": old_email}
-    if is_superadmin_email(new_email) or await db.users.find_one({"email": new_email}, {"_id": 1}) \
-            or await db.admin_users.find_one({"email": new_email}, {"_id": 1}):
-        raise HTTPException(status_code=409, detail="That email is already in use")
-    await db.users.update_one({"_id": oid}, {"$set": {"email": new_email, "updated_at": utcnow()}})
-    await db.organization_members.update_many({"user_id": str(oid)}, {"$set": {"email": new_email}})
-    revoked = revoke_user_sessions(str(oid), revoked_by=f"super_admin_email_change:{ctx.email}")
-    for addr in {old_email, new_email} - {""}:
-        send_email(addr, "Your LeadAI sign-in email was changed",
-                   f"The sign-in email of your LeadAI account was changed from {old_email} to "
-                   f"{new_email} by LeadAI support. Sign in with {new_email} from now on. "
-                   "If you did not expect this, contact support.", kind="account_change")
+    """Change an account's sign-in email (organization owners, admins, users,
+    partners). Signed out everywhere; both addresses are told; organization
+    memberships and partner records keep the same address (audited)."""
+    from app.auth.credentials import change_email
+    res = await asyncio.to_thread(change_email, "user", user_id, body.email, actor_email=ctx.email,
+                                  by_label=_by(ctx))
+    if not res["changed"]:
+        return {"success": True, "message": "Email unchanged", "email": res["after"]}
     await aaudit("user.email_changed", "security", user=ctx.audit_user(), resource_type="user",
-                 resource_id=str(oid), details={"before": old_email, "after": new_email,
-                                                "reason": body.reason[:300],
-                                                "sessions_revoked": revoked}, **_meta(request))
-    return {"success": True, "email": new_email, "sessions_revoked": revoked,
-            "message": f"Sign-in email changed to {new_email}. The user was signed out everywhere."}
+                 resource_id=str(user_id), details={"before": res["before"], "after": res["after"],
+                                                    "reason": body.reason[:300],
+                                                    "sessions_revoked": res["sessions_revoked"]},
+                 **_meta(request))
+    return {"success": True, "email": res["after"], "sessions_revoked": res["sessions_revoked"],
+            "message": f"Sign-in email changed to {res['after']}. The user was signed out everywhere."}
+
+
+@router.post("/users/{user_id}/password")
+async def set_user_password(user_id: str, body: SetPasswordBody, request: Request,
+                            ctx: TenantContext = Depends(SUPER)):
+    """Set any account's password. Signed out everywhere; by default they must
+    choose their own at the next sign-in. The password is never shown again."""
+    from app.auth.credentials import set_password
+    res = await asyncio.to_thread(set_password, "user", user_id, body.password, actor_email=ctx.email,
+                                  by_label=_by(ctx), must_change=body.must_change, notify=body.notify)
+    await aaudit("user.password_set", "security", user=ctx.audit_user(), resource_type="user",
+                 resource_id=str(user_id),
+                 details={"email": res["email"], "must_change_password": res["must_change_password"],
+                          "sessions_revoked": res["sessions_revoked"], "email_delivery": res["email_delivery"],
+                          "reason": body.reason[:300]}, **_meta(request))
+    return {"success": True, **res, "message": _password_message(res)}
+
+
+def _password_message(res: Dict[str, Any]) -> str:
+    return ("Password set. They were signed out everywhere"
+            + (" and must choose their own password at the next sign-in." if res["must_change_password"] else "."))
+
+
+# ── Platform staff accounts (admin_users: the staff console's own accounts) ──
+
+@router.get("/staff")
+async def list_staff(q: Optional[str] = None, ctx: TenantContext = Depends(SUPER)):
+    db = _db()
+    query: Dict[str, Any] = {}
+    rx = _rx(q)
+    if rx:
+        query["$or"] = [{"email": rx}, {"name": rx}]
+    items = [{"id": str(d["_id"]), "email": d.get("email"), "name": d.get("name"), "role": d.get("role"),
+              "enabled": d.get("enabled", True), "last_login": _clean(d.get("last_login")),
+              "password_changed_at": _clean(d.get("password_changed_at")),
+              "must_change_password": bool(d.get("must_change_password")),
+              "created_at": _clean(d.get("created_at"))}
+             async for d in db.admin_users.find(query, {"password_hash": 0}).sort("email", 1).limit(500)]
+    return {"success": True, "items": items, "total": len(items)}
+
+
+@router.post("/staff/{staff_id}/password")
+async def set_staff_password(staff_id: str, body: SetPasswordBody, request: Request,
+                             ctx: TenantContext = Depends(SUPER)):
+    from app.auth.credentials import set_password
+    res = await asyncio.to_thread(set_password, "staff", staff_id, body.password, actor_email=ctx.email,
+                                  by_label=_by(ctx), must_change=body.must_change, notify=body.notify)
+    await aaudit("staff.password_set", "security", user=ctx.audit_user(), resource_type="admin_user",
+                 resource_id=str(staff_id),
+                 details={"email": res["email"], "must_change_password": res["must_change_password"],
+                          "sessions_revoked": res["sessions_revoked"], "reason": body.reason[:300]},
+                 **_meta(request))
+    return {"success": True, **res, "message": _password_message(res)}
+
+
+@router.patch("/staff/{staff_id}/email")
+async def change_staff_email(staff_id: str, body: ChangeEmailBody, request: Request,
+                             ctx: TenantContext = Depends(SUPER)):
+    from app.auth.credentials import change_email
+    res = await asyncio.to_thread(change_email, "staff", staff_id, body.email, actor_email=ctx.email,
+                                  by_label=_by(ctx))
+    if res["changed"]:
+        await aaudit("staff.email_changed", "security", user=ctx.audit_user(), resource_type="admin_user",
+                     resource_id=str(staff_id), details={"before": res["before"], "after": res["after"],
+                                                         "reason": body.reason[:300],
+                                                         "sessions_revoked": res["sessions_revoked"]},
+                     **_meta(request))
+    return {"success": True, "email": res["after"], "sessions_revoked": res["sessions_revoked"],
+            "message": (f"Sign-in email changed to {res['after']}. They were signed out everywhere."
+                        if res["changed"] else "Email unchanged")}
 
 
 class MemberRoleBody(BaseModel):

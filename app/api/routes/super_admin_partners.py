@@ -1100,6 +1100,60 @@ def reactivate(partner_id: str, body: ReasonBody, request: Request, ctx: TenantC
                                                              reason=body.reason.strip()[:500], ip=_ip(request))}
 
 
+# ── the partner's sign-in (their users account) ─────────────────────────────
+
+class PartnerPasswordBody(BaseModel):
+    password: str
+    must_change: bool = True
+    notify: bool = True
+    reason: str = ""
+
+
+class PartnerEmailBody(BaseModel):
+    email: str
+    reason: str = ""
+
+
+def _partner_user_id(partner_id: str) -> str:
+    p = S.load_partner(partner_id)
+    if not p.get("user_id"):
+        raise HTTPException(status_code=409, detail="This partner has no sign-in account")
+    return str(p["user_id"])
+
+
+@router.post("/{partner_id}/password")
+def set_partner_password(partner_id: str, body: PartnerPasswordBody, request: Request,
+                         ctx: TenantContext = Depends(MANAGE)):
+    """Set the partner's Partner Portal password. Signed out everywhere; by
+    default they choose their own at the next sign-in."""
+    from app.auth.credentials import set_password
+    res = set_password("user", _partner_user_id(partner_id), body.password, actor_email=ctx.email,
+                       by_label=f"super_admin:{ctx.email}", must_change=body.must_change, notify=body.notify)
+    S.paudit("partner.password_set", partner_id, actor=_actor(ctx), ip=_ip(request),
+             details={"must_change_password": res["must_change_password"],
+                      "sessions_revoked": res["sessions_revoked"], "reason": body.reason[:300]})
+    return {"success": True, **res,
+            "message": "Password set. The partner was signed out everywhere"
+                       + (" and must choose their own password at the next sign-in." if body.must_change else ".")}
+
+
+@router.patch("/{partner_id}/email")
+def change_partner_email(partner_id: str, body: PartnerEmailBody, request: Request,
+                         ctx: TenantContext = Depends(MANAGE)):
+    """Change the partner's sign-in email (also the partner record and the
+    application). Both addresses are told; signed out everywhere."""
+    from app.auth.credentials import change_email
+    res = change_email("user", _partner_user_id(partner_id), body.email, actor_email=ctx.email,
+                       by_label=f"super_admin:{ctx.email}")
+    if res["changed"]:
+        S.paudit("partner.email_changed", partner_id, actor=_actor(ctx), ip=_ip(request),
+                 details={"before": res["before"], "after": res["after"],
+                          "sessions_revoked": res["sessions_revoked"], "reason": body.reason[:300]})
+    return {"success": True, "email": res["after"], "sessions_revoked": res["sessions_revoked"],
+            "message": (f"Sign-in email changed to {res['after']}. The partner was signed out everywhere."
+                        if res["changed"] else "Email unchanged")}
+
+
 @router.get("/{partner_id}/referrals")
 def partner_referrals(partner_id: str, page: int = Query(1, ge=1), limit: int = Query(25, ge=1, le=200),
                       stage: Optional[str] = None, ctx: TenantContext = Depends(VIEW)):

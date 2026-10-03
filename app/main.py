@@ -572,6 +572,18 @@ async def auth_gate(request: Request, call_next):
     from starlette.concurrency import run_in_threadpool
     user = await run_in_threadpool(session_user, request)
     scope = (user or {}).get("scope")
+    # An administrator set this account's password: until the person picks
+    # their own, only the change-password page (and /api/auth/*, handled
+    # above) is reachable — in every portal. Impersonation is never blocked.
+    if portal_path == "/change-password":
+        if user is None:
+            return RedirectResponse("/login", status_code=303)
+        return await _call_as(request, call_next, user)
+    if user is not None and user.get("must_change_password") and not user.get("impersonated_by"):
+        if path.startswith("/api/"):
+            return JSONResponse({"success": False, "error": "password_change_required",
+                                 "message": "Choose a new password to continue."}, status_code=403)
+        return RedirectResponse("/change-password", status_code=303)
     # Partner Portal: its own session scope ("partner"); the API also accepts a
     # partner API key (validated, read-only, by the route dependencies).
     if portal_path == "/partner" or path.startswith("/api/partner/"):
@@ -855,6 +867,13 @@ async def demo_pending_page():
 @app.get("/reset-password")
 async def reset_password_page():
     return _static("reset-password.html")
+
+
+@app.get("/change-password")
+async def change_password_page():
+    """Signed-in people whose password an administrator set choose their own
+    here (auth_gate sends them here; it needs a session of any portal)."""
+    return _static("change-password.html")
 
 
 @app.get("/invite/{token}")

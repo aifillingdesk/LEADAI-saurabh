@@ -592,7 +592,7 @@ async def list_users(
 
     skip = (page - 1) * limit
     total = await db.users.count_documents(query)
-    cursor = db.users.find(query, {"password_hash": 0}).sort(field, direction).skip(skip).limit(limit)
+    cursor = db.users.find(query, {"password_hash": 0, "totp_secret": 0}).sort(field, direction).skip(skip).limit(limit)
     raw = [u async for u in cursor]
 
     uids = [str(u["_id"]) for u in raw]
@@ -636,7 +636,7 @@ async def get_user_detail(
     """User profile, memberships, sessions, usage and recent activity."""
     db = _db()
     try:
-        user = await db.users.find_one({"_id": ObjectId(user_id)}, {"password_hash": 0})
+        user = await db.users.find_one({"_id": ObjectId(user_id)}, {"password_hash": 0, "totp_secret": 0})
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid user ID")
     if not user:

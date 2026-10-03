@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Marketing center with private file uploads, categories, per-partner visibility, email templates and download tracking.
   - Coupon and fraud notifications.
   - Partner API: an index endpoint, notifications readable with an API key, and key usage tracking.
+- **Administrators can change other people's sign-in details** (`app/auth/credentials.py`):
+  - Organization Admin: **Change email** and **Set password** on a member's page (`PATCH /api/org-admin/users/{id}/email`, `POST /api/org-admin/users/{id}/password`).
+    - The existing rules apply: the owner is protected, only the owner manages admins, and you can't change your own account here.
+    - Refused for accounts also used outside the organization (another organization, a partner, platform staff).
+  - Super Admin: **Set password** for any user (`POST /api/super-admin/users/{id}/password`). The email change now also syncs partner records and resets email verification.
+  - Super Admin: partners' email and password (`/api/super-admin/partners/{id}/email|password`).
+  - Super Admin: a new **Admins › Platform staff** tab for staff-console accounts (`/api/super-admin/staff`).
+  - Passwords are validated, stored hashed, and never emailed or shown again. The person is signed out everywhere and emailed a notice. Every change is audited.
+  - **Temporary passwords**: an administrator-set password requires the person to choose their own at the next sign-in, in every portal (`must_change_password`, the `/change-password` page). Until then, the API answers `403 password_change_required`.
+  - `POST /api/auth/password/change` now also works for platform staff accounts.
+- **Security**: the Super Admin user endpoints no longer return `totp_secret` (2FA seeds), and `strip_sensitive` removes it everywhere.
 - **Partner tasks**:
   - The Super Admin assigns tasks to one partner or to every active partner, affiliate or reseller, with details, a due date, a priority and a link to a Partner Portal page.
   - Partners see them under *Tasks*, with a count in the menu and a dashboard banner. They start a task and submit it with a note.
