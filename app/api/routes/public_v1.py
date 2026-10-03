@@ -12,7 +12,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.db.mongo import get_async_db
+from app.auth.rate_limit import RateLimiter
+from app.db.mongo import get_async_db, get_sync_db
 from app.pipeline.deduplication import deduplicate_lead
 from app.queue.service import enqueue_job
 from app.services.api_keys import authenticate_api_key
@@ -32,9 +33,16 @@ async def get_api_auth(
     if not raw_key:
         raise HTTPException(status_code=401, detail="Missing API key. Provide 'X-API-Key' header.")
 
-    db = await get_async_db()
-    # Synchronous auth call
-    return authenticate_api_key(db.delegate, raw_key)
+    db = get_sync_db()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    auth = authenticate_api_key(db, raw_key)
+    # per-key limit stored on the key (durable, shared across workers)
+    limiter = RateLimiter("api_key", int(auth.get("rate_limit_per_minute") or 60), 60)
+    if not limiter.consume(str(auth.get("key_id"))):
+        raise HTTPException(status_code=429, detail="API rate limit exceeded",
+                            headers={"Retry-After": str(max(1, limiter.retry_after(str(auth.get("key_id")))))})
+    return auth
 
 
 class IngestLeadPayload(BaseModel):
@@ -65,7 +73,7 @@ async def list_leads_v1(
     if "leads:read" not in auth.get("scopes", []) and "*" not in auth.get("scopes", []):
         raise HTTPException(status_code=403, detail="API key lacks 'leads:read' scope")
 
-    db = await get_async_db()
+    db = get_async_db()
     org_id = auth["organization_id"]
     query: dict[str, Any] = {"organization_id": org_id}
     if platform:
@@ -91,11 +99,10 @@ async def ingest_lead_v1(
     if "leads:write" not in auth.get("scopes", []) and "*" not in auth.get("scopes", []):
         raise HTTPException(status_code=403, detail="API key lacks 'leads:write' scope")
 
-    db = await get_async_db()
     org_id = auth["organization_id"]
 
     lead_doc = payload.model_dump()
-    lead_id, is_dup, dup_count = deduplicate_lead(db.delegate, lead_doc, org_id)
+    lead_id, is_dup, dup_count = deduplicate_lead(get_sync_db(), lead_doc, org_id)
 
     return {
         "lead_id": lead_id,
@@ -150,7 +157,7 @@ async def get_search_v1(
     run_id: str,
     auth: dict[str, Any] = Depends(get_api_auth),  # noqa: B008
 ):
-    db = await get_async_db()
+    db = get_async_db()
     org_id = auth["organization_id"]
     run = await db.search_history.find_one({"run_id": run_id, "organization_id": org_id})
     if not run:

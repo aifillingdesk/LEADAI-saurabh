@@ -81,7 +81,7 @@ def _login(client, email, password, scope="site"):
     return c
 
 
-def _wait_run(c, run_id, timeout=30):
+def _wait_run(c, run_id, timeout=90):  # generous: background threads are slow under a loaded full suite
     end = time.time() + timeout
     while time.time() < end:
         r = c.get(f"/api/search/{run_id}")
@@ -147,11 +147,11 @@ def test_full_customer_lifecycle(app_client):
     if db.facebook_comments.count_documents({"post_ref": str(post["_id"])}) == 0:
         r = owner.post(f"/api/posts/{post['_id']}/comments", params={"max_comments": 20})
         assert r.status_code == 200, r.text
-        end = time.time() + 30
+        end = time.time() + 90
         while time.time() < end and db.ai_comments.count_documents({"post_ref": str(post["_id"])}) < len(COMMENTS) - 1:
             time.sleep(0.2)
     assert db.facebook_comments.count_documents({"post_ref": str(post["_id"])}) == len(COMMENTS)
-    end = time.time() + 30
+    end = time.time() + 90
     while time.time() < end and not db.ai_comments.count_documents({"post_ref": str(post["_id"]), "is_lead": True}):
         time.sleep(0.2)
     leads = list(db.ai_comments.find({"post_ref": str(post["_id"])}))

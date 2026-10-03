@@ -27,6 +27,12 @@ def sanitize_cell_value(val: Any) -> str:
     return s
 
 
+def lead_name(lead: dict[str, Any]) -> str:
+    """Leads from URL searches store ``commenter_name``; leads ingested through
+    the public API store ``author_name``."""
+    return str(lead.get("author_name") or lead.get("commenter_name") or "")
+
+
 class BaseCRMConnector(abc.ABC):
     """Abstract base class for third-party CRM connectors."""
 
@@ -45,7 +51,7 @@ class HubSpotConnector(BaseCRMConnector):
     name = "hubspot"
 
     def format_lead(self, lead: dict[str, Any]) -> dict[str, Any]:
-        name_parts = str(lead.get("author_name") or "Lead User").strip().split(" ", 1)
+        name_parts = (lead_name(lead) or "Lead User").strip().split(" ", 1)
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else ""
 
@@ -68,7 +74,7 @@ class ZohoCRMConnector(BaseCRMConnector):
     name = "zoho"
 
     def format_lead(self, lead: dict[str, Any]) -> dict[str, Any]:
-        name_parts = str(lead.get("author_name") or "Lead User").strip().split(" ", 1)
+        name_parts = (lead_name(lead) or "Lead User").strip().split(" ", 1)
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else "Unknown"
 
@@ -101,7 +107,7 @@ class GoogleSheetsFormatter:
             row = [
                 sanitize_cell_value(str(l.get("_id") or l.get("id") or "")),
                 sanitize_cell_value(l.get("platform", "")),
-                sanitize_cell_value(l.get("author_name", "")),
+                sanitize_cell_value(lead_name(l)),
                 sanitize_cell_value(l.get("phone", "")),
                 sanitize_cell_value(l.get("email", "")),
                 sanitize_cell_value(l.get("intent", "")),
@@ -141,7 +147,7 @@ class ExcelExportService:
             row_data = [
                 str(l.get("_id") or l.get("id") or ""),
                 l.get("platform", ""),
-                l.get("author_name", ""),
+                lead_name(l),
                 l.get("phone", ""),
                 l.get("email", ""),
                 l.get("intent", ""),

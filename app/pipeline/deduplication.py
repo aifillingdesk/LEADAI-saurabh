@@ -161,6 +161,7 @@ def deduplicate_lead(
 
     if "_id" not in doc or not doc["_id"]:
         doc["_id"] = ObjectId()
+    doc.setdefault("comment_ref", str(ObjectId()))
 
     db[COLL_LEADS].insert_one(doc)
     lead_id = str(doc["_id"])
