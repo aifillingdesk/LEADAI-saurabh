@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeadAI Audit Report</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root {
+    --bg: #0b0d14; --surface: #131722; --surface-2: #1a1f2e; --border: #262c3d;
+    --text: #e6e9f2; --muted: #9aa3b8; --faint: #6b7489;
+    --ok: #34d399; --ok-soft: rgba(52,211,153,.12);
+    --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12);
+    --bad: #f87171; --bad-soft: rgba(248,113,113,.12);
+    --info: #60a5fa; --info-soft: rgba(96,165,250,.12);
+    --brand: #8b5cf6; --brand-soft: rgba(139,92,246,.14);
+    --radius: 14px;
+    --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.55; }
+  body { padding: 0 16px 64px; }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  header.top { padding: 40px 0 24px; border-bottom: 1px solid var(--border); margin-bottom: 28px; }
+  .eyebrow { color: var(--brand); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+  h1 { font-size: clamp(26px, 4vw, 36px); margin: 8px 0 6px; letter-spacing: -.02em; }
+  h2 { font-size: 20px; margin: 40px 0 6px; letter-spacing: -.01em; }
+  h3 { font-size: 15px; margin: 0 0 10px; }
+  p.lead { color: var(--muted); max-width: 900px; margin: 0; }
+  .meta { color: var(--faint); font-size: 13px; margin-top: 12px; }
+  .section-desc { color: var(--muted); margin: 0 0 16px; max-width: 900px; font-size: 14px; }
+  .grid { display: grid; gap: 14px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .two { grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; min-width: 0; }
+  .kpi .label { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  .kpi .value { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .sub { color: var(--faint); font-size: 13px; }
+  .kpi.ok .value { color: var(--ok); } .kpi.bad .value { color: var(--bad); } .kpi.warn .value { color: var(--warn); }
+  .chart-box { position: relative; height: 320px; }
+  .mermaid { background: var(--surface-2); border-radius: 10px; padding: 12px; overflow-x: auto; text-align: center; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .legend i { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--ok); vertical-align: middle; margin-right: 6px; }
+  .legend i.broken { border-top: 3px dashed var(--bad); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 880px; }
+  th { text-align: left; background: var(--surface-2); color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; padding: 11px 14px; position: sticky; top: 0; }
+  td { padding: 12px 14px; border-top: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: #c4b5fd; word-break: break-word; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .p-high { background: var(--bad-soft); color: var(--bad); }
+  .p-med { background: var(--warn-soft); color: var(--warn); }
+  .p-low { background: var(--info-soft); color: var(--info); }
+  .p-ok { background: var(--ok-soft); color: var(--ok); }
+  .p-info { background: var(--brand-soft); color: #c4b5fd; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .filters button { background: var(--surface); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+  .filters button[aria-pressed="true"] { background: var(--brand-soft); color: #ddd6fe; border-color: var(--brand); }
+  ul.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+  ul.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; font-size: 14px; color: var(--muted); }
+  ul.checks li b { color: var(--text); font-weight: 600; }
+  .ok-mark { color: var(--ok); font-weight: 800; } .bad-mark { color: var(--bad); font-weight: 800; } .warn-mark { color: var(--warn); font-weight: 800; }
+  .matrix td, .matrix th { text-align: center; } .matrix td:first-child, .matrix th:first-child { text-align: left; }
+  .y { color: var(--ok); font-weight: 700; } .n { color: var(--faint); }
+  footer { color: var(--faint); font-size: 13px; margin-top: 48px; border-top: 1px solid var(--border); padding-top: 18px; }
+  @media (max-width: 640px) { .kpi .value { font-size: 24px; } .chart-box { height: 260px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">LeadAI · QA, security &amp; integration audit</div>
+  <h1>LeadAI end-to-end audit report</h1>
+  <p class="lead">Core platform security, tenant isolation, portals and the partner program are working and tested. Four pipeline features are built but never called by the running app (scheduled scans, outbound webhooks, rule-based assignment with SLA timers, cross-run deduplication of search leads), and two advertised integrations are not connected (Razorpay checkout and HubSpot/Zoho sync).</p>
+  <div class="meta">Repository: <code>lead_apify</code> · branch <code>chore/hardening-and-perf</code> (uncommitted work included) · Audit date: 3 Oct 2026 · Method: static code tracing + automated test runs on an in-memory MongoDB (no live database or paid API was called)</div>
+</header>
+
+<section class="grid kpis" aria-label="Summary">
+  <div class="card kpi ok"><div class="label">Automated tests</div><div class="value">1503 / 1503</div><div class="sub">passed in the last full run (10 min)</div></div>
+  <div class="card kpi ok"><div class="label">Portal access probes</div><div class="value">61 / 61</div><div class="sub">9 actors × 8 portals + API keys + cross-tenant</div></div>
+  <div class="card kpi ok"><div class="label">Smoke test</div><div class="value">10 / 10</div><div class="sub">after fixing <code>scripts/smoke_test.py</code></div></div>
+  <div class="card kpi bad"><div class="label">High-severity findings</div><div class="value">4</div><div class="sub">features built but not connected</div></div>
+  <div class="card kpi warn"><div class="label">Medium / low findings</div><div class="value">6 / 4</div><div class="sub">see the findings table</div></div>
+</section>
+
+<h2>Charts</h2>
+<p class="section-desc">Left: the 1503 automated tests grouped by the portal or area they exercise. Every group passed; there were 0 failures in the last full run. Right: module health on a 0–100 scale. The score is a judgement from this audit: 100 = wired, tested and production-ready; points are removed for missing wiring, missing external calls or untested paths.</p>
+<div class="grid two">
+  <div class="card"><h3>Test results by portal / area (all passed · 0 failed)</h3><div class="chart-box"><canvas id="donut" aria-label="Donut chart of passing tests by portal"></canvas></div></div>
+  <div class="card"><h3>Module health score</h3><div class="chart-box"><canvas id="bars" aria-label="Bar chart of module health scores"></canvas></div></div>
+</div>
+
+<h2>Architecture as it is actually wired</h2>
+<p class="section-desc">Solid arrows are connections the running app really makes. Red dashed arrows are connections the code or README implies but that nothing triggers today.</p>
+<div class="card">
+<pre class="mermaid">
+flowchart LR
+  subgraph Clients
+    W["Public website"]
+    U["User dashboard"]
+    O["Org Admin"]
+    SA["Super Admin"]
+    ST["Staff console"]
+    P["Partner Portal"]
+    K["API key clients"]
+  end
+  subgraph API["FastAPI app"]
+    G["Auth gate + session scopes"]
+    S["URL search API"]
+    PV1["Public API v1"]
+    PAPI["Partner API v1"]
+    BILL["Billing + refunds"]
+  end
+  subgraph Workers
+    Q["Durable job queue - MongoDB"]
+    SW["Lifecycle sweeper - every 15 min"]
+  end
+  subgraph Pipeline
+    AP["Apify actors"]
+    GM["Gemini classification"]
+    RA["Round-robin auto-assign"]
+    DD["Cross-run dedup"]
+    AR["Assignment rules + SLA"]
+    SC["Scheduled scans"]
+    WH["Outbound webhooks"]
+    CRM["HubSpot / Zoho"]
+  end
+  DB[("MongoDB")]
+  RD[("Redis - optional")]
+  STR["Stripe"]
+  RZ["Razorpay"]
+  W --> G
+  U --> G
+  O --> G
+  SA --> G
+  ST --> G
+  P --> G
+  K --> PV1
+  K --> PAPI
+  G --> S
+  S --> AP
+  PV1 --> Q
+  Q --> AP
+  AP --> GM
+  GM --> RA
+  GM --> DB
+  PV1 --> DD
+  BILL --> STR
+  STR -->|"signed webhooks"| BILL
+  SW --> BILL
+  Q -.->|"cancel flags only"| RD
+  GM -.->|"not called"| DD
+  SW -.->|"never triggered"| SC
+  SC -.-> Q
+  RA -.->|"rules never applied"| AR
+  GM -.->|"never dispatched"| WH
+  RA -.->|"no HTTP sync"| CRM
+  BILL -.->|"no Orders API"| RZ
+  classDef broken fill:#3a1a1f,stroke:#f87171,color:#fecaca
+  classDef ok fill:#132a22,stroke:#34d399,color:#d1fae5
+  class DD,AR,SC,WH,CRM,RZ broken
+  class G,S,AP,GM,RA,Q,BILL,STR,PV1,PAPI ok
+</pre>
+<div class="legend"><span><i></i>wired and running</span><span><i class="broken"></i>implied but not connected</span></div>
+</div>
+
+<h2>Portal authentication flow</h2>
+<p class="section-desc">Every request passes the auth gate in <code>app/main.py</code>. Each portal requires its own session scope, and the role is re-read from the database on every request (fail-closed).</p>
+<div class="card">
+<pre class="mermaid">
+flowchart TD
+  R["Incoming request"] --> PUB{"Public path?"}
+  PUB -->|"yes: website, /api/public, /r/code"| OK1["Served"]
+  PUB -->|no| PA{"Partner area? /partner, /api/partner/v1"}
+  PA -->|"API key lap_live_"| PK["Key checked: active partner, api.access, 60 req/min, read-only"]
+  PA -->|session| PS{"Scope = partner?"}
+  PS -->|no| D401["401 or redirect to /login?partner=1"]
+  PS -->|yes| PCTX["Partner context re-read: approved + active, permissions, own data only"]
+  PA -->|no| V1{"/api/v1?"}
+  V1 -->|"API key lai_live_"| OK2["Org-scoped key, scopes + rate limit"]
+  V1 -->|no| SAA{"Super Admin area?"}
+  SAA -->|yes| SAR{"Scope admin + role super_admin?"}
+  SAR -->|no| D403["401 / 403"]
+  SAR -->|yes| SAOK["Super Admin: everything, incl. sign-in-as org or partner"]
+  SAA -->|no| ADM{"Staff console /admin?"}
+  ADM -->|yes| STF{"Scope admin + platform role?"}
+  STF -->|no| D403
+  STF -->|yes| STOK["Staff permissions by role"]
+  ADM -->|no| SITE{"Scope site + active membership?"}
+  SITE -->|no| D401
+  SITE -->|yes| TEN["Tenant context: own organization only, org role permissions"]
+  TEN --> OA{"Org Admin page? owner or admin"}
+  OA -->|yes| OAOK["Org Admin portal"]
+  OA -->|no| DASH["User dashboard"]
+  PCTX -.->|"probe of admin API"| FLAG["Fraud flag + security event"]
+</pre>
+</div>
+
+<h2>Portal access matrix (verified)</h2>
+<p class="section-desc">Each cell was tested by signing in as that actor and calling one endpoint of that portal. Actual results matched expectations in all 61 probes: ✓ = allowed (200), — = refused (401/403/redirect). The Super Admin reaches the dashboard, Org Admin and Partner Portal through audited, time-limited "sign in as" / "view as partner".</p>
+<div class="table-wrap">
+<table class="matrix">
+  <thead><tr><th>Actor</th><th>Website</th><th>Dashboard</th><th>Org Admin</th><th>Staff console</th><th>Super Admin</th><th>Partner Portal</th></tr></thead>
+  <tbody>
+    <tr><td>Visitor</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td>Org member</td><td class="y">✓</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td>Org manager</td><td class="y">✓</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td>Org admin</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td>Org owner</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td>Platform staff</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td></tr>
+    <tr><td>Partner</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="y">✓ own data</td></tr>
+    <tr><td>Partner applicant</td><td class="y">✓</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">status only</td></tr>
+    <tr><td>Super Admin</td><td class="y">✓</td><td class="y">✓ sign-in-as</td><td class="y">✓ sign-in-as</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓ view-as</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="section-desc" style="margin-top:12px">Also verified: an organization API key works only on <code>/api/v1</code> and a partner key only on <code>/api/partner/v1</code> (cross-use refused). An org owner cannot switch into another organization (403, logged as a cross-tenant event), and a partner session calling Super Admin APIs is refused and raises a fraud flag.</p>
+
+<h2>What is wrong or not connected</h2>
+<p class="section-desc">Every row was confirmed in code; "not called" means a repository-wide search found no caller in <code>app/</code>. Unit tests exist for several of these functions, but they test the function in isolation, not the wiring.</p>
+<div class="filters" role="group" aria-label="Filter findings">
+  <button type="button" data-f="all" aria-pressed="true">All</button>
+  <button type="button" data-f="high" aria-pressed="false">High</button>
+  <button type="button" data-f="med" aria-pressed="false">Medium</button>
+  <button type="button" data-f="low" aria-pressed="false">Low</button>
+  <button type="button" data-f="fixed" aria-pressed="false">Fixed in this audit</button>
+</div>
+<div class="table-wrap">
+<table id="findings">
+  <thead><tr><th>Severity</th><th>Area</th><th>What is wrong</th><th>Where (file · function)</th><th>Developer action</th></tr></thead>
+  <tbody>
+    <tr data-s="high"><td><span class="pill p-high">High</span></td><td>Billing · Razorpay</td><td>Razorpay is not actually connected. Checkout makes up a local order ID instead of creating an order through Razorpay's Orders API. Without a real order, nothing ties a payment back to the subscription. The checkout redirects to <code>/billing/razorpay/{order_id}</code>, which doesn't exist (404). A missing key silently becomes <code>rzp_test_placeholder</code>.</td><td><code>app/billing/provider.py</code> · <code>RazorpayBillingProvider.create_checkout_session</code></td><td>Create a real order via <code>POST /v1/orders</code> with <code>notes.subscription_id</code>, add the Razorpay Checkout page, and fail loudly when keys are missing.</td></tr>
+    <tr data-s="high"><td><span class="pill p-high">High</span></td><td>Scheduled scans</td><td>Recurring scans are saved but never run. Nothing calls the function that enqueues due scans.</td><td><code>app/services/scheduler.py</code> · <code>trigger_due_scheduled_scans</code></td><td>Call it from the background sweeper (<code>app/lifecycle/maintenance.py · _sweeper_loop</code>) or a dedicated 1–5 minute loop.</td></tr>
+    <tr data-s="high"><td><span class="pill p-high">High</span></td><td>Outbound webhooks</td><td>Organizations can register webhooks, but no event is ever sent. The signed dispatcher has no caller.</td><td><code>app/services/outbound_webhooks.py</code> · <code>dispatch_webhook_event</code></td><td>Dispatch on lead created / status changed (<code>app/pipeline/comment_ai.py</code>) and search completed (<code>app/social/url_search.py</code>), through the job queue.</td></tr>
+    <tr data-s="high"><td><span class="pill p-high">High</span></td><td>Lead assignment &amp; SLA</td><td>Two assignment systems exist. The pipeline uses org-level round-robin. The Org Admin's assignment rules with SLA hours are stored but never applied, and SLA breaches are never checked.</td><td><code>app/services/lead_assignment.py</code> · <code>assign_lead</code>, <code>check_sla_and_reminders</code> (not called) · <code>app/pipeline/lead_assignment.py</code> · <code>auto_assign_lead</code></td><td>Have <code>auto_assign_lead</code> apply matching rules first (setting <code>sla_due_at</code>), and run <code>check_sla_and_reminders</code> from the sweeper.</td></tr>
+    <tr data-s="med"><td><span class="pill p-med">Medium</span></td><td>CRM sync</td><td>The HubSpot and Zoho "connectors" only reformat a lead. There's no HTTP client, no credentials setting and no push, so the CRM integration advertised in the README doesn't exist. Only the Excel export is used.</td><td><code>app/services/crm_connectors.py</code> · <code>HubSpotConnector</code>, <code>ZohoCRMConnector</code></td><td>Add OAuth or API-key settings per organization, a <code>push_lead()</code> with timeouts and retries, and a trigger. Otherwise remove the README claim.</td></tr>
+    <tr data-s="med"><td><span class="pill p-med">Medium</span></td><td>Deduplication</td><td>Cross-run deduplication only runs for leads ingested through <code>POST /api/v1/leads</code>. Leads found by URL searches skip it, so the same person can appear once per run.</td><td><code>app/pipeline/deduplication.py</code> · <code>deduplicate_lead</code> (only caller: <code>app/api/routes/public_v1.py</code>)</td><td>Call it in the search pipeline's lead insert (<code>app/pipeline/comment_ai.py</code>).</td></tr>
+    <tr data-s="med"><td><span class="pill p-med">Medium</span></td><td>File storage</td><td>S3 and Cloudinary uploads use <code>httpx.AsyncClient()</code> without a timeout, so the 5-second default applies. Marketing files of up to 50 MB will time out on S3 or Cloudinary. Local storage is unaffected.</td><td><code>app/storage/service.py</code> · lines 135, 224, 257</td><td>Pass <code>timeout=httpx.Timeout(120, connect=10)</code>; consider multipart upload for large files.</td></tr>
+    <tr data-s="med"><td><span class="pill p-med">Medium</span></td><td>Billing records</td><td>Confirming a subscription writes a second payment record, alongside the checkout's. The Payments screen shows two rows per purchase; the refund code copes with both.</td><td><code>app/billing/invoices.py</code> · <code>create_invoice_record</code></td><td>Link the existing checkout payment to the invoice instead of inserting a new one.</td></tr>
+    <tr data-s="med"><td><span class="pill p-med">Medium</span></td><td>Data protection</td><td>Partner payout and tax details (bank account, UPI, tax ID) are masked in responses and redacted in logs, but stored as plain text.</td><td><code>app/partners/service.py</code> · <code>payout_info</code>, <code>tax_info</code></td><td>Add field-level encryption (key from env / KMS).</td></tr>
+    <tr data-s="med"><td><span class="pill p-med">Medium</span></td><td>Timestamps</td><td>Partner screens were fixed to send UTC times with a timezone. Older Super Admin and customer screens weren't checked and may show UTC as local time.</td><td><code>app/api/routes/*</code> · serializers returning naive <code>isoformat()</code></td><td>Serialize all datetimes as UTC with an offset, as <code>app/partners/service.py · clean</code> now does.</td></tr>
+    <tr data-s="low"><td><span class="pill p-low">Low</span></td><td>Redis</td><td>The README presents Redis as the job queue and rate limiter. Both actually run on MongoDB; Redis only stores search-cancellation flags, and <code>redis</code> isn't in <code>requirements.txt</code>.</td><td><code>app/queue/service.py</code> · <code>_get_redis</code> · <code>app/auth/rate_limit.py</code></td><td>Correct the README, and add <code>redis</code> to optional requirements.</td></tr>
+    <tr data-s="low"><td><span class="pill p-low">Low</span></td><td>Refund webhooks</td><td>A provider refund is matched to the subscription's latest paid invoice, because invoices don't store the provider's charge ID.</td><td><code>app/billing/refunds.py</code> · <code>refund_from_provider_event</code></td><td>Store the provider payment or charge ID on each invoice and match on it.</td></tr>
+    <tr data-s="low"><td><span class="pill p-low">Low</span></td><td>Stripe coupons</td><td>A one-time coupon discount is baked into the recurring Stripe price, so it applies to every renewal.</td><td><code>app/billing/provider.py</code> · <code>StripeBillingProvider.create_checkout_session</code></td><td>Use a Stripe coupon with <code>duration=once</code> instead of discounting <code>unit_amount</code>.</td></tr>
+    <tr data-s="low"><td><span class="pill p-low">Low</span></td><td>Code hygiene</td><td>Six pre-existing lint warnings (unused imports and variables). Harmless.</td><td><code>app/auth/service.py</code> (16, 23, 290, 318) · <code>app/api/routes/auth.py:20</code> · <code>app/billing/subscriptions.py:21</code></td><td><code>ruff check --fix</code></td></tr>
+    <tr data-s="fixed"><td><span class="pill p-ok">Fixed</span></td><td>Smoke test</td><td><code>scripts/smoke_test.py</code> was out of date: CRM call style, <code>/api/v1</code> response fields, Razorpay method names and the unit-economics function name.</td><td><code>scripts/smoke_test.py</code> · steps 7–10</td><td>Fixed; added an opt-in <code>--in-memory</code> flag. Now passes 10/10.</td></tr>
+    <tr data-s="fixed"><td><span class="pill p-ok">Fixed</span></td><td>Test stability</td><td>The end-to-end customer test flaked under full-suite load: its 30-second wait was too short.</td><td><code>tests/test_e2e_lifecycle.py</code> · <code>_wait_run</code></td><td>Fixed: wait raised to 90 s (finishes as soon as ready).</td></tr>
+    <tr data-s="fixed"><td><span class="pill p-ok">Fixed</span></td><td>Excel export</td><td>The Author column was empty for every search lead, because those leads store <code>commenter_name</code>.</td><td><code>app/services/crm_connectors.py</code> · <code>lead_name</code></td><td>Fixed earlier this session, with a regression test.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Connected and healthy</h2>
+<div class="grid two">
+  <div class="card"><h3>Connections &amp; resilience</h3><ul class="checks">
+    <li><span class="ok-mark">✓</span><span><b>MongoDB</b> — 10 s connect / server-selection timeouts, pool of 50, compound and unique indexes created at startup (including TTL indexes).</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Gemini</b> — 60 s timeout, connection limits, retry on 429, circuit breaker, and fallback to rule-based classification.</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Apify</b> — server-side run timeout plus a local watchdog; runs are aborted on shutdown.</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Stripe</b> — real Checkout API call (20 s timeout); webhooks verified by signature with timestamp tolerance; idempotent processing.</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Webhook signing</b> — HMAC-SHA256 for outbound payloads and for inbound mock and Razorpay webhooks (constant-time compare).</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Credentials</b> — no hard-coded secrets in <code>app/</code>; secrets come from the environment, and logs redact keys and tokens.</span></li>
+  </ul></div>
+  <div class="card"><h3>Pipelines &amp; platform</h3><ul class="checks">
+    <li><span class="ok-mark">✓</span><span><b>Search pipeline</b> — URL search → Apify → pages / posts / comments → Gemini → scored leads → round-robin assignment. Tested end to end.</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Durable queue</b> — leases, heartbeats, crash recovery and cancellation (MongoDB).</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Tenant isolation</b> — every scoped route rejects other organizations' IDs (86 tests).</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Partner program</b> — application → approval → referral → commission → wallet → payout, with refunds, clawbacks, fraud flags and an activity log.</span></li>
+    <li><span class="ok-mark">✓</span><span><b>Security</b> — bcrypt, lockout, enforced 2FA, CSRF origin check, security headers, revocable sessions with idle timeout.</span></li>
+    <li><span class="warn-mark">!</span><span><b>Not exercised</b> — live Gemini, Apify, Stripe and SMTP calls. These need real credentials, so they were mocked at the network boundary.</span></li>
+  </ul></div>
+</div>
+
+<footer>Generated by the LeadAI audit on 3 Oct 2026. Re-run with <code>pytest</code> and <code>python scripts/smoke_test.py --in-memory</code>. Charts need an internet connection (Chart.js and Mermaid are loaded from jsDelivr).</footer>
+</div>
+
+<script>
+  // Chart data — counts from the last full pytest run (1503 tests, 0 failed)
+  var portals = [
+    ['Cross-portal security & isolation', 208], ['User dashboard & search', 138], ['Public website & APIs', 107],
+    ['Platform staff console', 92], ['Super Admin', 67], ['Org Admin', 57], ['Partner program', 39],
+    ['AI pipeline, leads & core services', 795]
+  ];
+  var colors = ['#8b5cf6', '#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#22d3ee', '#a3e635', '#64748b'];
+  Chart.defaults.color = '#9aa3b8';
+  Chart.defaults.borderColor = '#262c3d';
+  Chart.defaults.font.family = getComputedStyle(document.documentElement).getPropertyValue('--font');
+  var centerText = {
+    id: 'centerText',
+    afterDraw: function (chart) {
+      var a = chart.chartArea, ctx = chart.ctx; if (!a) return;
+      var x = (a.left + a.right) / 2, y = (a.top + a.bottom) / 2;
+      ctx.save(); ctx.textAlign = 'center'; ctx.fillStyle = '#e6e9f2';
+      ctx.font = '800 24px ' + Chart.defaults.font.family; ctx.fillText('1503', x, y - 4);
+      ctx.font = '600 12px ' + Chart.defaults.font.family; ctx.fillStyle = '#34d399'; ctx.fillText('passed · 0 failed', x, y + 16);
+      ctx.restore();
+    }
+  };
+  new Chart(document.getElementById('donut'), {
+    type: 'doughnut',
+    data: { labels: portals.map(function (p) { return p[0]; }),
+      datasets: [{ data: portals.map(function (p) { return p[1]; }), backgroundColor: colors, borderColor: '#131722', borderWidth: 2 }] },
+    options: { maintainAspectRatio: false, cutout: '62%',
+      plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 10 } },
+        tooltip: { callbacks: { label: function (c) { return c.label + ': ' + c.parsed + ' passed, 0 failed'; } } } } },
+    plugins: [centerText]
+  });
+  var modules = [
+    ['Auth, sessions & RBAC', 97], ['Tenant isolation', 97], ['Partner program', 94], ['Gemini pipeline', 90],
+    ['Apify ingestion', 88], ['Durable job queue', 85], ['Stripe billing', 85], ['File storage', 70],
+    ['Deduplication', 55], ['Lead assignment & SLA', 45], ['Outbound webhooks', 35], ['Scheduled scans', 30],
+    ['Razorpay billing', 30], ['CRM sync (HubSpot/Zoho)', 20]
+  ];
+  new Chart(document.getElementById('bars'), {
+    type: 'bar',
+    data: { labels: modules.map(function (m) { return m[0]; }),
+      datasets: [{ label: 'Health score', data: modules.map(function (m) { return m[1]; }), borderRadius: 4,
+        backgroundColor: modules.map(function (m) { return m[1] >= 80 ? '#34d399' : m[1] >= 50 ? '#fbbf24' : '#f87171'; }) }] },
+    options: { indexAxis: 'y', maintainAspectRatio: false,
+      scales: { x: { min: 0, max: 100, grid: { color: '#1f2433' } }, y: { grid: { display: false }, ticks: { autoSkip: false, font: { size: 11 } } } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (c) { return 'Score ' + c.parsed.x + ' / 100'; } } } } }
+  });
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', securityLevel: 'strict', flowchart: { curve: 'basis' } });
+  // findings filter
+  document.querySelectorAll('.filters button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var f = b.getAttribute('data-f');
+      document.querySelectorAll('.filters button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+      document.querySelectorAll('#findings tbody tr').forEach(function (tr) { tr.hidden = f !== 'all' && tr.getAttribute('data-s') !== f; });
+    });
+  });
+</script>
+</body>
+</html>
