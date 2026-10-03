@@ -2,13 +2,11 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
 
 from app.admin import audit as a
 from app.auth.roles import require_manager, require_viewer, require_super
 from app.db.mongo import get_async_db
 from app.db.models import utcnow
-from app.admin import settings as s
 
 router = APIRouter(prefix="/api/admin/ai", tags=["admin_ai"])
 logger = logging.getLogger(__name__)
@@ -160,21 +158,9 @@ async def playground(request: Request, payload: Dict[str, Any]):
     else:
         raise HTTPException(status_code=400, detail="Either prompt_id or raw_input must be provided")
 
-    # Call the model service (delegated to ai_models_service)
-    from app.pipeline.ai_models_service import call_model
-    try:
-        response = await call_model(model_id=model_id, prompt=prompt_text)
-    except Exception as e:
-        logger.exception("Playground model call failed")
-        raise HTTPException(status_code=500, detail="Model execution failed")
-
-    # Audit the playground usage
-    await a.aaudit(
-        "playground.run",
-        "ai",
-        user=payload.get("updated_by", "system"),
-        ip=request.client.host if request.client else None,
-        details={"model_id": model_id, "prompt_used": payload.get("prompt_id")},
-    )
-
-    return JSONResponse(content={"response": response})
+    # Model execution is not implemented: app.pipeline.ai_models_service has no
+    # model-calling function (this used to import a non-existent ``call_model``,
+    # which raised ImportError and surfaced as an unhandled 500). Fail explicitly.
+    logger.warning("Playground run for model %s (%d prompt chars) rejected: model execution is not implemented",
+                   model_id, len(prompt_text or ""))
+    raise HTTPException(status_code=501, detail="Model execution is not available")

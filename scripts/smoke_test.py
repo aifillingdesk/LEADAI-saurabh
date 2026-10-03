@@ -24,7 +24,6 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import json
 import logging
 from datetime import datetime, timezone
 from bson import ObjectId
@@ -210,11 +209,12 @@ def run_smoke_test():
 
     # 9. Razorpay Billing Provider
     logger.info("Step 9: Testing Razorpay Billing Provider...")
-    import os
-    from unittest.mock import patch
     from app.billing.provider import RazorpayBillingProvider
 
-    import asyncio, hmac, hashlib, json as _json
+    import asyncio
+    import hmac
+    import hashlib
+    import json as _json
     rp = RazorpayBillingProvider("rzp_test_key", "rzp_test_secret", "rzp_webhook_secret")
     sub_id = ObjectId()
     db.subscriptions.insert_one({"_id": sub_id, "status": "pending_payment", "amount": 2999.0})

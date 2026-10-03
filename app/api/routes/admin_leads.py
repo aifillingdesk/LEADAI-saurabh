@@ -7,13 +7,13 @@ bulk actions, data quality dashboard. All organization-scoped.
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.admin import audit as a
-from app.auth.roles import require_manager, require_viewer, require_super
+from app.auth.roles import require_manager, require_viewer
 from app.db.models import utcnow
 from app.db.mongo import get_async_db
 
@@ -175,7 +175,7 @@ async def add_note(lead_id: str, request: Request, payload: Dict[str, Any], admi
         raise HTTPException(status_code=400, detail="Note too long (max 2000 characters)")
     note = {"id": str(ObjectId()), "text": text, "created_at": utcnow(), "created_by": admin.get("email", "system")}
     try:
-        r = await db_push_note(lead_id, note)
+        await db_push_note(lead_id, note)
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to save note")
     await a.aaudit("lead.note.add", "leads", user=admin, ip=request.client.host if request.client else None, details={"lead_id": lead_id})

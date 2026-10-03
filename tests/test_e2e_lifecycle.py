@@ -298,7 +298,7 @@ def test_apify_failure_marks_run_error_without_crashing(app_client):
     with patch("app.connectors.apify_connector.ApifyConnector._call_actor", boom):
         r = c.post("/api/url/search", params={"url": PAGE_URL})
         assert r.status_code == 200, r.text
-        res = _wait_run(c, r.json()["run_id"])
+        _wait_run(c, r.json()["run_id"])
     run = db.search_history.find_one({"run_id": r.json()["run_id"]})
     assert run["status"] in ("error", "partial", "completed")
     assert run["organization_id"] == org

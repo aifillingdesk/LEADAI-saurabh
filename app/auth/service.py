@@ -13,14 +13,14 @@ import logging
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import Request, Response
 
 from app.admin.envvars import get_envvar_bool, get_envvar_int, get_envvar_str
 from app.config import get_settings
 from app.db.mongo import get_sync_db
-from app.db.models import strip_sensitive, utcnow
+from app.db.models import utcnow
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -287,7 +287,6 @@ def verify_saas_user_login(email: str, password: str, scope: str = "site") -> tu
     On authentication failure, returns (None, reason).
     """
     email_clean = email.strip().lower()
-    now = time.time()
     db = get_sync_db()
     if db is None:
         return None, "Database unavailable"
@@ -314,8 +313,6 @@ def verify_saas_user_login(email: str, password: str, scope: str = "site") -> tu
     valid, new_hash = _verify_and_migrate_password(password, expected_hash)
     if not valid:
         return None, "Invalid email or password"
-
-    user_id = str(user_record["_id"])
 
     # Update password hash if migrated
     if new_hash:

@@ -151,7 +151,7 @@ class FacebookPost(BaseModel):
     likes_count: Optional[int] = None
     total_comment_count: Optional[int] = None     # Facebook-reported total — never overwritten
     scraped_comment_count: Optional[int] = None   # comments actually collected into this DB
-    comments_count: Optional[int] = None          # legacy alias of total_comment_count
+    comments_count: int = 0                       # legacy alias of total_comment_count
     shares_count: Optional[int] = None
 
     # lead qualification (relevant + total_comment_count >= MIN_COMMENTS)
@@ -163,7 +163,6 @@ class FacebookPost(BaseModel):
 
     # collection progress (real-time status)
     comments_status: str = "not_started"   # not_started | running | completed | error | empty
-    comments_count: int = 0
     comments_error: Optional[str] = None
     comments_collected_at: Optional[datetime] = None
 

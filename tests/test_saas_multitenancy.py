@@ -8,11 +8,10 @@ Tests for LeadAI SaaS Multi-Tenant Architecture & RBAC Foundation:
 - SaaS Signup & Login Flows
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from bson import ObjectId
 from fastapi.testclient import TestClient
 
-from app.db.saas_models import PlatformRole, OrgRole, OrgStatus
 from app.auth.permissions import (
     PLATFORM_VIEW,
     ORGS_VIEW,
@@ -35,7 +34,6 @@ from app.auth.service import (
     COOKIE_NAME,
     parse_session_value,
     create_tracked_session,
-    revoke_user_sessions,
 )
 from app.db.mongo import get_sync_db
 

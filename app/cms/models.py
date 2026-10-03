@@ -25,7 +25,7 @@ Section (all text is plain text — rendered with textContent on the website)
 paragraph, a line starting with "## " = heading, "- " = bullet.
 """
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def utcnow() -> datetime:
@@ -46,7 +46,7 @@ COLL_SEED_STATE   = "website_seed_state"    # what the seed already created once
 
 # ── Index definitions (applied in lifespan) ─────────────────────────────────
 
-CMS_INDEXES = [
+CMS_INDEXES: List[Tuple[str, List[Tuple[str, int]], Dict[str, Any]]] = [
     (COLL_PAGES,        [("slug", 1)],       {"unique": True,  "name": "idx_slug"}),
     (COLL_PAGES,        [("status", 1)],     {"name": "idx_status"}),
     (COLL_SECTIONS,     [("page_id", 1), ("order", 1)], {"name": "idx_page_order"}),
@@ -383,7 +383,7 @@ DEFAULT_FAQ = [
     {"question": "Can I export leads?", "answer": "Yes. You can export leads, pages, posts and comments as CSV files from your workspace.", "category": "features", "order": 6, "enabled": True},
 ]
 
-DEFAULT_WEBSITE_SETTINGS = [
+DEFAULT_WEBSITE_SETTINGS: List[Dict[str, Any]] = [
     {"key": "brand_name",       "value": "LeadAI",          "label": "Brand Name"},
     {"key": "tagline",          "value": "Turn Social Conversations Into High-Intent Leads With AI", "label": "Tagline"},
     {"key": "footer_tagline",   "value": "AI-powered social lead intelligence. Turn conversations into customers.", "label": "Footer Tagline"},

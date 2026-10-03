@@ -1974,7 +1974,7 @@ async def log_client_export(body: ClientExportLog, request: Request,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _audit_query(ctx: TenantContext, action, category, user, status, q, date_from, date_to):
-    clauses = [{"organization_id": ctx.organization_id}]
+    clauses: list[dict[str, Any]] = [{"organization_id": ctx.organization_id}]
     if action:
         clauses.append({"action": {"$regex": "^" + re.escape(action.strip()[:80]), "$options": "i"}})
     if category:

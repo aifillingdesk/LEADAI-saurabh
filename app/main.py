@@ -248,7 +248,7 @@ async def lifespan(app: FastAPI):
                 _client = _AC(token)
                 for run_id in list(_active_apify_runs):
                     try:
-                        _client.runs().get(run_id).abort()
+                        _client.run(run_id).abort()
                         logger.info("Aborted Apify run %s", run_id)
                     except Exception:
                         pass

@@ -586,7 +586,7 @@ async def start_url_search(
         raise
 
     # Business context for AI lead analysis and intent scoring
-    biz_ctx = {}
+    biz_ctx: dict[str, Any] = {}
     if industry and industry.strip():
         biz_ctx["industry"] = industry.strip()
     if business_type and business_type.strip():
@@ -1873,7 +1873,7 @@ async def delete_search_preset(
     )
 
     is_owner = preset.get("user_id") == ctx.user_id
-    is_admin = ctx.has_permission(P.ORG_SETTINGS_WRITE)
+    is_admin = ctx.has(P.SETTINGS_MANAGE)        # org owners / admins
     if not (is_owner or is_admin):
         report_out_of_scope(request, ctx, "search_presets", preset)
         raise HTTPException(status_code=403, detail="Cannot delete presets created by other members")

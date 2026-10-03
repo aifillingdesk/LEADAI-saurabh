@@ -309,7 +309,7 @@ def _stored_docs(db) -> Dict[str, Dict[str, Any]]:
 
 def _public(key: str, base: Dict[str, Any], stored: Optional[Dict[str, Any]],
             builtin: bool) -> Dict[str, Any]:
-    out = {"key": key, "builtin": builtin, "enabled": True}
+    out: Dict[str, Any] = {"key": key, "builtin": builtin, "enabled": True}
     out.update({f: base.get(f) for f in _BUILTIN_FIELDS})
     if stored:
         for f in _BUILTIN_FIELDS:
@@ -490,7 +490,7 @@ def json_safe(text: str) -> str:
 # ── validation (API) ───────────────────────────────────────────────────────
 
 def clean_profile(body: Dict[str, Any]) -> Dict[str, Any]:
-    out = {f: clean_text(body.get(f), lim) for f, lim in PROFILE_LIMITS.items()}
+    out: Dict[str, Any] = {f: clean_text(body.get(f), lim) for f, lim in PROFILE_LIMITS.items()}
     out["requirement_terms"] = clean_terms(body.get("requirement_terms"))
     out["target_customer_types"] = [clean_text(t, 60) for t in (body.get("target_customer_types") or []) if t][:10]
     out["primary_offerings"] = [clean_text(o, 80) for o in (body.get("primary_offerings") or []) if o][:20]

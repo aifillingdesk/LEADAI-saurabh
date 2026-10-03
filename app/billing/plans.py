@@ -271,7 +271,7 @@ def invalidate_plan_cache() -> None:
 def _clean_plan(doc: Dict[str, Any]) -> Dict[str, Any]:
     if not doc:
         return {}
-    out = {}
+    out: Dict[str, Any] = {}
     for k, v in doc.items():
         if k == "_id":
             out["id"] = str(v)

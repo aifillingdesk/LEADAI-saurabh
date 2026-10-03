@@ -3,7 +3,6 @@ Admin data-browser unit tests: score buckets, contact queries and the
 query-builders for the comments/pages/posts/analytics endpoints (pure
 logic only; DB interaction is validated by the live harness).
 """
-import pytest
 
 from app.api.routes.admin import _contact_query, _score_bucket, _page_platform
 

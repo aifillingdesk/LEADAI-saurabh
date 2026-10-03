@@ -236,8 +236,8 @@ _SECRET_KEYS = {"apify.token"}
 # The full Mongo lookup is avoided on every comment in a loop; a short TTL
 # (5s) keeps admin changes effectively instant while costing one read per
 # key per TTL window at most.
-_CACHE: Dict[str, tuple] = {}
 _CACHE_TTL = 5.0
+_CACHE: Dict[str, Tuple[float, Any]] = {}          # key -> (time.time(), value)
 
 
 def _cached(key: str, ttl: float = _CACHE_TTL):
@@ -310,11 +310,12 @@ def _coerce(key: str, value: Any) -> Any:
 # this module clear the cache at once; another worker process sees a change
 # within _CACHE_TTL seconds. Entries are tied to the database client they were
 # read from, so a different database (e.g. per-test) never sees stale values.
-_CACHE_TTL = 5.0
-_CACHE: Dict[str, Tuple[float, Any, Any]] = {}
+_READ_CACHE: Dict[str, Tuple[float, Any, Any]] = {}   # key -> (monotonic expiry, db client, value)
 
 
 def clear_settings_cache() -> None:
+    """Drop both caches (called on every write through this module)."""
+    _READ_CACHE.clear()
     _CACHE.clear()
 
 
@@ -325,12 +326,12 @@ def _sync_get(key: str) -> Optional[Any]:
             return None
         owner = getattr(db, "client", db)
         now = time.monotonic()
-        hit = _CACHE.get(key)
+        hit = _READ_CACHE.get(key)
         if hit is not None and hit[0] > now and hit[1] is owner:
             return hit[2]
         doc = db[COLLECTION].find_one({"_id": key}, {"value": 1})
         value = doc.get("value") if doc else None
-        _CACHE[key] = (now + _CACHE_TTL, owner, value)
+        _READ_CACHE[key] = (now + _CACHE_TTL, owner, value)
         return value
     except Exception:
         return None

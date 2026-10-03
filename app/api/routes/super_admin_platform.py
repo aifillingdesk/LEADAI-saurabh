@@ -279,8 +279,8 @@ async def list_admins(q: Optional[str] = None, organization_id: Optional[str] = 
     rx = _rx(q)
     if rx:
         uids = [str(u["_id"]) async for u in db.users.find({"$or": [{"email": rx}, {"name": rx}]}, {"_id": 1}).limit(500)]
-        oids = [str(o["_id"]) async for o in db.organizations.find({"name": rx}, {"_id": 1}).limit(500)]
-        query["$or"] = [{"user_id": {"$in": uids}}, {"organization_id": {"$in": oids}}]
+        org_ids = [str(o["_id"]) async for o in db.organizations.find({"name": rx}, {"_id": 1}).limit(500)]
+        query["$or"] = [{"user_id": {"$in": uids}}, {"organization_id": {"$in": org_ids}}]
     if status in ("active", "suspended", "disabled"):
         uids = [str(u["_id"]) async for u in db.users.find(
             {"status": status} if status != "active" else {"status": {"$in": ["active", None]}}, {"_id": 1})]
@@ -964,7 +964,8 @@ GRANULARITIES = ("day", "week", "month")
 
 
 def _days(start: datetime, end: datetime) -> List[str]:
-    out, d = [], start.replace(hour=0, minute=0, second=0, microsecond=0)
+    out: List[str] = []
+    d = start.replace(hour=0, minute=0, second=0, microsecond=0)
     while d < end and len(out) < 800:
         out.append(d.strftime("%Y-%m-%d"))
         d += timedelta(days=1)

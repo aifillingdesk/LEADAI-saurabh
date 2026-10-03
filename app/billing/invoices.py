@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def _clean_doc(d: Dict[str, Any]) -> Dict[str, Any]:
     if not d:
         return {}
-    out = {}
+    out: Dict[str, Any] = {}
     for k, v in d.items():
         if k == "_id":
             out["id"] = str(v)

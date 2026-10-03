@@ -379,7 +379,7 @@ def test_history_router_strips_objectid_and_snapshot(monkeypatch):
 
 
 def test_export_payload_shape(monkeypatch):
-    db = _patch_db(monkeypatch, {"system_settings": [
+    _patch_db(monkeypatch, {"system_settings": [
         {"_id": "branding.font", "value": "manrope"},
     ]})
     payload = sa.export_payload()

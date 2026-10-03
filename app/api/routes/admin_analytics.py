@@ -7,7 +7,7 @@ All endpoints support date range filtering (today/7d/30d/custom).
 """
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 

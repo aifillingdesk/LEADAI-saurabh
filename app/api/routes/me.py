@@ -23,7 +23,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -63,7 +63,7 @@ PROTECTED_PROFILE_FIELDS = frozenset({
 # ``users.notification_preferences`` = flat {key: bool}. Keys/defaults below
 # must stay identical to org_admin._PREF_KEYS (all on, product_updates off).
 # Security alerts are always delivered and are not configurable.
-NOTIFICATION_PREFERENCES = {
+NOTIFICATION_PREFERENCES: Dict[str, Dict[str, Any]] = {
     "email_notifications": {"label": "Email me notifications", "default": True,
                             "hint": "Master switch for email; in-app notifications always appear"},
     "search_completed": {"label": "Search completed or failed", "default": True,
@@ -285,7 +285,7 @@ async def update_my_profile(request: Request, ctx: TenantContext = Depends(get_o
     try:
         upd = ProfileUpdate(**body)
     except ValidationError as e:
-        first = e.errors()[0] if e.errors() else {}
+        first: Mapping[str, Any] = e.errors()[0] if e.errors() else {}
         loc = ".".join(str(x) for x in first.get("loc", []))
         msg = str(first.get("msg", "Invalid value")).replace("Value error, ", "")
         if first.get("type") == "extra_forbidden":
@@ -932,7 +932,7 @@ async def log_client_export(request: Request, ctx: TenantContext = Depends(get_o
     try:
         log = ClientExportLog(**body)
     except ValidationError as e:
-        first = e.errors()[0] if e.errors() else {}
+        first: Mapping[str, Any] = e.errors()[0] if e.errors() else {}
         raise HTTPException(status_code=422, detail={
             "code": "VALIDATION_ERROR",
             "field": ".".join(str(x) for x in first.get("loc", [])),

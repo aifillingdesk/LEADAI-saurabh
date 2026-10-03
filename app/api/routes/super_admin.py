@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from app.admin import audit as _audit
 from app.auth.tenant import TenantContext, require_platform_role
 from app.db.models import utcnow
-from app.db.mongo import get_async_db, get_sync_db
+from app.db.mongo import get_async_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/super-admin", tags=["super-admin"])
@@ -201,10 +201,10 @@ async def super_admin_dashboard(
     all_currencies = sorted(set(mrr_by_currency) | set(rev30_by_currency) | set(succeeded_by_currency))
     currency = single_currency({c: 0 for c in all_currencies})
 
-    tok = await _a(db.token_balances, [{"$group": {"_id": None, "allocated": {"$sum": "$allocated"},
-                                                   "used": {"$sum": "$used"},
-                                                   "remaining": {"$sum": "$remaining"}}}])
-    tok = tok[0] if tok else {}
+    tok_rows = await _a(db.token_balances, [{"$group": {"_id": None, "allocated": {"$sum": "$allocated"},
+                                                        "used": {"$sum": "$used"},
+                                                        "remaining": {"$sum": "$remaining"}}}])
+    tok = tok_rows[0] if tok_rows else {}
     consumed = {}
     for label, since in (("24h", d1), ("30d", d30)):
         rows = await _a(db.token_ledger, [{"$match": {"type": "consume", "created_at": {"$gte": since}}},
@@ -528,13 +528,14 @@ async def update_organization_status(
         for m in members:
             revoked += revoke_user_sessions(m["user_id"], revoked_by=f"super_admin:{ctx.email}") or 0
 
+    meta = _audit.request_meta(request)
     await _audit.aaudit(f"organization.{body.status}", "platform", user=ctx.audit_user(),
                         organization_id=org_id, resource_type="organization",
                         resource_id=org_id, details={"before": before, "after": new_status,
                                                      "new_status": new_status,
                                                      "reason": body.reason[:300],
                                                      "sessions_revoked": revoked},
-                        **_audit.request_meta(request))
+                        ip=meta["ip"], user_agent=meta["user_agent"])
     from app.events.notifications import notify_org_admins, notify_super_admins
     if body.status == "suspended":
         notify_super_admins("organization_suspended", "Organization suspended",
@@ -707,12 +708,13 @@ async def update_user_status(
         from app.auth.service import revoke_user_sessions
         revoked = revoke_user_sessions(user_id, revoked_by=f"super_admin:{ctx.email}") or 0
 
+    meta = _audit.request_meta(request)
     await _audit.aaudit(f"user.{body.status}", "platform", user=ctx.audit_user(),
                         resource_type="user", resource_id=user_id,
                         details={"before": before, "after": body.status, "new_status": body.status,
                                  "email": user.get("email"), "reason": body.reason[:300],
                                  "sessions_revoked": revoked},
-                        **_audit.request_meta(request))
+                        ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "message": f"User status updated to {body.status}"}
 
 
@@ -964,12 +966,13 @@ async def impersonate_organization(
                                      impersonated_by=ctx.email, impersonation_reason=reason[:300])
     set_session_cookie(response, tracked)
 
+    meta = _audit.request_meta(request)
     await _audit.aaudit("impersonation.start", "security", user=ctx.audit_user(),
                         organization_id=str(org["_id"]), resource_type="organization",
                         resource_id=str(org["_id"]),
                         details={"reason": reason[:300],
                                  "expires_at": impersonated_user["impersonation_expires_at"]},
-                        **_audit.request_meta(request))
+                        ip=meta["ip"], user_agent=meta["user_agent"])
 
     return {
         "success": True,

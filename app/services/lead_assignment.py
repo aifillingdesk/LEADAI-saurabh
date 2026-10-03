@@ -72,7 +72,7 @@ def list_assignment_rules(db, organization_id: str) -> list[dict[str, Any]]:
 
 def delete_assignment_rule(db, rule_id: str, organization_id: str) -> bool:
     """Delete an assignment rule."""
-    q = {"organization_id": str(organization_id)}
+    q: dict[str, Any] = {"organization_id": str(organization_id)}
     if ObjectId.is_valid(rule_id):
         q["$or"] = [{"_id": ObjectId(rule_id)}, {"rule_id": rule_id}]
     else:
@@ -136,7 +136,7 @@ def assign_lead(
             "updated_at": now,
         }
 
-        q = {"organization_id": str(organization_id)}
+        q: dict[str, Any] = {"organization_id": str(organization_id)}
         if ObjectId.is_valid(lead_id):
             q["_id"] = ObjectId(lead_id)
         else:

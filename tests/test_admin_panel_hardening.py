@@ -5,8 +5,6 @@ Tests dashboard enhancements, health endpoint improvements, settings wiring,
 audit toggle, cost protection, AI call budget, and settings registry validation.
 """
 import time
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

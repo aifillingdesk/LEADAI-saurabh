@@ -70,7 +70,7 @@ def is_blocked(
     if not clauses:
         return False
 
-    org_filter = [{"organization_id": None}]
+    org_filter: list[dict[str, Any]] = [{"organization_id": None}]
     if organization_id:
         org_filter.append({"organization_id": str(organization_id)})
 

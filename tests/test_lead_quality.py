@@ -16,7 +16,6 @@ Proves:
 import logging
 
 import pytest
-from bson import ObjectId
 
 from app.pipeline import comment_ai as ca
 

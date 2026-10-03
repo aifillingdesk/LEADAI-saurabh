@@ -8,7 +8,7 @@ Tracks token consumption, latency, and estimated costs per AI request for SaaS a
 """
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from app.db.mongo import get_sync_db
 from app.pipeline.ai_models_service import get_model_by_name
@@ -170,7 +170,7 @@ def get_ai_overview_metrics(time_range: str = "30d", organization_id: Optional[s
             avg_lat = est_cost = 0.0
 
         # AI comments analyzed and leads generated from ai_comments
-        comments_match = {"analyzed_at": {"$gte": range_start}}
+        comments_match: Dict[str, Any] = {"analyzed_at": {"$gte": range_start}}
         if organization_id:
             comments_match["organization_id"] = organization_id
         comments_analyzed = db.ai_comments.count_documents(comments_match)

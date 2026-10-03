@@ -350,7 +350,7 @@ def rule_based_classify(text: Optional[str], author_name: str = "",
     """Stage 1 — deterministic filter returning the canonical analysis shape.
     ``requirement_terms`` is the organization's industry vocabulary
     (business_context.requirement_terms_for); None = every industry."""
-    empty = {
+    empty: Dict[str, Any] = {
         "is_useful": False,
         "reason": None,
         "lead_type": "none",
@@ -1326,7 +1326,7 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
     else:
         filtered_out = 0
 
-    summary = {
+    summary: Dict[str, Any] = {
         "status": "completed",
         "post_id": post_doc.get("post_id") or str(post_doc["_id"]),
         "post_ref": post_ref,
@@ -1506,10 +1506,10 @@ def _audit_ai_batch(post_doc: Dict[str, Any], summary: Dict[str, Any], *,
         actor = {"user_id": str(user_id) if user_id else None,
                  "email": post_doc.get("created_by") or "system",
                  "role": "pipeline"}
-        common = dict(user=actor,
-                      organization_id=str(org_id) if org_id else None,
-                      resource_type="search_run" if run_id else "post",
-                      resource_id=run_id or str(post_doc.get("_id")))
+        common: Dict[str, Any] = dict(user=actor,
+                                      organization_id=str(org_id) if org_id else None,
+                                      resource_type="search_run" if run_id else "post",
+                                      resource_id=run_id or str(post_doc.get("_id")))
         base = {"post_ref": str(post_doc.get("_id")), "search_run_id": run_id}
         audit("ai.comments_qualified", "ai", details={
             **base, "qualified": qualified,

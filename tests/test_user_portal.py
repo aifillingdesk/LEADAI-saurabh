@@ -198,18 +198,18 @@ def test_usage_and_ledger_are_own_only(env):
 def test_leads_own_plus_assigned_never_others(env):
     rec = env["rec"]
     c = _as(env, "a_user1")
-    all_ids = {l["id"] for l in c.get("/api/me/leads").json()["items"]}
+    all_ids = {x["id"] for x in c.get("/api/me/leads").json()["items"]}
     assert all_ids == {rec["a_user1"]["lead"], rec["assigned"]}
     assert rec["a_user2"]["lead"] not in all_ids  # owner's other lead stays private
     assert rec["b_user"]["lead"] not in all_ids
 
     assigned = c.get("/api/me/leads", params={"view": "assigned"}).json()
-    assert [l["id"] for l in assigned["items"]] == [rec["assigned"]]
+    assert [x["id"] for x in assigned["items"]] == [rec["assigned"]]
     assert assigned["items"][0]["assigned_to_me"] is True
     assert assigned["view_counts"] == {"all": 2, "mine": 1, "assigned": 1}
 
     mine = c.get("/api/me/leads", params={"view": "mine"}).json()
-    assert [l["id"] for l in mine["items"]] == [rec["a_user1"]["lead"]]
+    assert [x["id"] for x in mine["items"]] == [rec["a_user1"]["lead"]]
     # filters stay inside the scope
     assert c.get("/api/me/leads", params={"q": "interested a_user2"}).json()["total"] == 0
     assert c.get("/api/me/leads", params={"quality": "hot"}).json()["total"] == 1
@@ -219,7 +219,7 @@ def test_summary_is_own_only(env):
     rec = env["rec"]
     body = _as(env, "a_user1").get("/api/me/summary").json()
     assert {s["run_id"] for s in body["recent_searches"]} == {rec["a_user1"]["run"]}
-    lead_ids = {l["id"] for l in body["recent_leads"]}
+    lead_ids = {x["id"] for x in body["recent_leads"]}
     assert lead_ids <= {rec["a_user1"]["lead"], rec["assigned"]}
     assert body["counts"]["assigned_to_me"] == 1
     assert any(a["code"] == "LEADS_ASSIGNED" for a in body["alerts"])
@@ -386,7 +386,6 @@ def test_url_search_plan_limit_402(env):
 
 def test_tokens_exhausted_does_not_use_a_monthly_search(env):
     """Tokens are charged before the monthly_searches quota is counted."""
-    from fastapi import HTTPException
     calls = []
 
     async def _spy(**kw):

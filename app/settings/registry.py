@@ -556,14 +556,14 @@ def validate_value(spec: SettingSpec, value: Any) -> Tuple[Any, Optional[str]]:
         return n, None
     if t == "float":
         try:
-            n = float(value)
+            x = float(value)
         except (TypeError, ValueError):
             return value, "Expected a number"
-        if spec.min is not None and n < spec.min:
+        if spec.min is not None and x < spec.min:
             return value, f"Minimum is {spec.min}"
-        if spec.max is not None and n > spec.max:
+        if spec.max is not None and x > spec.max:
             return value, f"Maximum is {spec.max}"
-        return n, None
+        return x, None
     if t == "select":
         text = str(value)
         if spec.options and text not in spec.options:

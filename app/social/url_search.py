@@ -603,7 +603,7 @@ class UrlSearchThread(threading.Thread):
                 notify_user(str(self.user_id), "search_failed", "Your search failed",
                             "Something went wrong while running your search. Please try again.",
                             organization_id=self.organization_id, severity="danger",
-                            link=f"/dashboard#history")
+                            link="/dashboard#history")
             notify_super_admins("apify_failure", "Search worker crashed",
                                 f"Run {self.run_id} (org {self.organization_id}): {str(e)[:300]}",
                                 severity="danger", link=f"/superadmin#/ops/chain/{self.run_id}")

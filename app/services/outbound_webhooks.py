@@ -76,7 +76,7 @@ def list_outbound_webhooks(db, organization_id: str) -> list[dict[str, Any]]:
 
 def delete_outbound_webhook(db, webhook_id: str, organization_id: str) -> bool:
     """Delete an outbound webhook."""
-    q = {"organization_id": str(organization_id)}
+    q: dict[str, Any] = {"organization_id": str(organization_id)}
     if ObjectId.is_valid(webhook_id):
         q["$or"] = [{"_id": ObjectId(webhook_id)}, {"webhook_id": webhook_id}]
     else:

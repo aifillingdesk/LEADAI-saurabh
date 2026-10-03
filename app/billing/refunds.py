@@ -11,7 +11,7 @@ Partial refunds accumulate per invoice and can never exceed its total.
 """
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
 from fastapi import HTTPException
@@ -63,7 +63,7 @@ async def refund_invoice(invoice_id: str, *, amount: Optional[float], reason: st
     sub_id = inv.get("subscription_id")
     # the payment records of this invoice: the ones linked to it, plus — for the
     # subscription's FIRST invoice — the checkout payment (linked by subscription)
-    clauses = [{"invoice_id": str(inv["_id"])}]
+    clauses: List[Dict[str, Any]] = [{"invoice_id": str(inv["_id"])}]
     if sub_id:
         first = await db.invoices.find_one({"subscription_id": str(sub_id)}, {"_id": 1},
                                            sort=[("created_at", 1)])

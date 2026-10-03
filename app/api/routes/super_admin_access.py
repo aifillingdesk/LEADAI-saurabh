@@ -126,10 +126,11 @@ async def issue_api_key(body: IssueKeyBody, request: Request, ctx: TenantContext
                                            scopes=scopes, created_by=f"super_admin:{ctx.email}")
         await db.api_keys.update_one({"_id": doc["_id"]}, {"$set": {"issued_by_super_admin": True,
                                                                     "issue_reason": reason}})
+        meta = request_meta(request)
         await aaudit("api_key.issued_by_super_admin", "security", user=ctx.audit_user(),
                      organization_id=str(org["_id"]), resource_type="api_key", resource_id=doc["key_id"],
                      details={"owner_type": "organization", "scopes": scopes, "name": name, "reason": reason},
-                     **request_meta(request))
+                     ip=meta["ip"], user_agent=meta["user_agent"])
         from app.events.notifications import notify_org_admins
         notify_org_admins(str(org["_id"]), "security_event", "LeadAI issued an API key",
                           f"The LeadAI team created the API key “{name}” ({', '.join(scopes)}) for your "
@@ -177,10 +178,11 @@ async def revoke_any_api_key(key_id: str, body: ReasonBody, request: Request, ct
     reason = (body.reason or "").strip()[:300] or "revoked by super admin"
     await db.api_keys.update_one({"_id": key["_id"]}, {"$set": {"is_active": False, "updated_at": utcnow(),
                                                                "revoked_reason": reason, "revoked_by": ctx.email}})
+    meta = request_meta(request)
     await aaudit("api_key.revoked_by_super_admin", "security", user=ctx.audit_user(),
                  organization_id=key.get("organization_id"), resource_type="api_key", resource_id=key_id,
                  details={"owner_type": key.get("owner_type") or "organization", "partner_id": key.get("partner_id"),
-                          "reason": reason}, **request_meta(request))
+                          "reason": reason}, ip=meta["ip"], user_agent=meta["user_agent"])
     if key.get("owner_type") == "partner":
         from app.partners.service import load_partner, notify_partner, paudit
         paudit("partner.api_key.revoked", key.get("partner_id"), actor=ctx.audit_user(),
@@ -240,9 +242,10 @@ async def toggle_webhook(webhook_id: str, action: str, body: ReasonBody, request
     await db.outbound_webhooks.update_one({"_id": w["_id"]}, {"$set": {
         "is_active": active, "updated_at": utcnow(), "disabled_reason": None if active else (reason or "disabled by super admin"),
         "disabled_by": None if active else ctx.email}})
+    meta = request_meta(request)
     await aaudit(f"webhook.{action}d_by_super_admin", "security", user=ctx.audit_user(),
                  organization_id=w.get("organization_id"), resource_type="webhook", resource_id=webhook_id,
-                 details={"url": w.get("url"), "reason": reason}, **request_meta(request))
+                 details={"url": w.get("url"), "reason": reason}, ip=meta["ip"], user_agent=meta["user_agent"])
     if w.get("organization_id"):
         from app.events.notifications import notify_org_admins
         notify_org_admins(w["organization_id"], "security_event", f"A webhook was {action}d",

@@ -39,7 +39,7 @@ def _configure_dns():
 _configure_dns()
 
 
-_async_client_cache = None
+_async_client_cache: Optional[AsyncIOMotorClient] = None
 
 
 def get_async_client() -> Optional[AsyncIOMotorClient]:
@@ -87,7 +87,7 @@ def reset_client_caches():
     _sync_client_cache = None
 
 
-_sync_client_cache = None
+_sync_client_cache: Optional[MongoClient] = None
 
 
 def get_sync_client() -> Optional[MongoClient]:

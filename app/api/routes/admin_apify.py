@@ -8,14 +8,14 @@ Implements max 3 retry policy for failed jobs.
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.admin import audit as a
 from app.admin import settings as s
-from app.auth.roles import require_manager, require_super, require_viewer
+from app.auth.roles import require_manager, require_viewer
 from app.db.models import utcnow
 from app.db.mongo import get_async_db
 
@@ -32,7 +32,6 @@ async def _db():
 
 
 def _serialize(doc: Any) -> Any:
-    from bson import ObjectId
     if isinstance(doc, ObjectId):
         return str(doc)
     if isinstance(doc, datetime):
@@ -73,7 +72,7 @@ async def update_actor(platform: str, request: Request, payload: Dict[str, Any],
     actor_id = str(payload.get("actor_id", "")).strip()
     if not actor_id:
         raise HTTPException(status_code=400, detail="actor_id is required")
-    await s.aset_setting(f"apify.actor.{platform}", actor_id, updated_by=admin.get("email", "system"))
+    await s.aset_setting(f"apify.actor.{platform}", actor_id, by=admin.get("email", "system"))
     await a.aaudit("apify.actor.update", "apify", user=admin, ip=request.client.host if request.client else None, details={"platform": platform, "actor_id": actor_id})
     return {"platform": platform, "actor_id": actor_id, "status": "updated"}
 

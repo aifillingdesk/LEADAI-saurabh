@@ -819,7 +819,7 @@ def filter_comments_for_post(db, post_ref: str, rule: Dict[str, Any],
     custom_categories = list(db[CATEGORIES_COLLECTION].find(
         {"active": {"$ne": False}}))
 
-    summary = {
+    summary: Dict[str, Any] = {
         "status": "completed",
         "rule_id": str(rule["_id"]) if rule.get("_id") else None,
         "total": 0, "matched": 0, "not_matched": 0, "no_filter": 0,

@@ -12,12 +12,10 @@ tests/conftest.py, never a real database).
      database is down.
 15.  Browser-built "Current view" exports are audited (export.client).
 """
-import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from bson import ObjectId
 from fastapi.testclient import TestClient
 
 from app.api.routes import super_admin_platform as sap
@@ -295,7 +293,8 @@ class TestDurableRateLimits:
         lim = rl.RateLimiter("expiry_test", 2, 100)
         t = [1_000_000.0]
         with patch.object(rl, "_now", lambda: t[0]):
-            lim.hit("k"); lim.hit("k")
+            lim.hit("k")
+            lim.hit("k")
             assert lim.allowed("k") is False
             t[0] += 50
             assert lim.allowed("k") is False
@@ -381,7 +380,9 @@ class TestDurableRateLimits:
         rl.reset_db_health()
         try:
             with patch("app.db.mongo.get_sync_db", return_value=DB()):
-                lim.hit("x"); lim.hit("x"); lim.allowed("x")
+                lim.hit("x")
+                lim.hit("x")
+                lim.allowed("x")
             assert calls["n"] == 1        # after the first failure the DB is skipped for a while
             assert lim.count("x") == 2    # in-memory fallback kept counting
         finally:

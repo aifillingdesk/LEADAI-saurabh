@@ -180,9 +180,10 @@ async def write_demo_config(body: Dict[str, Any], request: Request,
         cfg = update_demo_config(body, actor=ctx.email)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    meta = request_meta(request)
     await aaudit("demo_config.updated", "settings", user=ctx.audit_user(),
                  resource_type="platform_config", resource_id="demo",
-                 details={"before": before, "after": cfg}, **request_meta(request))
+                 details={"before": before, "after": cfg}, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "config": cfg}
 
 
@@ -201,9 +202,10 @@ async def write_token_costs(body: Dict[str, Any], request: Request,
         costs = update_token_costs(body, actor=ctx.email)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    meta = request_meta(request)
     await aaudit("token_costs.updated", "settings", user=ctx.audit_user(),
                  resource_type="platform_config", resource_id="token_costs",
-                 details={"before": before, "after": costs}, **request_meta(request))
+                 details={"before": before, "after": costs}, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "costs": costs}
 
 
@@ -360,9 +362,10 @@ async def token_adjust(org_id: str, body: AdjustBody, request: Request,
         bal = allocate(org_id, body.delta, source="manual", actor=ctx.email, reason=body.reason)
     else:
         bal = adjust(org_id, body.delta, actor=ctx.email, reason=body.reason)
+    meta = request_meta(request)
     await aaudit("tokens.adjusted", "billing", user=ctx.audit_user(), organization_id=org_id,
                  resource_type="token_balance", resource_id=org_id,
-                 details={"delta": body.delta, "reason": body.reason}, **request_meta(request))
+                 details={"delta": body.delta, "reason": body.reason}, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "balance": bal}
 
 
@@ -451,10 +454,11 @@ async def set_role_permissions(body: MatrixBody, request: Request,
         {"$set": {"permissions": sorted(set(body.permissions)), "updated_by": ctx.email}},
         upsert=True)
     P.invalidate_permission_cache()
+    meta = request_meta(request)
     await aaudit("role_permissions.updated", "security", user=ctx.audit_user(),
                  resource_type="role", resource_id=f"{body.kind}:{body.role}",
                  details={"before": before, "after": sorted(set(body.permissions))},
-                 **request_meta(request))
+                 ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True}
 
 

@@ -113,7 +113,7 @@ def test_activate_restores_demo_and_requires_subscription_for_active(env):
     db.subscriptions.insert_one({"organization_id": paid, "status": "active", "plan_id": "starter"})
     assert client.patch(base.format(paid), cookies=sa, json={"status": "active"}).json()["status"] == "active"
     # the org's own admins are told
-    owner = _user(db, "o@paid.example", paid, role="owner")
+    _user(db, "o@paid.example", paid, role="owner")
     client.patch(base.format(paid), cookies=sa, json={"status": "suspended", "reason": "unpaid"})
     assert db.notifications.find_one({"organization_id": paid, "type": "organization_suspended",
                                       "audience": "org_admin"})

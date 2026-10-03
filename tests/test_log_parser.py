@@ -17,7 +17,6 @@ Covers:
 - Unicode content handling
 - parse_log_lines integration
 """
-import pytest
 from app.log_parser import (
     parse_log_line,
     parse_log_lines,

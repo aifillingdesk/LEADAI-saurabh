@@ -9,10 +9,8 @@ Handles:
 - Unknown/malformed formats (fallback to raw)
 - Secret redaction for sensitive values
 """
-import json
 import re
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # ── Secret redaction ──────────────────────────────────────────────────────────
 
@@ -48,7 +46,7 @@ def redact_secrets(text: str) -> str:
 
 def redact_dict(d: Dict[str, Any]) -> Dict[str, Any]:
     """Recursively redact sensitive keys in a dictionary."""
-    redacted = {}
+    redacted: Dict[str, Any] = {}
     for k, v in d.items():
         k_lower = k.lower().strip()
         if any(s in k_lower for s in _SECRET_KEYS):

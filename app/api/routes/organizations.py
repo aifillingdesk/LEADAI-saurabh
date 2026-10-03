@@ -117,7 +117,7 @@ class RegisterFromInviteRequest(BaseModel):
 def _clean_doc(d: Dict[str, Any]) -> Dict[str, Any]:
     if not d:
         return {}
-    out = {}
+    out: Dict[str, Any] = {}
     for k, v in d.items():
         if k in ("token_hash",):
             continue
@@ -294,12 +294,13 @@ async def update_current_organization(body: UpdateOrgProfileRequest, request: Re
     updates["updated_at"] = utcnow()
     await db.organizations.update_one({"_id": ObjectId(ctx.tenant_id)}, {"$set": updates})
     updated = await db.organizations.find_one({"_id": ObjectId(ctx.tenant_id)})
+    meta = request_meta(request)
     await aaudit("organization.updated", "organization", user=ctx.audit_user(),
                  organization_id=ctx.tenant_id, resource_type="organization",
                  resource_id=ctx.tenant_id,
                  details={"changed": {k: v for k, v in updates.items() if k != "updated_at"},
                           "had_settings": bool((before or {}).get("settings"))},
-                 **request_meta(request))
+                 ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "organization": _clean_doc(updated)}
 
 
@@ -342,9 +343,10 @@ async def invite_team_member(body: InviteMemberRequest, request: Request,
                                          role=role, invited_by=ctx.user_id, db=db,
                                          inviter_name=ctx.name,
                                          organization_name=ctx.organization_name)
+    meta = request_meta(request)
     await aaudit("member.invited", "team", user=ctx.audit_user(), organization_id=ctx.tenant_id,
                  resource_type="invitation", resource_id=invitation.get("id"),
-                 details={"email": body.email, "role": role}, **request_meta(request))
+                 details={"email": body.email, "role": role}, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "invitation": _clean_doc(invitation),
             "invite_url": invitation.get("invite_url"),
             "email_delivery": invitation.get("email_delivery"),
@@ -368,9 +370,10 @@ async def revoke_team_invitation(invitation_id: str, request: Request,
     if res.matched_count == 0:
         await _log_foreign_invitation_probe(db, request, ctx, oid)
         raise HTTPException(status_code=404, detail="Pending invitation not found")
+    meta = request_meta(request)
     await aaudit("member.invitation_revoked", "team", user=ctx.audit_user(),
                  organization_id=ctx.tenant_id, resource_type="invitation",
-                 resource_id=invitation_id, **request_meta(request))
+                 resource_id=invitation_id, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "message": "Invitation cancelled"}
 
 
@@ -395,10 +398,11 @@ async def resend_team_invitation(invitation_id: str, request: Request,
                                              role=existing["role"], invited_by=ctx.user_id, db=db,
                                              inviter_name=ctx.name,
                                              organization_name=ctx.organization_name)
+    meta = request_meta(request)
     await aaudit("member.invitation_resent", "team", user=ctx.audit_user(),
                  organization_id=ctx.tenant_id, resource_type="invitation",
                  resource_id=new_invitation.get("id"), details={"email": existing["email"]},
-                 **request_meta(request))
+                 ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "invitation": _clean_doc(new_invitation),
             "invite_url": new_invitation.get("invite_url"),
             "email_delivery": new_invitation.get("email_delivery"),
@@ -453,11 +457,12 @@ async def update_team_member(member_user_id: str, body: UpdateMemberRequest, req
     await db.organization_members.update_one({"_id": membership["_id"]}, {"$set": updates})
     # access changed -> force re-authentication everywhere
     revoked = revoke_user_sessions(member_user_id, revoked_by=f"org_admin:{ctx.email}")
+    meta = request_meta(request)
     await aaudit("member.updated", "team", user=ctx.audit_user(), organization_id=ctx.tenant_id,
                  resource_type="member", resource_id=member_user_id,
                  details={"before": {"role": membership.get("role"), "status": membership.get("status")},
                           "after": {k: v for k, v in updates.items() if k != "updated_at"},
-                          "sessions_revoked": revoked}, **request_meta(request))
+                          "sessions_revoked": revoked}, ip=meta["ip"], user_agent=meta["user_agent"])
     if updates.get("status") == "suspended":
         from app.events.notifications import notify_org_admins
         notify_org_admins(ctx.tenant_id, "user_suspended", "Team member suspended",
@@ -480,10 +485,11 @@ async def remove_team_member(member_user_id: str, request: Request,
     await db.organization_members.update_one(
         {"_id": membership["_id"]}, {"$set": {"status": "removed", "updated_at": utcnow()}})
     revoked = revoke_user_sessions(member_user_id, revoked_by=f"org_admin:{ctx.email}")
+    meta = request_meta(request)
     await aaudit("member.removed", "team", user=ctx.audit_user(), organization_id=ctx.tenant_id,
                  resource_type="member", resource_id=member_user_id,
                  details={"role": membership.get("role"), "sessions_revoked": revoked},
-                 **request_meta(request))
+                 ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "message": "Member removed from workspace"}
 
 
@@ -507,9 +513,10 @@ async def accept_invitation_endpoint(token: str, request: Request):
     db = get_async_db()
     result = await accept_invitation(token, user_id=user["user_id"],
                                      email=user.get("email", ""), db=db)
+    meta = request_meta(request)
     await aaudit("member.joined", "team", user=user, organization_id=result.get("organization_id"),
                  resource_type="member", resource_id=user["user_id"],
-                 details={"role": result.get("role")}, **request_meta(request))
+                 details={"role": result.get("role")}, ip=meta["ip"], user_agent=meta["user_agent"])
     return result
 
 
@@ -543,10 +550,10 @@ async def register_from_invitation(token: str, body: RegisterFromInviteRequest,
     await aaudit("user.created", "team", user={"user_id": user_id, "email": email},
                  organization_id=details["organization_id"], resource_type="user",
                  resource_id=user_id, details={"via": "invitation", "role": details["role"]},
-                 **meta)
+                 ip=meta["ip"], user_agent=meta["user_agent"])
     await aaudit("member.joined", "team", user={"user_id": user_id, "email": email},
                  organization_id=details["organization_id"], resource_type="member",
-                 resource_id=user_id, details={"role": result.get("role")}, **meta)
+                 resource_id=user_id, details={"role": result.get("role")}, ip=meta["ip"], user_agent=meta["user_agent"])
     sdb = get_sync_db()
     claims, err = build_user_claims(sdb, sdb.users.find_one({"_id": ObjectId(user_id)}))
     if claims:

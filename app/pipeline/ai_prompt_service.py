@@ -152,7 +152,10 @@ def render_template(template: str, context: Dict[str, Any]) -> str:
         pattern = r"\{\{\s*" + re.escape(key) + r"\s*\}\}"
         val_str = "" if value is None else str(value)
         # a replacement FUNCTION is used literally (no backslash processing)
-        result = re.sub(pattern, lambda m, v=val_str: v, result)
+        def _literal(_m: re.Match[str], v: str = val_str) -> str:
+            return v
+
+        result = re.sub(pattern, _literal, result)
     return result
 
 

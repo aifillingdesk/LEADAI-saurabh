@@ -85,7 +85,7 @@ def main():
             if not cond:
                 sys.exit(1)
 
-        r = agent.collect_page_posts(page_id, 30)
+        agent.collect_page_posts(page_id, 30)
         page = db.facebook_pages.find_one({"_id": ObjectId(page_id)})
         check("posts status completed", page["posts_status"] == "completed")
         check("total_posts_found == 30", page["total_posts_found"] == 30)
@@ -105,7 +105,7 @@ def main():
         check("all posts stored (no 100-threshold deletion)", len(posts) == 30)
 
         top = sorted(qual, key=lambda p: p["total_comment_count"], reverse=True)[0]
-        r2 = agent.collect_post_comments(str(top["_id"]), 200)
+        agent.collect_post_comments(str(top["_id"]), 200)
         post_after = db.facebook_posts.find_one({"_id": top["_id"]})
         check("comments completed", post_after["comments_status"] == "completed")
         check("scraped_comment_count == 37", post_after["scraped_comment_count"] == 37)

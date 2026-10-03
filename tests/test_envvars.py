@@ -6,7 +6,6 @@ environment-only, session TTL/cookie flags are dynamic, the Gemini key is
 read at call time).
 """
 import hashlib
-import os
 
 import pytest
 
@@ -213,7 +212,6 @@ def test_env_unlock_cookie_roundtrip_and_expiry():
 def test_require_env_unlocked_rejects_without_cookie():
     from fastapi import HTTPException
     from app.auth import roles
-    from app.auth.service import ENV_UNLOCK_COOKIE
 
     class FakeRequest:
         cookies = {}
@@ -286,7 +284,8 @@ def test_session_ttl_and_secure_cookie_are_dynamic(monkeypatch):
                                    "SESSION_COOKIE_SECURE": "true"})
     value = auth_svc.build_session_value({"email": "a@b.c", "role": "viewer"})
     payload_b64 = value.rsplit(".", 1)[0]
-    import json, base64
+    import json
+    import base64
     payload = json.loads(base64.urlsafe_b64decode(
         payload_b64 + "=" * (-len(payload_b64) % 4)))
     assert payload["exp"] - payload["iat"] == 2 * 86400

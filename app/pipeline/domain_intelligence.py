@@ -9,8 +9,6 @@ Provides:
 5. Dynamic Business Context Blending for Search Runs and AI Prompts.
 """
 import logging
-import re
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from bson import ObjectId
 
@@ -542,7 +540,7 @@ def get_taxonomy_catalog() -> Dict[str, Any]:
         btype_objs = tax.get("business_types", [])
         if btype_objs:
             btypes = [bt["name"] for bt in btype_objs]
-            merged_groups = {"product_service": [], "intent": [], "requirement": [], "location": []}
+            merged_groups: Dict[str, List[str]] = {"product_service": [], "intent": [], "requirement": [], "location": []}
             for bt in btype_objs:
                 for grp, words in bt.get("keyword_groups", {}).items():
                     if grp in merged_groups:
@@ -604,7 +602,7 @@ def generate_recommendations(
     if not matched_btype and btypes:
         matched_btype = btypes[0]
 
-    groups = {
+    groups: Dict[str, List[str]] = {
         "product_service": [],
         "intent": [],
         "requirement": [],

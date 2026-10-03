@@ -18,7 +18,7 @@ APIFY_CU_HOUR_COST = 0.25    # $0.25 per compute unit hour
 AVG_APIFY_CU_PER_SEARCH = 0.02  # ~0.02 CU ($0.005) per search run
 AVG_TOKENS_PER_COMMENT = 150    # ~115 in, ~35 out
 
-PLAN_ECONOMICS = {
+PLAN_ECONOMICS: dict[str, dict[str, Any]] = {
     "free": {
         "name": "Free / Demo",
         "monthly_price_usd": 0.0,

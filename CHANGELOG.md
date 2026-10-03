@@ -49,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TOTP two-factor authentication was never enforced at login (the flag was read from session claims). The login page now asks for the code.
 - The public REST API (`/api/v1`) was unreachable: the auth gate required a session, and the handlers awaited a non-coroutine. The per-key rate limit is now enforced.
 - Razorpay checkout overwrote the subscription amount with `plan.price_cents` (minor units, or 0 when unset), breaking payment verification.
+- **CI pipeline**: every job except the dependency audit was failing.
+  - Tests: plain `pytest` couldn't import `app` (fixed with `pythonpath = .` in `pytest.ini`).
+  - Frontend check: it looked in `public/` and `static/`, which don't exist; it now checks `app/static`.
+  - Lint: ruff's growing defaults reported 4,496 findings. `ruff.toml` now pins the rule set (`E4, E7, E9, F`), and all findings are fixed.
+  - Type check: the 167 mypy errors are fixed (annotations, no behaviour changes).
+  - Tool versions are pinned, and the GitHub actions are updated to Node 24.
+- **Bugs found by the new checks**:
+  - Searching a direct YouTube video URL crashed (`utcnow` was not imported in `app/social/scrapers.py`).
+  - Shutdown never aborted in-flight Apify runs (it called a method that doesn't exist on the apify-client run collection).
+  - `PUT /api/admin/apify/actors/{platform}` always failed with a wrong keyword argument.
+  - `DELETE /api/search-presets/{id}` always failed: it called a missing permission check. Org owners and admins (`settings.manage`) and the creator can now delete.
+  - `/api/admin/ai/playground` crashed on a missing import. It now returns `501 Not Implemented`.
 
 ### Performance
 - **Slow admin panel on hosted MongoDB**: every request made many sequential database round trips, and some blocked the event loop, so all requests waited.

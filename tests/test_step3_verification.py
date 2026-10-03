@@ -163,7 +163,7 @@ def _seed_tree(db, org_id, uid, email, tag):
         "audience": "org_admin", "organization_id": org_id, "user_id": None, "type": "user_suspended",
         "title": f"org note {tag}", "message": tag, "severity": "info", "link": None, "data": {},
         "read_by": [], "created_at": NOW})
-    db.audit_logs.insert_one({"action": f"lead.updated", "category": "leads", "at": NOW,
+    db.audit_logs.insert_one({"action": "lead.updated", "category": "leads", "at": NOW,
                               "organization_id": org_id, "actor_user_id": uid,
                               "actor_email": email, "resource_id": lead,
                               "details": {"note": tag}, "success": True})
@@ -407,7 +407,7 @@ class TestItem1CrossTenant:
     def test_query_param_tampering_never_returns_org_b(self, world, actor):
         """Every tenant GET list / kind route, fed Org B ids through every
         filter parameter name in use, returns no Org B data."""
-        client, db = world["client"], world["db"]
+        client = world["client"]
         b, org_b = world["data"]["b"], world["org"]["b"]
         params = {"organization_id": org_b, "org_id": org_b, "tenant_id": org_b,
                   "user_id": world["u"]["b_user"], "owner": world["u"]["b_user"],
@@ -1371,7 +1371,7 @@ class TestItem9FlagsMaintenanceSuspension:
 
     def test_admin_member_suspension(self, world):
         """An owner suspends the org Admin: the admin loses both portals at once."""
-        client, db = world["client"], world["db"]
+        client = world["client"]
         r = _call(client, "PATCH", f"/api/organizations/current/members/{world['u']['a_admin']}",
                   world["cookies"]["a_owner"], {"status": "suspended"})
         assert r.status_code == 200, r.text
@@ -1470,7 +1470,7 @@ class TestItem10Invitations:
         assert exp <= datetime.now(timezone.utc) + timedelta(days=30, minutes=1)
 
     def test_revoked_and_resent_tokens_are_dead(self, world):
-        client, db = world["client"], world["db"]
+        client = world["client"]
         res, token = self._invite(world)
         inv_id = res["invitation"]["id"]
         r = _call(client, "POST", f"/api/organizations/current/invitations/{inv_id}/resend",

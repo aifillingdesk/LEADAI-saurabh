@@ -17,7 +17,6 @@ import asyncio
 import logging
 import re
 import secrets
-import time as _time
 from datetime import timedelta
 from typing import Optional
 
@@ -443,9 +442,9 @@ async def logout(request: Request, response: Response):
     user = session_user(request)
     if user and user.get("session_id"):
         revoke_session(user["session_id"], revoked_by="user_logout")
-        await aaudit("auth.logout", "auth", user=user, **request_meta(request))
+        meta = request_meta(request)
+        await aaudit("auth.logout", "auth", user=user, ip=meta["ip"], user_agent=meta["user_agent"])
         if user.get("scope") == "partner":
-            meta = request_meta(request)
             _partner_auth_event(user.get("email") or "", "logout", True, None, meta["ip"], meta["user_agent"])
     clear_session_cookie(response)
     return {"success": True}
@@ -514,8 +513,9 @@ async def revoke_my_session(short_id: str, request: Request):
                                    details={"collection": "user_sessions",
                                             "resource_id": str(other["_id"])})
             raise HTTPException(status_code=404, detail="Session not found")
+    meta = request_meta(request)
     await aaudit("auth.sessions_revoked", "auth", user=user, details={"count": count},
-                 **request_meta(request))
+                 ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "revoked": count}
 
 
@@ -549,7 +549,8 @@ async def change_password(body: ChangePasswordRequest, request: Request, respons
         {"user_id": str(record["_id"]), "revoked_at": None,
          "session_id": {"$ne": user.get("session_id")}},
         {"$set": {"revoked_at": utcnow(), "revoked_by": "password_change"}})
-    await aaudit("auth.password_changed", "auth", user=user, **request_meta(request))
+    meta = request_meta(request)
+    await aaudit("auth.password_changed", "auth", user=user, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "message": "Password updated. Other sessions were signed out."}
 
 
@@ -675,7 +676,8 @@ async def enable_2fa(body: TotpVerifyRequest, request: Request):
         {"_id": ObjectId(str(user["user_id"]))},
         {"$set": {"totp_enabled": True, "totp_secret": body.secret, "totp_enabled_at": now, "updated_at": now}}
     )
-    await aaudit("auth.2fa_enabled", "auth", user=user, **request_meta(request))
+    meta = request_meta(request)
+    await aaudit("auth.2fa_enabled", "auth", user=user, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "message": "Two-factor authentication successfully enabled."}
 
 
@@ -710,7 +712,8 @@ async def disable_2fa(body: TotpDisableRequest, request: Request):
         {"_id": record["_id"]},
         {"$set": {"totp_enabled": False, "updated_at": now}, "$unset": {"totp_secret": "", "totp_enabled_at": ""}}
     )
-    await aaudit("auth.2fa_disabled", "auth", user=user, **request_meta(request))
+    meta = request_meta(request)
+    await aaudit("auth.2fa_disabled", "auth", user=user, ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "message": "Two-factor authentication disabled."}
 
 

@@ -13,7 +13,7 @@ invalidation and auditing are identical everywhere:
   * archiving is refused while live or pending subscriptions use the plan.
 """
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from bson import ObjectId
 from fastapi import HTTPException

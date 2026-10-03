@@ -159,7 +159,8 @@ def test_full_funnel_commission_wallet_payout_and_refunds(env):
     # payout fails -> the money is payable again; second payout is paid
     po = portal.post("/api/partner/v1/payouts", json={}).json()["payout"]
     url = f"/api/super-admin/partners/payouts/{po['id']}"
-    sa.post(url + "/approve", json={}); sa.post(url + "/process", json={})
+    sa.post(url + "/approve", json={})
+    sa.post(url + "/process", json={})
     assert sa.post(url + "/fail", json={"reason": ""}).status_code == 422
     assert sa.post(url + "/fail", json={"reason": "Bank rejected"}).json()["payout"]["status"] == "failed"
     assert db.partner_commissions.find_one({"_id": com["_id"]})["status"] == "payable"

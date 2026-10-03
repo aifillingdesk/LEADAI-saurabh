@@ -95,7 +95,7 @@ async def create_invitation(
         {"$set": {"status": "cancelled", "updated_at": now}},
     )
 
-    doc = {
+    doc: Dict[str, Any] = {
         "organization_id": s_org_id,
         "email": clean_email,
         "role": clean_role,

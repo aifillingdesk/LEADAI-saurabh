@@ -124,7 +124,8 @@ def _bucket(d: datetime, unit: str) -> str:
 
 
 def _labels(start: datetime, end: datetime, unit: str) -> List[str]:
-    labels, d = [], start
+    labels: List[str] = []
+    d = start
     while d <= end and len(labels) < 800:
         lbl = _bucket(d, unit)
         if not labels or labels[-1] != lbl:
@@ -222,9 +223,9 @@ def analytics(db, partner: Optional[Dict[str, Any]], start: datetime, end: datet
         if c.get("kind") == "commission" and c.get("status") != K.C_REVERSED:
             add("commission", c["created_at"], float(c.get("amount") or 0))
         cur = (c.get("currency") or "USD").upper()
-        b = by_status.setdefault(cur, dict.fromkeys(K.COMMISSION_STATUSES, 0.0))
-        b[c["status"]] = round(b.get(c["status"], 0.0) + float(c.get("amount") or 0), 2)
-    payouts = {"count": 0, "by_status": {}}
+        cur_totals = by_status.setdefault(cur, dict.fromkeys(K.COMMISSION_STATUSES, 0.0))
+        cur_totals[c["status"]] = round(cur_totals.get(c["status"], 0.0) + float(c.get("amount") or 0), 2)
+    payouts: Dict[str, Any] = {"count": 0, "by_status": {}}
     if not campaign_id:
         for po in db[K.PAYOUTS].find({**scope, "created_at": _rng(start, end)}, {"created_at": 1, "amount": 1,
                                                                                 "status": 1, "currency": 1}):

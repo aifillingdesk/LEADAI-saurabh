@@ -1,0 +1,11 @@
+# Ruff configuration (CI: `ruff check app tests scripts`).
+#
+# Ruff's built-in defaults keep growing between releases; pin the rule set
+# here so CI checks what this codebase holds itself to: real errors
+# (undefined names, unused imports/variables, syntax and import problems),
+# not style preferences.
+target-version = "py311"
+line-length = 130
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

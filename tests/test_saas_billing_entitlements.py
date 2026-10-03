@@ -22,20 +22,16 @@ from app.auth.service import build_session_value, COOKIE_NAME
 from app.billing.entitlements import (
     EntitlementService,
     QuotaExceededException,
-    FeatureNotAvailableException,
 )
 from app.billing.invitations import create_invitation, validate_invitation, accept_invitation
 from app.billing.plans import ensure_default_plans, get_all_plans, get_plan_by_slug_or_id
-from app.billing.provider import get_billing_provider, process_billing_webhook
+from app.billing.provider import process_billing_webhook
 from app.billing.subscriptions import (
     provision_trial_subscription,
     change_subscription_plan,
     cancel_subscription,
     reactivate_subscription,
-    extend_trial,
 )
-from app.billing.usage import record_usage_atomic, get_current_usage_doc
-from app.config import get_settings
 from app.db.models import utcnow
 from app.db.mongo import get_sync_db, reset_client_caches
 
@@ -494,7 +490,9 @@ class TestBillingAndWebhooks:
         assert invs[0]["total"] == 149.0
 
     def test_mock_webhook_requires_valid_signature(self, monkeypatch):
-        import hashlib, hmac, json
+        import hashlib
+        import hmac
+        import json
         from app.billing.provider import MockBillingProvider, WebhookSignatureError
         from app.admin import envvars
         monkeypatch.setattr(envvars, "get_envvar_str",

@@ -544,7 +544,7 @@ def create_adjustment(partner_id: str, *, amount: float, currency: str, reason: 
         raise HTTPException(status_code=422, detail="A reason is required")
     cur = (currency or "USD").upper()[:3]
     now = utcnow()
-    doc = {"partner_id": str(partner["_id"]), "referral_id": None, "organization_id": None,
+    doc: Dict[str, Any] = {"partner_id": str(partner["_id"]), "referral_id": None, "organization_id": None,
            "subscription_id": None, "invoice_id": None, "period_key": None, "event": "adjustment",
            "kind": "adjustment", "base_amount": 0.0, "currency": cur, "amount": amount,
            "original_amount": amount, "reversed_amount": 0.0, "status": K.C_PAYABLE,

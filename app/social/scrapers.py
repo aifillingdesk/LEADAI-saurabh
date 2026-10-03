@@ -9,10 +9,11 @@ with best-effort field mapping into the same document shapes.
 """
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.config import get_settings
 from app.connectors.apify_connector import ApifyConnector
+from app.db.models import utcnow
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -61,15 +62,15 @@ class SocialMediaScraper:
     def has_token(self) -> bool:
         return self.connector.has_token()
 
-    def fetch_page_details(self, url: str, should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+    def fetch_page_details(self, url: str, should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
     def fetch_posts(self, url: str, max_posts: int,
-                    should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                    should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
     def fetch_comments(self, post_url: str, max_comments: int,
-                       should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                       should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
     def normalize_page(self, item: Dict[str, Any], run_id: str, url: str) -> Optional[Dict[str, Any]]:
@@ -88,19 +89,19 @@ class FacebookScraper(SocialMediaScraper):
     platform = "facebook"
 
     def fetch_page_details(self, url: str,
-                           should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                           should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] Facebook: scraping page details")
         return self.connector.scrape_facebook_pages_by_urls([url],
                                                             should_abort=should_abort)
 
     def fetch_posts(self, url: str, max_posts: int,
-                    should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                    should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] Facebook: scraping posts (max %s)", max_posts)
         return self.connector.scrape_facebook_posts(
             [url], posts_per_page=max_posts, should_abort=should_abort)
 
     def fetch_comments(self, post_url: str, max_comments: int,
-                       should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                       should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] Facebook: scraping comments (max %s)", max_comments)
         return self.connector.scrape_facebook_comments(
             [post_url], comments_per_post=max_comments, should_abort=should_abort)
@@ -150,7 +151,7 @@ class InstagramScraper(SocialMediaScraper):
         return get_actor_id("instagram", "main")
 
     def fetch_page_details(self, url: str,
-                           should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                           should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] Instagram: scraping profile details")
         return self.connector.scrape_actor(
             self._actor_id,
@@ -162,7 +163,7 @@ class InstagramScraper(SocialMediaScraper):
         )
 
     def fetch_posts(self, url: str, max_posts: int,
-                    should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                    should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] Instagram: scraping posts (max %s)", max_posts)
         return self.connector.scrape_actor(
             self._actor_id,
@@ -174,7 +175,7 @@ class InstagramScraper(SocialMediaScraper):
         )
 
     def fetch_comments(self, post_url: str, max_comments: int,
-                       should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                       should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] Instagram: scraping comments (max %s)", max_comments)
         return self.connector.scrape_actor(
             self._actor_id,
@@ -314,7 +315,7 @@ class YouTubeScraper(SocialMediaScraper):
         return get_actor_id("youtube", "comments")
 
     def fetch_page_details(self, url: str,
-                           should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                           should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] YouTube: scraping channel/video details for %s", url)
         return self.connector.scrape_actor(
             self._actor_id,
@@ -325,7 +326,7 @@ class YouTubeScraper(SocialMediaScraper):
         )
 
     def fetch_posts(self, url: str, max_posts: int,
-                    should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                    should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         if "/watch?v=" in url or "/shorts/" in url:
             logger.info("[URL SEARCH] YouTube: direct video URL detected: %s", url)
             vid = url.split("watch?v=")[-1].split("&")[0] if "watch?v=" in url else url.split("/shorts/")[-1].split("?")[0]
@@ -348,7 +349,7 @@ class YouTubeScraper(SocialMediaScraper):
         )
 
     def fetch_comments(self, post_url: str, max_comments: int,
-                       should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                       should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] YouTube: scraping comments for %s (max %s)", post_url, max_comments)
         items = self.connector.scrape_actor(
             self._comments_actor_id,
@@ -511,7 +512,7 @@ class LinkedInScraper(SocialMediaScraper):
         return get_actor_id("linkedin", "posts")
 
     def fetch_page_details(self, url: str,
-                           should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                           should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] LinkedIn: scraping company details")
         return self.connector.scrape_actor(
             self._actor_id,
@@ -522,7 +523,7 @@ class LinkedInScraper(SocialMediaScraper):
         )
 
     def fetch_posts(self, url: str, max_posts: int,
-                    should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                    should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] LinkedIn: scraping posts (max %s)", max_posts)
         return self.connector.scrape_actor(
             self._posts_actor_id,
@@ -535,7 +536,7 @@ class LinkedInScraper(SocialMediaScraper):
         )
 
     def fetch_comments(self, post_url: str, max_comments: int,
-                       should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                       should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         logger.info("[URL SEARCH] LinkedIn: scraping comments (max %s)", max_comments)
         items = self.connector.scrape_actor(
             self._posts_actor_id,

@@ -7,7 +7,7 @@ exceptions with clear upgrade guidance.
 """
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from bson import ObjectId
 from fastapi import HTTPException
 

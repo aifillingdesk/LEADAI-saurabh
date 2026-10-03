@@ -10,7 +10,6 @@ Proves:
 from unittest.mock import patch
 
 import pytest
-from bson import ObjectId
 from fastapi.testclient import TestClient
 
 from tests.test_super_admin_portal2 import NOW, _cookie, _org, _user

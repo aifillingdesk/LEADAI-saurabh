@@ -11,8 +11,6 @@ Tests cover:
 - Security headers
 - XSS protection
 """
-import pytest
-from unittest.mock import patch, MagicMock
 
 
 # ── Password Hashing Tests ───────────────────────────────────────────────────
@@ -128,7 +126,7 @@ class TestSessionSecurity:
 
     def test_session_cookie_httponly(self):
         """Session cookie should be HttpOnly to prevent XSS access."""
-        from app.auth.service import set_session_cookie, COOKIE_NAME
+        from app.auth.service import set_session_cookie
         from starlette.responses import Response
         response = Response()
         set_session_cookie(response, {"email": "test@example.com", "name": "Test", "role": "user"})
@@ -316,5 +314,5 @@ class TestPasswordPolicy:
 # ── Import Fixtures ─────────────────────────────────────────────────────────
 
 # Save original DB function for cleanup
-import app.admin.envvars as _ev_module
+import app.admin.envvars as _ev_module  # noqa: E402 - fixture section imports
 _original_get_sync_db = _ev_module.get_sync_db

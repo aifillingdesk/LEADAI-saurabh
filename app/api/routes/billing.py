@@ -170,9 +170,10 @@ async def cancel_tenant_subscription(request: Request,
     db = get_async_db()
     sub = await cancel_subscription(ctx.tenant_id, at_period_end=True, db=db)
     from app.admin.audit import aaudit
+    meta = request_meta(request)
     await aaudit("subscription.cancel_requested", "billing", user=ctx.audit_user(),
                  organization_id=ctx.tenant_id, resource_type="subscription",
-                 resource_id=sub.get("id"), **request_meta(request))
+                 resource_id=sub.get("id"), ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "subscription": sub, "message": "Subscription will cancel at period end"}
 
 
@@ -183,9 +184,10 @@ async def reactivate_tenant_subscription(request: Request,
     db = get_async_db()
     sub = await reactivate_subscription(ctx.tenant_id, db=db)
     from app.admin.audit import aaudit
+    meta = request_meta(request)
     await aaudit("subscription.cancel_undone", "billing", user=ctx.audit_user(),
                  organization_id=ctx.tenant_id, resource_type="subscription",
-                 resource_id=sub.get("id"), **request_meta(request))
+                 resource_id=sub.get("id"), ip=meta["ip"], user_agent=meta["user_agent"])
     return {"success": True, "subscription": sub, "message": "Scheduled cancellation removed"}
 
 

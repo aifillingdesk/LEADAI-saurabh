@@ -332,3 +332,18 @@ def test_member_delete_removes_only_own_run_tree(env):
     for key in ("a_user2", "b_admin"):
         assert db.search_history.find_one({"run_id": r[key]["run"]}) is not None
         assert db.ai_comments.find_one({"_id": ObjectId(r[key]["lead"])}) is not None
+
+
+def test_search_preset_delete_creator_or_org_admin_only(env):
+    def create(key, name):
+        r = _as(env, key).post("/api/search-presets", json={"name": name, "keywords": ["price"]})
+        assert r.status_code == 200, r.text
+        return r.json()["preset"]["id"]
+    p1, p2 = create("a_user1", "user1 preset"), create("a_user2", "user2 preset")
+    # another member or another tenant can't even see it
+    assert _as(env, "a_user2").delete(f"/api/search-presets/{p1}").status_code == 404
+    assert _as(env, "b_admin").delete(f"/api/search-presets/{p1}").status_code == 404
+    # the creator can; so can the organization's owner/admin (settings.manage)
+    assert _as(env, "a_user1").delete(f"/api/search-presets/{p1}").status_code == 200
+    assert _as(env, "a_admin").delete(f"/api/search-presets/{p2}").status_code == 200
+    assert env["db"].search_presets.count_documents({"_id": {"$in": [ObjectId(p1), ObjectId(p2)]}}) == 0

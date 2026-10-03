@@ -17,21 +17,21 @@ Every actor call is wrapped so failures are CLASSIFIED, not guessed:
 
 Raw actor items are returned untouched; mapping happens in app/agent/search.py.
 """
+import contextvars
 import json
 import logging
 import re
 import time
+import uuid
 from datetime import timedelta
-
-# Active Apify run IDs (for graceful shutdown abort)
-_active_apify_runs: set = set()
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from apify_client.errors import ApifyApiError, ApifyClientError
 
 from app.config import get_settings
-import contextvars
-import uuid
+
+# Active Apify run IDs (for graceful shutdown abort)
+_active_apify_runs: set = set()
 
 # Tenant context of the pipeline step that is calling Apify (set by the
 # URL search / post / comment collectors) so every actor run is recorded in
@@ -312,7 +312,7 @@ class ApifyConnector:
 
     def _call_actor(self, actor_id: str, run_input: Dict[str, Any], label: str,
                     attempts: int = 1,
-                    should_abort: Optional[callable] = None) -> Any:
+                    should_abort: Optional[Callable[[], bool]] = None) -> Any:
         """Run an actor; classify every failure. Logs request + response.
 
         When `should_abort` is given (callable → bool), the run is started
@@ -373,7 +373,7 @@ class ApifyConnector:
 
     def _call_actor_polling(self, client: Any, actor_id: str,
                             run_input: Dict[str, Any], label: str,
-                            should_abort: callable) -> Any:
+                            should_abort: Callable[[], bool]) -> Any:
         """Start the actor run, then poll its status — aborting it as soon as
         `should_abort()` returns True (user clicked Cancel).
 
@@ -465,7 +465,7 @@ class ApifyConnector:
 
     def scrape_actor(self, actor_id: str, run_input: Dict[str, Any],
                      label: str, keyword: Optional[str] = None,
-                     should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                     should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         """Run an arbitrary Apify actor and return its dataset items.
 
         Failures are classified exactly like the Facebook actors
@@ -495,7 +495,7 @@ class ApifyConnector:
     # ─────────────────────────────────────────────────────────────────────────
 
     def scrape_facebook_pages_by_urls(self, page_urls: List[str],
-                                      should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                                      should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         if not page_urls:
             return []
         from app.admin.settings import get_actor_id
@@ -530,7 +530,7 @@ class ApifyConnector:
     # ─────────────────────────────────────────────────────────────────────────
 
     def scrape_facebook_posts(self, page_urls: List[str], posts_per_page: int = 20,
-                              should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                              should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         if not page_urls:
             return []
         from app.admin.settings import get_actor_id
@@ -567,7 +567,7 @@ class ApifyConnector:
     # ─────────────────────────────────────────────────────────────────────────
 
     def scrape_facebook_comments(self, post_urls: List[str], comments_per_post: int = 50,
-                                 should_abort: Optional[callable] = None) -> List[Dict[str, Any]]:
+                                 should_abort: Optional[Callable[[], bool]] = None) -> List[Dict[str, Any]]:
         if not post_urls:
             return []
         from app.admin.settings import get_actor_id

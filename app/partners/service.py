@@ -10,7 +10,7 @@ import logging
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from bson import ObjectId
 from fastapi import HTTPException
@@ -155,7 +155,7 @@ def notify_partner(partner: Dict[str, Any], ntype: str, title: str, message: str
 
 def get_program_settings(db=None) -> Dict[str, Any]:
     db = db if db is not None else get_sync_db()
-    stored = {}
+    stored: Dict[str, Any] = {}
     if db is not None:
         stored = db[K.SETTINGS].find_one({"_id": "program"}) or {}
     out = dict(K.DEFAULT_SETTINGS)
@@ -168,7 +168,7 @@ def validate_settings(values: Dict[str, Any]) -> Dict[str, Any]:
     for key, val in (values or {}).items():
         if key not in K.DEFAULT_SETTINGS:
             continue
-        default = K.DEFAULT_SETTINGS[key]
+        default: Any = K.DEFAULT_SETTINGS[key]
         if key == "attribution_model":
             if val not in K.ATTRIBUTION_MODELS:
                 raise HTTPException(status_code=422, detail="attribution_model must be first_touch or last_touch")
@@ -189,10 +189,10 @@ def validate_settings(values: Dict[str, Any]) -> Dict[str, Any]:
                 raise HTTPException(status_code=422, detail=f"{key} is out of range")
             out[key] = n
         elif key in ("min_payout", "max_partner_coupon_percent"):
-            n = float(val)
-            if n < 0 or (key == "max_partner_coupon_percent" and n > 100):
+            f = float(val)
+            if f < 0 or (key == "max_partner_coupon_percent" and f > 100):
                 raise HTTPException(status_code=422, detail=f"{key} is out of range")
-            out[key] = round(n, 2)
+            out[key] = round(f, 2)
         elif key == "payout_methods":
             methods = [re.sub(r"[^a-z0-9_]", "", str(m).lower())[:30] for m in (val or [])]
             out[key] = [m for m in methods if m] or list(default)
@@ -513,6 +513,7 @@ def public_application(a: Dict[str, Any], *, admin: bool = False) -> Dict[str, A
 
 def _clean_socials(raw: Any) -> Dict[str, str]:
     out: Dict[str, str] = {}
+    items: Iterable[Tuple[Any, Any]]
     if isinstance(raw, dict):
         items = raw.items()
     elif isinstance(raw, list):

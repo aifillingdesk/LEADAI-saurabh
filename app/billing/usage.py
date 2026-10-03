@@ -8,7 +8,6 @@ import calendar
 from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, Optional, Tuple
-from bson import ObjectId
 
 from app.db.models import utcnow
 from app.db.mongo import get_async_db, get_sync_db

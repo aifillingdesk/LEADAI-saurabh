@@ -97,7 +97,7 @@ def list_scheduled_scans(
 
 def delete_scheduled_scan(db, scan_id: str, organization_id: str) -> bool:
     """Delete a scheduled scan, scoped to organization."""
-    q = {"organization_id": str(organization_id)}
+    q: dict[str, Any] = {"organization_id": str(organization_id)}
     if ObjectId.is_valid(scan_id):
         q["$or"] = [{"_id": ObjectId(scan_id)}, {"scan_id": scan_id}]
     else:

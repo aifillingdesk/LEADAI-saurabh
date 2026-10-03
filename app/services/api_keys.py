@@ -84,7 +84,7 @@ def list_api_keys(db, organization_id: str) -> list[dict[str, Any]]:
 
 def revoke_api_key(db, key_id: str, organization_id: str) -> bool:
     """Revoke an API key."""
-    q = {"organization_id": str(organization_id)}
+    q: dict[str, Any] = {"organization_id": str(organization_id)}
     if ObjectId.is_valid(key_id):
         q["$or"] = [{"_id": ObjectId(key_id)}, {"key_id": key_id}]
     else:

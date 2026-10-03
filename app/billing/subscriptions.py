@@ -18,7 +18,7 @@ Every transition is validated against ``ALLOWED_TRANSITIONS``, audited and
 notified. Legacy statuses (trialing, past_due, paused, incomplete) are still
 readable for old documents.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 import logging
 from typing import Any, Dict, Optional
 from bson import ObjectId
@@ -411,7 +411,7 @@ def customer_view(doc: Dict[str, Any]) -> Dict[str, Any]:
 def _clean_sub(doc: Dict[str, Any]) -> Dict[str, Any]:
     if not doc:
         return {}
-    out = {}
+    out: Dict[str, Any] = {}
     for k, v in doc.items():
         if k == "_id":
             out["id"] = str(v)

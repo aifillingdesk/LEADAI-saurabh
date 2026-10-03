@@ -103,18 +103,18 @@ class GoogleSheetsFormatter:
     @classmethod
     def format_rows(cls, leads: list[dict[str, Any]]) -> list[list[str]]:
         rows = [cls.COLUMNS]
-        for l in leads:
+        for lead in leads:
             row = [
-                sanitize_cell_value(str(l.get("_id") or l.get("id") or "")),
-                sanitize_cell_value(l.get("platform", "")),
-                sanitize_cell_value(lead_name(l)),
-                sanitize_cell_value(l.get("phone", "")),
-                sanitize_cell_value(l.get("email", "")),
-                sanitize_cell_value(l.get("intent", "")),
-                sanitize_cell_value(l.get("priority", "")),
-                sanitize_cell_value(l.get("lead_score", "")),
-                sanitize_cell_value(l.get("comment_text", "")),
-                sanitize_cell_value(str(l.get("created_at", ""))),
+                sanitize_cell_value(str(lead.get("_id") or lead.get("id") or "")),
+                sanitize_cell_value(lead.get("platform", "")),
+                sanitize_cell_value(lead_name(lead)),
+                sanitize_cell_value(lead.get("phone", "")),
+                sanitize_cell_value(lead.get("email", "")),
+                sanitize_cell_value(lead.get("intent", "")),
+                sanitize_cell_value(lead.get("priority", "")),
+                sanitize_cell_value(lead.get("lead_score", "")),
+                sanitize_cell_value(lead.get("comment_text", "")),
+                sanitize_cell_value(str(lead.get("created_at", ""))),
             ]
             rows.append(row)
         return rows
@@ -143,18 +143,18 @@ class ExcelExportService:
         output.write('   </Row>\n')
 
         # Data rows
-        for l in leads:
+        for lead in leads:
             row_data = [
-                str(l.get("_id") or l.get("id") or ""),
-                l.get("platform", ""),
-                lead_name(l),
-                l.get("phone", ""),
-                l.get("email", ""),
-                l.get("intent", ""),
-                l.get("priority", ""),
-                str(l.get("lead_score", 0)),
-                (l.get("comment_text") or "")[:500],
-                str(l.get("created_at") or "")[:19],
+                str(lead.get("_id") or lead.get("id") or ""),
+                lead.get("platform", ""),
+                lead_name(lead),
+                lead.get("phone", ""),
+                lead.get("email", ""),
+                lead.get("intent", ""),
+                lead.get("priority", ""),
+                str(lead.get("lead_score", 0)),
+                (lead.get("comment_text") or "")[:500],
+                str(lead.get("created_at") or "")[:19],
             ]
             output.write('   <Row>\n')
             for cell in row_data:

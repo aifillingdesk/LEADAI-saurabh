@@ -83,7 +83,6 @@ def client():
          patch("app.db.mongo.get_sync_db", return_value=mock_sync_db), \
          patch("app.db.mongo.get_async_db", return_value=mock_async_db), \
          patch("app.api.routes.super_admin.get_async_db", return_value=mock_async_db), \
-         patch("app.api.routes.super_admin.get_sync_db", return_value=mock_sync_db), \
          patch("app.db.mongo.get_async_client", new_callable=MagicMock), \
          patch("app.auth.roles.get_sync_db", return_value=mock_sync_db), \
          patch("app.auth.roles.s") as mock_roles_s, \
@@ -172,7 +171,7 @@ class TestSuperAdminRequiresAuth:
         import base64 as b64
         import json
         import time
-        from app.auth.service import build_session_value, COOKIE_NAME, _sign
+        from app.auth.service import COOKIE_NAME, _sign
 
         payload = {
             "v": 1,

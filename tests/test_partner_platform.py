@@ -2,8 +2,6 @@
 Partner platform — analytics (reconciled with invoices), notifications,
 marketing center, Partner API and fraud review, on the real routes.
 """
-import json
-from datetime import timedelta
 from unittest.mock import patch
 
 import pytest

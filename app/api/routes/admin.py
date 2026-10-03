@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel as _PydanticBaseModel
 
 from app.admin import settings as s
 from app.admin import audit as a
@@ -361,7 +362,8 @@ async def dashboard(days: int = Query(30, ge=1, le=365),
         daily[key] = _fill_daily(counts, start, end)
     labels = [(start + timedelta(days=i)).strftime("%Y-%m-%d")
               for i in range(span)]
-    series = lambda key: [daily[key][d] for d in labels]
+    def series(key):
+        return [daily[key][d] for d in labels]
 
     async def window_total(coll, field, s, e, extra=None):
         return sum(c["count"] for c in
@@ -834,7 +836,7 @@ async def failed_jobs(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1,
             .skip(offset).limit(limit)]
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    summary = {
+    summary: Dict[str, Any] = {
         "total": await _count(db, "search_history", query),
         "today": await _count(db, "search_history",
                               _range_query("created_at", today_start, now, query)),
@@ -916,7 +918,7 @@ async def list_leads(
     rows = [doc async for doc in
             db.ai_comments.find(query).sort("lead_score", -1)
             .skip(offset).limit(limit)]
-    summary = {"total": await _count(db, "ai_comments", {"is_lead": True}),
+    summary: Dict[str, Any] = {"total": await _count(db, "ai_comments", {"is_lead": True}),
                "with_contact": 0, "by_platform": {}, "this_week": 0,
                "avg_score": None}
     try:
@@ -1174,7 +1176,7 @@ async def analytics(
         {"$group": {"_id": "$platform", "count": {"$sum": 1}}}]):
         leads_by_platform[doc["_id"] or "unknown"] = doc["count"]
 
-    score_buckets = {}
+    score_buckets: Dict[str, int] = {}
     async for doc in db.ai_comments.aggregate([
         {"$match": {"is_lead": True, **analyzed_match}},
         {"$group": {"_id": "$lead_score", "count": {"$sum": 1}}}]):
@@ -1493,7 +1495,7 @@ async def usage(days: int = Query(30, ge=1, le=365)):
     """Apify usage from REAL run metadata stored on search runs."""
     db = await _db()
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    per_actor = {}
+    per_actor: Dict[str, Dict[str, Any]] = {}
     total_cost = 0.0
     runs_with_usage = 0
     cursor = db.search_history.find({
@@ -1766,7 +1768,7 @@ async def list_comments(
     rows = [doc async for doc in
             db.ai_comments.find(query).sort("lead_score", -1)
             .skip(offset).limit(limit)]
-    summary = {
+    summary: Dict[str, Any] = {
         "total": await _count(db, "ai_comments"),
         "analyzed": await _count(db, "ai_comments", {"analyzed_at": {"$ne": None}}),
         "leads": await _count(db, "ai_comments", {"is_lead": True}),
@@ -2080,7 +2082,7 @@ async def logs(
         "warning": all_levels.count("WARNING"),
         "info": all_levels.count("INFO"),
         "debug": all_levels.count("DEBUG"),
-        "other": sum(1 for l in all_levels if l not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")),
+        "other": sum(1 for lvl in all_levels if lvl not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")),
     }
 
     # Collect distinct modules and sources for filter dropdowns
@@ -2119,7 +2121,7 @@ async def logs_stats(
         "warning": all_levels.count("WARNING"),
         "info": all_levels.count("INFO"),
         "debug": all_levels.count("DEBUG"),
-        "other": sum(1 for l in all_levels if l not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")),
+        "other": sum(1 for lvl in all_levels if lvl not in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")),
         "total": len(entries),
     }
     modules = sorted(set(e.get("module", "") for e in entries if e.get("module")))
@@ -2184,7 +2186,7 @@ async def admin_export(
             row["platform"] = _resolve_platform(row)
         response = _csv_response(rows, POSTS_CSV, f"admin_posts_{stamp}.csv")
     elif scope == "leads":
-        query: Dict[str, Any] = {"is_lead": only_leads}
+        query = {"is_lead": only_leads}
         if platform:
             query["platform"] = platform
         if q:
@@ -2563,7 +2565,6 @@ async def health_check():
 # SAAS MULTI-TENANT MANAGEMENT (Super Admin Foundation)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from pydantic import BaseModel as _PydanticBaseModel
 
 
 class CreateOrgRequest(_PydanticBaseModel):
@@ -2859,7 +2860,7 @@ async def update_organization(org_id: str, body: UpdateOrgRequest):
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    updates = {}
+    updates: Dict[str, Any] = {}
     if body.name is not None:
         updates["name"] = body.name.strip()
     if body.plan_id is not None:
@@ -3247,8 +3248,8 @@ async def list_admin_subscriptions(
 
     cursor = db.subscriptions.find(query).sort("created_at", -1).skip(offset).limit(limit)
     rows = []
-    async for s in cursor:
-        doc = _serialize_oid(s)
+    async for sub in cursor:
+        doc = _serialize_oid(sub)
         # Enrich with org name
         try:
             org = await db.organizations.find_one({"_id": ObjectId(doc["organization_id"])})

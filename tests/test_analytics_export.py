@@ -13,10 +13,8 @@ Tests the complete analytics/reporting/export layer:
 """
 import csv
 import io
-from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone
 
-import pytest
 
 
 # ── CSV Safety ───────────────────────────────────────────────────────────────
@@ -43,14 +41,12 @@ class TestCsvFormulaInjection:
 
     def test_tab_prefix(self):
         # Tab is stripped by .strip() in _sanitize_csv_value, so test raw prefix behavior
-        from app.api.routes.search import _sanitize_csv_value
         # Tab at start gets stripped, so test that it doesn't crash
         result = self._sanitize("\tformula")
         assert isinstance(result, str)
 
     def test_carriage_return_prefix(self):
         # CR is stripped by .strip() in _sanitize_csv_value, so test raw prefix behavior
-        from app.api.routes.search import _sanitize_csv_value
         result = self._sanitize("\rformula")
         assert isinstance(result, str)
 
@@ -520,14 +516,12 @@ class TestDateEdgeCases:
 class TestAuthRequirements:
     def test_export_has_auth_check(self):
         """Export endpoint checks features.exports.enabled setting."""
-        import ast
         with open("app/api/routes/search.py", "r", encoding="utf-8") as f:
             content = f.read()
         assert "features.exports.enabled" in content
 
     def test_admin_export_has_manager_role(self):
         """Admin export requires manager role."""
-        import ast
         with open("app/api/routes/admin.py", "r", encoding="utf-8") as f:
             content = f.read()
         assert "require_manager" in content
