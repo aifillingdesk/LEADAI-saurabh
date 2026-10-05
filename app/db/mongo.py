@@ -4,6 +4,8 @@ agents (threads). `ensure_indexes` is called once at startup and never
 crashes the server when Mongo is temporarily unreachable.
 """
 import logging
+import threading
+import time
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient, ASCENDING, DESCENDING
@@ -89,8 +91,13 @@ def reset_client_caches():
 
 
 _sync_client_cache: Optional[MongoClient] = None
+_sync_client_created: float = 0.0
 # Tracks consecutive sync DB failures to back off log noise
 _sync_fail_count: int = 0
+# A new client reports every server as Unknown until its first check, and
+# under load that can take a while: only a client that has stayed unreachable
+# this long is replaced.
+_UNREACHABLE_GRACE_S = 30.0
 
 
 def get_sync_client() -> Optional[MongoClient]:
@@ -101,8 +108,8 @@ def get_sync_client() -> Optional[MongoClient]:
     creates a fresh connection rather than returning a permanently broken
     client that would block every request for the full serverSelectionTimeoutMS.
     """
-    global _sync_client_cache, _sync_fail_count
-    if _sync_client_cache is not None:
+    global _sync_client_cache, _sync_fail_count, _sync_client_created
+    if _sync_client_cache is not None and time.monotonic() - _sync_client_created > _UNREACHABLE_GRACE_S:
         # Detect a stale/broken client: all servers are Unknown (no primary).
         try:
             td = _sync_client_cache.topology_description
@@ -113,11 +120,13 @@ def get_sync_client() -> Optional[MongoClient]:
             if all_unknown:
                 logger.warning("Sync MongoClient topology has no reachable servers "
                                "— resetting client cache for reconnect")
-                try:
-                    _sync_client_cache.close()
-                except Exception:
-                    pass
+                stale = _sync_client_cache
                 _sync_client_cache = None
+                # other threads may still be using it: close it once their
+                # operations are over (socket timeout is 10 s), never right away
+                timer = threading.Timer(60.0, _close_quietly, args=(stale,))
+                timer.daemon = True
+                timer.start()
         except Exception:
             pass  # topology introspection not critical
     if _sync_client_cache is not None:
@@ -134,6 +143,7 @@ def get_sync_client() -> Optional[MongoClient]:
             minPoolSize=5,
             maxIdleTimeMS=45000,
         )
+        _sync_client_created = time.monotonic()
         _sync_fail_count = 0
         return _sync_client_cache
     except Exception as e:
@@ -141,6 +151,13 @@ def get_sync_client() -> Optional[MongoClient]:
         logger.warning(f"Sync MongoClient connection warning: {e}")
         _sync_client_cache = None
         return None
+
+
+def _close_quietly(client: MongoClient) -> None:
+    try:
+        client.close()
+    except Exception:
+        pass
 
 
 def get_sync_db():
