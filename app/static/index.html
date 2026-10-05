@@ -802,6 +802,12 @@
                 </div>
 
                 <div class="comments-toolbar-selects">
+                  <select id="commentsQualificationFilter" class="filter-select" onchange="renderCommentsScreen()" aria-label="Filter by comment qualification">
+                    <option value="">Qualified + not qualified</option>
+                    <option value="qualified">Qualified (went to AI)</option>
+                    <option value="not_qualified">Not qualified (skipped by filter)</option>
+                  </select>
+
                   <select id="commentsQualityFilter" class="filter-select" onchange="renderCommentsScreen()" aria-label="Filter by lead quality">
                     <option value="">All qualities</option>
                     <option value="hot">Hot</option>

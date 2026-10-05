@@ -873,6 +873,10 @@ async def collect_comments(post_id: str, request: Request,
 
     db = _db_or_503()
     await _find_or_404(db, "facebook_posts", {"_id": _oid(post_id)}, ctx, request)
+    running = _tasks.get(f"comments:{post_id}")
+    if running and not running.done():
+        # checked before charging: a second click must not pay for nothing
+        return {"status": "running", "message": "Comments collection already in progress"}
     lim = effective_limits()
     requested = max_comments
     max_comments = min(max_comments or lim["max_comments_per_post_default"],
@@ -888,6 +892,19 @@ async def collect_comments(post_id: str, request: Request,
     return {"status": "running", "message": "Comments collection + AI analysis started"}
 
 
+def _comment_qualification(filter_status: Any, analyzed: bool) -> str:
+    """Did the comment pass the organization's comment filter (and go to AI)?
+    qualified: matched the filter, or no filter applied, or already analyzed;
+    not_qualified: the filter skipped it (stored, never sent to AI);
+    pending: not checked yet (collection or analysis still running / failed)."""
+    from app.pipeline import comment_filter as cfilter
+    if filter_status == cfilter.STATUS_NOT_MATCHED:
+        return "not_qualified"
+    if filter_status in (cfilter.STATUS_MATCHED, cfilter.STATUS_NO_FILTER) or analyzed:
+        return "qualified"
+    return "pending"
+
+
 @router.get("/posts/{post_id}/comments")
 async def list_post_comments(
     post_id: str,
@@ -897,6 +914,7 @@ async def list_post_comments(
     contact_only: bool = Query(False, description="only comments with phone or email"),
     q: str | None = Query(None, description="Search text in comment, name, phone, email"),
     quality: str | None = Query(None, description="hot | warm | cold"),
+    qualification: str | None = Query(None, description="qualified | not_qualified (comment filter result)"),
     sort_by: str = Query("score", description="score | newest | reactions | oldest"),
     offset: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=1000),
@@ -939,6 +957,7 @@ async def list_post_comments(
 
         # attach AI fields if analyzed
         analysis = ai_map.get(c["id"])
+        c["qualification"] = _comment_qualification(raw.get("keyword_filter_status"), bool(analysis))
         if analysis:
             for key in ("is_lead", "lead_score", "priority", "lead_quality",
                         "confidence", "intent", "urgency", "budget", "requirement",
@@ -963,8 +982,13 @@ async def list_post_comments(
     total_pricing = sum(1 for d in docs if d.get("budget") or any(w in (d.get("comment_text") or "").lower() for w in ["price", "cost", "rate", "kitna", "how much", "quote", "charges", "fees", "fee", "budget"]))
     total_inquiry = sum(1 for d in docs if "?" in (d.get("comment_text") or "") or any(w in (d.get("comment_text") or "").lower() for w in ["details", "info", "interested", "available", "where", "how", "share", "send", "call", "dm", "location", "address", "contact"]))
 
+    qualification_counts = {k: sum(1 for d in docs if d["qualification"] == k)
+                            for k in ("qualified", "not_qualified", "pending")}
+
     # Apply active filters
     filtered = docs
+    if qualification in ("qualified", "not_qualified", "pending"):
+        filtered = [d for d in filtered if d["qualification"] == qualification]
 
     if q and q.strip():
         q_lower = q.strip().lower()
@@ -1028,6 +1052,8 @@ async def list_post_comments(
             "pricing": total_pricing,
             "inquiry": total_inquiry,
         },
+        "qualification_counts": qualification_counts,
+        "comments_all_fetched": bool(post.get("comments_all_fetched")),
         "comments_status": post.get("comments_status"),
         "total_comment_count": post.get("total_comment_count") or post.get("comments_count") or total_all,
         "scraped_comment_count": post.get("scraped_comment_count") or total_all,

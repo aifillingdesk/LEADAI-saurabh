@@ -895,9 +895,13 @@ def collect_post_comments(post_id: str, max_comments: int = 200,
     analysis_error = None
     # mark completed as soon as comments are stored so the UI can show them
     # immediately — AI analysis below only refines the data further
+    # fewer comments returned than asked for = everything the platform gives
+    # (the reported total also counts hidden / deleted / reply comments)
+    all_fetched = len(items) < max_comments
     db.facebook_posts.update_one({"_id": post["_id"]}, {"$set": {
         "comments_status": status, "scraped_comment_count": stored,
         "comments_error": None if stored else message,
+        "comments_all_fetched": all_fetched,
         "comments_collected_at": utcnow(), "updated_at": utcnow()}})
 
     if stored:

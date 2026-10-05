@@ -3783,3 +3783,10 @@ div.toast-action { color: var(--text-dim); font-weight: 500; }
   .modal-close { justify-content: normal; }
   .modal-footer { gap: normal; align-items: normal; }
 }
+
+/* Comment qualification (comment filter result) + on-demand "collect all comments" */
+.badge-qualified { color: var(--green-text); background: var(--green-soft); border: 1px solid var(--success-border); }
+.badge-not-qualified { color: var(--text-dim); background: var(--surface-2); border: 1px dashed var(--border-strong); }
+.collect-all-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+.collect-all-line > span { min-width: 0; max-width: calc(100% - 30px); }
+.collect-all-line .collect-all-btn { font-size: 0.78rem; padding: 6px 14px; font-family: var(--font-ui); }

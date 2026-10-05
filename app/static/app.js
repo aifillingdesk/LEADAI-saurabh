@@ -2247,6 +2247,7 @@ async function renderCommentsScreen() {
 
   const searchVal = $("commentsSearchInput") ? $("commentsSearchInput").value.trim() : "";
   const qualityVal = $("commentsQualityFilter") ? $("commentsQualityFilter").value : "";
+  const qualificationVal = $("commentsQualificationFilter") ? $("commentsQualificationFilter").value : "";
   const sortByVal = $("commentsSortBy") ? $("commentsSortBy").value : "score";
   const limitVal = Math.max(memory.commentsPerPost || 50, 200);
 
@@ -2257,6 +2258,7 @@ async function renderCommentsScreen() {
   });
   if (searchVal) params.set("q", searchVal);
   if (qualityVal) params.set("quality", qualityVal);
+  if (qualificationVal) params.set("qualification", qualificationVal);
 
   const res = await api(`/api/posts/${encodeURIComponent(memory.postId)}/comments?${params.toString()}`);
   const tbody = $("commentsGrid");
@@ -2312,11 +2314,11 @@ async function renderCommentsScreen() {
   };
   const activeLabel = filterLabels[activeCommentFilter] || "Showing comments";
   const searchNote = searchVal ? ` matching "<b>${esc(searchVal)}</b>"` : "";
-  const kf = data.post && data.post.keyword_filter;
-  const qualNote = kf && kf.total
-    ? `<div class="summary-line qual-line">${ico("filter")} Comment qualification: <b>${esc(kf.matched || 0)}</b> of <b>${esc(kf.total)}</b> comments matched the filter and went to AI analysis${kf.not_matched ? ` · ${esc(kf.not_matched)} skipped` : ""}</div>`
+  const qc = data.qualification_counts || {};
+  const qualNote = (qc.qualified || 0) + (qc.not_qualified || 0) > 0
+    ? `<div class="summary-line qual-line">${ico("filter")} Comment qualification: <b>${esc(qc.qualified || 0)}</b> qualified and went to AI analysis · <b>${esc(qc.not_qualified || 0)}</b> not qualified (kept, not sent to AI)${qc.not_qualified ? ` · <button type="button" class="link-btn" onclick="showCommentsQualification('not_qualified')">Show them</button>` : ""}</div>`
     : "";
-  statusBox.innerHTML = `<div class="summary-line">${activeLabel}${searchNote} · <b>${esc(data.total)}</b> of <b>${esc(data.all_count || 0)}</b> comments displayed</div>${qualNote}`;
+  statusBox.innerHTML = `<div class="summary-line">${activeLabel}${searchNote} · <b>${esc(data.total)}</b> of <b>${esc(data.all_count || 0)}</b> comments displayed</div>${qualNote}${collectAllBar(data)}`;
   statusBox.classList.remove("hidden");
 
   if (!hasComments) {
@@ -2324,6 +2326,7 @@ async function renderCommentsScreen() {
     empty.classList.remove("hidden");
     empty.querySelector(".empty-sub").textContent =
       searchVal ? `No comments found matching "${searchVal}" under this filter`
+      : qualificationVal ? `${qualificationVal === "qualified" ? "No qualified comments here" : "No comments were skipped by your comment filter"} — choose "Qualified + not qualified" to see everything`
       : activeCommentFilter !== "all" ? `No comments under this filter — choose "All comments" to see everything`
       : "No comments on this post yet — collect comments from the Posts screen";
     return;
@@ -2358,6 +2361,7 @@ async function renderCommentsScreen() {
               ${esc(c.commenter_name || "Commenter")}
               <span class="platform-badge ${platformCls}">${esc(commentInfo.name || c.platform || "Social")}</span>
               ${c.has_contact ? `<span class="badge badge-lead">${ico("phone")} Contact ready</span>` : ""}
+              ${qualificationBadge(c)}
             </div>
             <div class="lc-meta">
               ${c.published_date ? `<span>${ico("clock")} ${esc(formatDate(c.published_date))}</span>` : ""}
@@ -2390,6 +2394,94 @@ async function renderCommentsScreen() {
 
   if (data.comments_status === "running" && currentView === "comments") {
     _commentsTimer = setTimeout(renderCommentsScreen, 3000);
+  }
+}
+
+/** Did the comment pass the comment filter (and go to AI analysis)? */
+function qualificationBadge(c) {
+  if (c.qualification === "qualified") {
+    const kw = (c.matched_keywords || []).slice(0, 3).join(", ");
+    return `<span class="badge badge-qualified" title="${kw ? `Matched: ${esc(kw)}` : "Passed the comment filter"}">✓ Qualified</span>`;
+  }
+  if (c.qualification === "not_qualified") {
+    return `<span class="badge badge-not-qualified" title="Didn't match your comment filter, so it wasn't sent to AI analysis">Not qualified</span>`;
+  }
+  return "";
+}
+
+function showCommentsQualification(value) {
+  const sel = $("commentsQualificationFilter");
+  if (sel) sel.value = value;
+  renderCommentsScreen();
+}
+
+/** "35 comments on this post · 1 collected · Collect all" (collected only on demand). */
+function collectAllBar(data) {
+  const total = Number(data.total_comment_count) || 0;
+  const have = Number(data.all_count) || 0;
+  if (data.comments_status === "running" || !(total > have)) return "";
+  const cap = searchCaps().comments_per_post || 0;
+  const target = cap ? Math.min(total, cap) : total;
+  const note = `<b>${esc(total)}</b> comments on this post · <b>${esc(have)}</b> collected so far.`;
+  if (data.comments_all_fetched) {
+    // the last collection got everything the platform returns: offering it again would only charge again
+    return `<div class="summary-line collect-all-line">${ico("message")} <span><b>${esc(have)}</b> of <b>${esc(total)}</b> comments could be collected — the rest are hidden, deleted or replies the platform doesn't return.</span></div>`;
+  }
+  if (!can("search.create")) return `<div class="summary-line collect-all-line">${ico("message")} <span>${note}</span></div>`;
+  if (target <= have) {
+    return `<div class="summary-line collect-all-line">${ico("message")} <span>${note} Your plan collects up to ${esc(cap)} comments per post.</span></div>`;
+  }
+  const label = target >= total ? `Collect all ${esc(total)} comments` : `Collect ${esc(target)} comments`;
+  return `<div class="summary-line collect-all-line">${ico("message")} <span>${note}</span>
+    <button type="button" class="btn-primary collect-all-btn" onclick="collectAllComments(${Number(target)}, ${Number(total)})">${label}</button></div>`;
+}
+
+async function collectAllComments(target, total) {
+  const postId = memory.postId;
+  if (!postId) return;
+  const ok = await confirmAction({
+    title: target >= total ? `Collect all ${target} comments?` : `Collect ${target} comments?`,
+    message: "Every comment is collected and kept. Only the ones that match your comment filter go to AI analysis; " +
+      "the others show as \"Not qualified\". Comments already analyzed are not analyzed again. This counts as one comment collection." +
+      (target < total ? ` Your plan collects up to ${target} comments per post.` : ""),
+    confirmLabel: "Collect comments",
+  });
+  if (!ok) return;
+  const buttons = document.querySelectorAll(".collect-all-btn");
+  buttons.forEach((b) => { b.disabled = true; });
+  const before = await api(`/api/posts/${encodeURIComponent(postId)}/comments?limit=1`);
+  const startedBefore = before.ok && before.data.post ? before.data.post.comments_started_at : undefined;
+  const res = await api(`/api/posts/${encodeURIComponent(postId)}/comments?max_comments=${target}`, { method: "POST" });
+  if (!res.ok) {
+    buttons.forEach((b) => { b.disabled = false; });
+    if (handleEntitlementError(res.status, res.data)) return;
+    toastError(errText(res.data, "Collection failed"));
+    return;
+  }
+  if (res.data.status === "skipped") {
+    buttons.forEach((b) => { b.disabled = false; });
+    toast(res.data.message || "Not collected", "info");
+    return;
+  }
+  toast("Collecting all comments… they appear here as they arrive", "info");
+  refreshSummary();
+  await waitForCollectionStart(postId, startedBefore);
+  if (memory.postId === postId && currentView === "comments") renderCommentsScreen();
+  await waitForComments(postId);
+  if (memory.postId === postId && currentView === "comments") renderCommentsScreen();
+}
+
+/** The collection job marks the post "running" a moment after the POST returns:
+ *  wait for that (a new comments_started_at) so the screen doesn't read the old
+ *  "completed" state and stop refreshing. */
+async function waitForCollectionStart(postId, startedBefore) {
+  for (let i = 0; i < 20; i++) {
+    const res = await api(`/api/posts/${encodeURIComponent(postId)}/comments?limit=1`);
+    if (res.ok) {
+      const started = res.data.post ? res.data.post.comments_started_at : undefined;
+      if (res.data.comments_status === "running" || started !== startedBefore) return;
+    }
+    await sleep(500);
   }
 }
 

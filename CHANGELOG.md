@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Marketing center with private file uploads, categories, per-partner visibility, email templates and download tracking.
   - Coupon and fraud notifications.
   - Partner API: an index endpoint, notifications readable with an API key, and key usage tracking.
+- **Every comment of a post, qualified or not**, on the post's comments screen:
+  - A new filter shows qualified comments (matched the comment filter and went to AI), not-qualified ones (kept, never sent to AI) or both. Each comment carries a Qualified / Not qualified badge, and the summary line counts both.
+  - When the platform reports more comments than were collected (e.g. 35 on the post, 1 collected because of "Max / post"), a **Collect all comments** button collects the rest on demand, up to the plan's per-post limit.
+  - Collecting again never pays for AI twice: comments Gemini already analyzed (same text) are skipped.
 - **LeadAI-provided or your own API keys, chosen per API** (`docs/API_COVERAGE.md`):
   - For Apify and Gemini separately, an organization uses LeadAI's (included in the price) or brings its own key (cheaper). Starter: $49 all included, $37 own Apify, $41 own Gemini, $29 both. Prices come from `price_for(plan, coverage, cycle)`, and the Super Admin sets each plan's per-API amounts.
   - Where it's chosen: the pricing page toggles, checkout (`api_coverage`), Org Admin → **API keys & plan**, and the Super Admin organization page (including a forced switch with a reason and removing compromised keys).

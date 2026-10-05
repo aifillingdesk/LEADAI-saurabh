@@ -1390,13 +1390,24 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
     else:
         filtered_out = 0
 
+    # collecting a post's comments again (e.g. "collect all") must not pay for
+    # Gemini twice: comments the AI already analyzed with the same text are kept
+    already = 0
+    if comments:
+        done = {a["comment_ref"]: a.get("comment_text") for a in db.ai_comments.find(
+            {"comment_ref": {"$in": [str(c["_id"]) for c in comments]}, "analyzed_by": "gemini"},
+            {"comment_ref": 1, "comment_text": 1})}
+        fresh = [c for c in comments if str(c["_id"]) not in done or done[str(c["_id"])] != c.get("text")]
+        already = len(comments) - len(fresh)
+        comments = fresh
+
     summary: Dict[str, Any] = {
         "status": "completed",
         "post_id": post_doc.get("post_id") or str(post_doc["_id"]),
         "post_ref": post_ref,
         "analyzed": 0, "useful": 0, "meaningless": 0, "displayed": 0,
         "analyzed_by_rules": 0, "analyzed_by_gemini": 0, "errors": 0,
-        "filtered_out": filtered_out,
+        "filtered_out": filtered_out, "already_analyzed": already,
         "keyword_filter": filter_summary or
         ({"enabled": True, "status": "completed", "matched": len(comments),
           "not_matched": filtered_out} if comment_refs is not None else None),
@@ -1542,7 +1553,7 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
         else:
             summary["analyzed_by_rules"] += 1
 
-    if not comments:
+    if not comments and not already:
         summary["status"] = "empty"
         summary["message"] = "No comments stored for this post"
     summary["leads_created"] = leads_created
