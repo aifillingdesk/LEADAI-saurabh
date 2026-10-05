@@ -76,7 +76,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             ms = (time.perf_counter() - started) * 1000
             # visible in the browser's Network tab (Timing) for every request
             response.headers["Server-Timing"] = f"app;dur={ms:.0f}"
-            if ms >= _SLOW_REQUEST_MS and request.url.path != "/health":
+            if ms >= _SLOW_REQUEST_MS and request.url.path not in ("/health", "/api/health"):
                 _slow_log.warning("slow request %s %s -> %s in %.0f ms", request.method, request.url.path,
                                   response.status_code, ms)
             return response

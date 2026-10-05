@@ -185,7 +185,55 @@ def _impersonated_org_context(claims: Dict[str, Any], db) -> TenantContext:
 
 
 def resolve_tenant_context(claims: Dict[str, Any], db=None) -> TenantContext:
-    """Build the context from verified session claims + the database."""
+    """Build the context from verified session claims + the database.
+
+    Any MongoDB network/timeout error is caught here and raised as an HTTP 503
+    so portals degrade cleanly (fast error page) instead of hanging for the
+    full serverSelectionTimeoutMS and then crashing with a 500.
+    """
+    try:
+        return _resolve_tenant_context_inner(claims, db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Catch pymongo network/timeout errors specifically and surface them as
+        # a fast 503 rather than an unhandled 500 with a long hang.
+        exc_name = type(exc).__name__
+        exc_module = type(exc).__module__ or ""
+        is_mongo_network = (
+            "ServerSelectionTimeoutError" in exc_name
+            or "NetworkTimeout" in exc_name
+            or "ConnectionFailure" in exc_name
+            or "AutoReconnect" in exc_name
+            or (exc_module.startswith("pymongo") and "Timeout" in exc_name)
+        )
+        if is_mongo_network:
+            logger.warning(
+                "MongoDB unreachable during tenant resolution (%s: %s) — returning 503",
+                exc_name, str(exc)[:200],
+            )
+            # Reset the stale sync client so the next request will try to
+            # reconnect instead of reusing the broken socket.
+            try:
+                from app.db.mongo import reset_client_caches
+                reset_client_caches()
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "service_unavailable",
+                    "message": (
+                        "The database is temporarily unreachable. "
+                        "Please wait a moment and refresh the page."
+                    ),
+                },
+            )
+        raise
+
+
+def _resolve_tenant_context_inner(claims: Dict[str, Any], db=None) -> TenantContext:
+    """Internal implementation — see resolve_tenant_context for the public API."""
     email = (claims.get("email") or "").strip().lower()
     if not email:
         _forbid("unauthorized", "Sign in required", 401)

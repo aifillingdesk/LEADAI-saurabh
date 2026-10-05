@@ -378,7 +378,7 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
     - /health (healthcheck)
     - /static/* (static assets)
     """
-    _SAFE_PATHS = {"/api/auth/login", "/health"}
+    _SAFE_PATHS = {"/api/auth/login", "/health", "/api/health"}
     _SAFE_PREFIXES = ("/static", "/api/public", "/api/v1")
     _STATE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -462,6 +462,10 @@ def _wants_html(request: Request) -> bool:
 
 @app.exception_handler(StarletteHTTPException)
 async def http_error_handler(request: Request, exc: StarletteHTTPException):
+    # 503 on a portal page (DB temporarily down) → redirect to login with a
+    # clear query param so the browser doesn't show raw JSON to the user.
+    if exc.status_code == 503 and _wants_html(request):
+        return RedirectResponse("/login?error=db_unavailable", status_code=303)
     page = _ERROR_PAGES.get(exc.status_code)
     if page and _wants_html(request):
         path = os.path.join(static_dir, page)
@@ -519,7 +523,7 @@ if os.path.exists(static_dir):
 
 
 # Pages that stay reachable without a session
-_OPEN_PAGES = {"/health", "/login", "/docs", "/redoc", "/openapi.json"}
+_OPEN_PAGES = {"/health", "/api/health", "/login", "/docs", "/redoc", "/openapi.json"}
 
 
 def _maintenance_enabled() -> bool:
@@ -711,7 +715,7 @@ async def maintenance_gate(request: Request, call_next):
     always_open = (path.startswith(("/static", "/api/auth", "/admin", "/api/admin",
                                     "/api/comment-filters", "/api/public",
                                     "/superadmin", "/api/super-admin"))
-                   or path in ("/login", "/health"))
+                   or path in ("/login", "/health", "/api/health"))
     user = session_user(request)
     if always_open or (user is not None and (user.get("scope") == "admin"
                                              or user.get("impersonated_by"))):
@@ -763,6 +767,7 @@ async def login_page(request: Request):
 
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
     """Public health endpoint — verifies MongoDB connectivity and startup readiness."""
     import time as _time

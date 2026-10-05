@@ -58,8 +58,9 @@ def get_async_client() -> Optional[AsyncIOMotorClient]:
     try:
         _async_client_cache = AsyncIOMotorClient(
             settings.mongo_uri,
-            serverSelectionTimeoutMS=10000,
-            connectTimeoutMS=10000,
+            serverSelectionTimeoutMS=3000,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=10000,
             maxPoolSize=50,
             minPoolSize=5,
             maxIdleTimeMS=45000,
@@ -88,23 +89,55 @@ def reset_client_caches():
 
 
 _sync_client_cache: Optional[MongoClient] = None
+# Tracks consecutive sync DB failures to back off log noise
+_sync_fail_count: int = 0
 
 
 def get_sync_client() -> Optional[MongoClient]:
-    global _sync_client_cache
+    """Return (or create) the cached sync MongoClient.
+
+    If the cached client's topology is in a broken state (all servers
+    unknown after a network blip), the cache is cleared so the next call
+    creates a fresh connection rather than returning a permanently broken
+    client that would block every request for the full serverSelectionTimeoutMS.
+    """
+    global _sync_client_cache, _sync_fail_count
+    if _sync_client_cache is not None:
+        # Detect a stale/broken client: all servers are Unknown (no primary).
+        try:
+            td = _sync_client_cache.topology_description
+            all_unknown = all(
+                sd.server_type_name == "Unknown"
+                for sd in td.server_descriptions().values()
+            ) if td.server_descriptions() else False
+            if all_unknown:
+                logger.warning("Sync MongoClient topology has no reachable servers "
+                               "— resetting client cache for reconnect")
+                try:
+                    _sync_client_cache.close()
+                except Exception:
+                    pass
+                _sync_client_cache = None
+        except Exception:
+            pass  # topology introspection not critical
     if _sync_client_cache is not None:
         return _sync_client_cache
     try:
         _sync_client_cache = MongoClient(
             settings.mongo_uri,
-            serverSelectionTimeoutMS=10000,
-            connectTimeoutMS=10000,
+            # 3 s is short enough that portal loads fail fast rather than
+            # hanging for 10 s; long enough not to trip on brief latency spikes.
+            serverSelectionTimeoutMS=3000,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=10000,
             maxPoolSize=50,
             minPoolSize=5,
             maxIdleTimeMS=45000,
         )
+        _sync_fail_count = 0
         return _sync_client_cache
     except Exception as e:
+        _sync_fail_count += 1
         logger.warning(f"Sync MongoClient connection warning: {e}")
         _sync_client_cache = None
         return None
