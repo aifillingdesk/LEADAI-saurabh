@@ -282,11 +282,24 @@ def _explain_error(exc: Exception) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ApifyConnector:
-    def __init__(self):
-        # Effective token: admin-panel override first, then .env. Read fresh
-        # so a token update in the admin panel applies to the next scrape.
-        from app.admin.settings import get_apify_token
-        self.token = get_apify_token()
+    def __init__(self, token: Optional[str] = None, organization_id: Optional[str] = None):
+        self.organization_id = organization_id
+        if token:
+            self.token = token
+            self.token_source = "explicit"
+        else:
+            # Check tenant-specific BYOK token or platform default
+            effective_org_id = organization_id
+            if not effective_org_id:
+                ctx = _RUN_CONTEXT.get()
+                if ctx and ctx.get("organization_id"):
+                    effective_org_id = ctx.get("organization_id")
+
+            from app.services.tenant_api_keys import get_tenant_apify_token_sync
+            resolved_token, source = get_tenant_apify_token_sync(effective_org_id)
+            self.token = resolved_token
+            self.token_source = source
+
         self._client: Optional[Any] = None
         # metadata of the most recent actor call (for API diagnostics):
         # {"actorId", "runId", "datasetId", "status", "usageUsd", "itemsReturned"}
@@ -295,9 +308,30 @@ class ApifyConnector:
     def has_token(self) -> bool:
         return bool(self.token)
 
+    def _own_key_failure(self, status: Optional[int], billing: bool) -> str:
+        from app.services.tenant_api_keys import record_key_failure
+        org_id = self.organization_id or ((_RUN_CONTEXT.get() or {}).get("organization_id"))
+        if billing or status == 402:
+            code, msg = ("OWN_APIFY_QUOTA_EXCEEDED",
+                         "Your Apify account is out of credit, so this search stopped. Add credit at "
+                         "console.apify.com/billing, or switch Apify to LeadAI-provided in Admin portal → API keys & plan.")
+        else:
+            code, msg = ("OWN_APIFY_KEY_REJECTED",
+                         "Apify rejected your organization's token, so this search stopped. Update it in "
+                         "Admin portal → API keys & plan, or switch Apify to LeadAI-provided.")
+        record_key_failure(org_id, "apify", code, msg)
+        return msg
+
     def _get_client(self):
         if self._client is None:
             if not self.token:
+                if getattr(self, "token_source", "") == "organization_missing":
+                    from app.services.tenant_api_keys import own_key_problem, record_key_failure
+                    org_id = self.organization_id or ((_RUN_CONTEXT.get() or {}).get("organization_id"))
+                    problem = own_key_problem(org_id, "apify") or {}
+                    record_key_failure(org_id, "apify", problem.get("code", "OWN_APIFY_KEY_MISSING"),
+                                       problem.get("message", "Your Apify key is missing."))
+                    raise ApifyError(problem.get("message") or "Your organization's own Apify key is missing")
                 raise ApifyError(
                     "APIFY_API_TOKEN is not set in .env — "
                     "add it from https://apify.com/account/integrations"
@@ -338,6 +372,14 @@ class ApifyConnector:
                     _record_actor_run(actor_id, label, started, error=e)
                     raise
                 billing = _explain_error(e)
+                status = getattr(e, "status_code", None)
+                if getattr(self, "token_source", "") == "organization" and (
+                        billing or (isinstance(e, ApifyApiError) and status in (401, 402, 403))):
+                    # the organization's OWN Apify key: stop now (no retry, never
+                    # LeadAI's key) and tell its admins what to fix
+                    msg = self._own_key_failure(status, bool(billing))
+                    _record_actor_run(actor_id, label, started, error=ScrapeError("API_ERROR", msg, actor_id=actor_id))
+                    raise ApifyError(msg)
                 if billing:
                     _record_actor_run(actor_id, label, started,
                                       error=ScrapeError("BILLING", billing, actor_id=actor_id))

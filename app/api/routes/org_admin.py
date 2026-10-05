@@ -2519,3 +2519,90 @@ async def delete_key(
                  resource_type="api_key", resource_id=key_id)
     return {"success": True, "revoked_id": key_id}
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API keys & plan: who provides Apify / Gemini, and the organization's own keys
+# ═══════════════════════════════════════════════════════════════════════════
+# Keys are write-only: responses carry masked hints and status, never a key.
+
+_PROVIDERS = ("apify", "gemini")
+
+
+class ApiKeyBody(BaseModel):
+    key: str = ""
+
+
+class ApiCoverageBody(BaseModel):
+    apify: str | None = None        # "leadai" | "own"
+    gemini: str | None = None
+
+
+def _provider_or_404(provider: str) -> str:
+    if provider not in _PROVIDERS:
+        raise HTTPException(status_code=404, detail="Unknown API")
+    return provider
+
+
+@router.get("/integrations/api-keys")
+async def get_api_keys_and_plan(ctx: TenantContext = Depends(require_portal(P.SETTINGS_VIEW))):
+    """Who provides each API, key status (masked), and every option's price."""
+    from app.billing.api_coverage import coverage_summary
+    return {"success": True, "integrations": await coverage_summary(_db(), ctx.organization_id),
+            "can_manage": P.SETTINGS_MANAGE in ctx.permissions}
+
+
+@router.put("/integrations/api-keys/{provider}")
+async def save_api_key(provider: str, body: ApiKeyBody, request: Request,
+                       ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE))):
+    """Save (encrypted) and test the organization's own key for ``provider``."""
+    from app.services.tenant_api_keys import save_key
+    _provider_or_404(provider)
+    try:
+        res = await save_key(ctx.organization_id, provider, body.key, actor_email=ctx.email, db=_db())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    await _audit(ctx, request, "api_key.saved", "settings", resource_type="organization",
+                 resource_id=ctx.organization_id,
+                 details={"provider": provider, "verified": bool(res["test"].get("valid"))})
+    return {"success": True, **res,
+            "message": ("Key saved and verified." if res["test"].get("valid")
+                        else "Key saved, but it could not be verified: " + str(res["test"].get("detail") or ""))}
+
+
+@router.post("/integrations/api-keys/{provider}/test")
+async def test_saved_api_key(provider: str, request: Request,
+                             ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE))):
+    from app.services.tenant_api_keys import verify_saved_key
+    _provider_or_404(provider)
+    res = await verify_saved_key(ctx.organization_id, provider, db=_db())
+    await _audit(ctx, request, "api_key.tested", "settings", resource_type="organization",
+                 resource_id=ctx.organization_id, details={"provider": provider, "valid": res["test"].get("valid")})
+    return {"success": True, **res}
+
+
+@router.delete("/integrations/api-keys/{provider}")
+async def remove_api_key(provider: str, request: Request,
+                         ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE))):
+    from app.services.tenant_api_keys import coverage_of, remove_key
+    _provider_or_404(provider)
+    db = _db()
+    org = await db.organizations.find_one({"_id": _oid(ctx.organization_id)})
+    cfg = await remove_key(ctx.organization_id, provider, db=db)
+    await _audit(ctx, request, "api_key.removed", "settings", resource_type="organization",
+                 resource_id=ctx.organization_id, details={"provider": provider})
+    warn = coverage_of(org)[provider] == "own"
+    return {"success": True, "config": cfg,
+            "message": ("Key removed. Searches that need it will stop until you add a key "
+                        "or switch to LeadAI-provided." if warn else "Key removed.")}
+
+
+@router.put("/integrations/api-coverage")
+async def change_api_coverage(body: ApiCoverageBody, request: Request,
+                              ctx: TenantContext = Depends(require_portal(P.SETTINGS_MANAGE))):
+    """Switch an API between LeadAI-provided and the organization's own key."""
+    from app.billing.api_coverage import change_coverage, coverage_summary
+    db = _db()
+    requested = {k: v for k, v in (("apify", body.apify), ("gemini", body.gemini)) if v}
+    res = await change_coverage(db, ctx.organization_id, requested, actor=ctx.audit_user(),
+                                request_meta=request_meta(request))
+    return {"success": True, **res, "integrations": await coverage_summary(db, ctx.organization_id)}

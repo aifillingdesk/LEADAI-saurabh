@@ -66,6 +66,11 @@ def renew_subscription(db, sub: Dict[str, Any], *, source: str, actor: str = "sy
     if not res.modified_count:
         return {"renewed": False, "reason": "concurrent_update"}
     org_id = str(sub["organization_id"])
+    # brought their own Apify / Gemini key since the last payment -> the new period costs less
+    from app.billing.api_coverage import renewal_amount
+    period_amount = renewal_amount(db, sub, float(sub.get("amount") or 0))
+    if amount is None:
+        amount = period_amount
     plan = db.plans.find_one({"slug": sub.get("plan_id")}) or {}
     tokens = int((plan.get("limits") or {}).get("monthly_tokens") or 0)
     if tokens > 0:

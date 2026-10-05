@@ -100,7 +100,8 @@ def _clean(d: Any) -> Any:
         return str(d)
     if isinstance(d, dict):
         return {("id" if k == "_id" else k): _clean(v) for k, v in d.items()
-                if k not in ("password_hash", "token_hash", "session_id")}
+                if k not in ("password_hash", "token_hash", "session_id", "ciphertext", "totp_secret",
+                          "custom_api_keys")}
     if isinstance(d, list):
         return [_clean(v) for v in d]
     if isinstance(d, datetime):
@@ -488,6 +489,86 @@ async def change_staff_email(staff_id: str, body: ChangeEmailBody, request: Requ
 class MemberRoleBody(BaseModel):
     role: str
     reason: str = ""
+
+
+# ── Organization API coverage: who provides Apify / Gemini ──────────────────
+
+class ApiCoverageAdminBody(BaseModel):
+    apify: Optional[str] = None
+    gemini: Optional[str] = None
+    reason: str = ""
+    force: bool = False      # apply now without checkout (e.g. a courtesy), audited
+
+
+@router.get("/organizations/{org_id}/api-coverage")
+async def org_api_coverage(org_id: str, ctx: TenantContext = Depends(SUPER)):
+    """Coverage, key status (masked only), last errors and every option's price."""
+    from app.billing.api_coverage import coverage_summary
+    db = _db()
+    if not _oid(org_id) or not await db.organizations.find_one({"_id": _oid(org_id)}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return {"success": True, "integrations": await coverage_summary(db, org_id)}
+
+
+@router.put("/organizations/{org_id}/api-coverage")
+async def set_org_api_coverage(org_id: str, body: ApiCoverageAdminBody, request: Request,
+                               ctx: TenantContext = Depends(SUPER)):
+    from app.billing.api_coverage import change_coverage, coverage_summary
+    from app.services.tenant_api_keys import PROVIDER_NAMES, coverage_of, public_config, set_coverage
+    from app.billing.plans import normalize_coverage
+    db = _db()
+    if len(body.reason.strip()) < 3:
+        raise HTTPException(status_code=422, detail="Give a reason (recorded in the audit log)")
+    requested = {k: v for k, v in (("apify", body.apify), ("gemini", body.gemini)) if v}
+    if body.force:
+        org = await db.organizations.find_one({"_id": _oid(org_id)}) if _oid(org_id) else None
+        if not org:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        before = coverage_of(org)
+        after = normalize_coverage({**before, **requested})
+        # even a courtesy switch can't put an API on "own" with no key saved:
+        # own-key APIs never fall back to LeadAI's key, so its searches would stop
+        keys = public_config(org)["keys"]
+        missing = [PROVIDER_NAMES[a] for a in after if after[a] == "own" and before[a] != "own"
+                   and not keys[a]["configured"]]
+        if missing:
+            raise HTTPException(status_code=409, detail=f"The organization has no {' or '.join(missing)} key saved. "
+                                                        "It must add one first.")
+        await set_coverage(org_id, after, db=db)
+        await aaudit("organization.api_coverage_changed", "billing", user=ctx.audit_user(),
+                     organization_id=org_id, resource_type="organization", resource_id=org_id,
+                     details={"before": before, "after": after, "status": "forced", "via": "super_admin",
+                              "reason": body.reason[:300]}, **_meta(request))
+        res = {"status": "applied", "coverage": after, "message": "Applied by the Super Admin."}
+    else:
+        res = await change_coverage(db, org_id, requested, actor=ctx.audit_user(),
+                                    request_meta=_meta(request), via="super_admin")
+    return {"success": True, **res, "integrations": await coverage_summary(db, org_id)}
+
+
+@router.delete("/organizations/{org_id}/api-keys/{provider}")
+async def remove_org_api_key(org_id: str, provider: str, body: ReasonBody, request: Request,
+                             ctx: TenantContext = Depends(SUPER)):
+    """Remove an organization's own key (e.g. reported compromised). Its admins are told."""
+    from app.services.tenant_api_keys import PROVIDER_NAMES, remove_key
+    if provider not in PROVIDER_NAMES:
+        raise HTTPException(status_code=404, detail="Unknown API")
+    db = _db()
+    if not _oid(org_id) or not await db.organizations.find_one({"_id": _oid(org_id)}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if len(body.reason.strip()) < 3:
+        raise HTTPException(status_code=422, detail="Give a reason (recorded in the audit log and sent to the organization)")
+    cfg = await remove_key(org_id, provider, db=db)
+    await aaudit("api_key.removed", "security", user=ctx.audit_user(), organization_id=org_id,
+                 resource_type="organization", resource_id=org_id,
+                 details={"provider": provider, "reason": body.reason[:300], "via": "super_admin"}, **_meta(request))
+    from app.events.notifications import notify_org_admins
+    notify_org_admins(org_id, "api_key_problem", f"Your {PROVIDER_NAMES[provider]} key was removed",
+                      f"LeadAI support removed your organization's {PROVIDER_NAMES[provider]} key"
+                      + f": {body.reason.strip()[:200]}."
+                      + " Add a new key or switch to LeadAI-provided in Admin portal → API keys & plan.",
+                      severity="warning", email=True, link="/org-admin#integrations")
+    return {"success": True, "config": cfg}
 
 
 @router.patch("/organizations/{org_id}/members/{user_id}/role")

@@ -58,6 +58,20 @@ function qsOf(params) {
   return qs;
 }
 
+/* Clickable stat / KPI boxes. Every box that summarises data opens the module
+   that lists it: a real <a href="#/route"> (keyboard focus, Enter, middle-click
+   to a new tab) carrying data-nav, so bindNav() routes it through navigate() —
+   the same mechanism as the sidebar and the dashboard KPI cards. `cls` keeps
+   the box's own look; .adm-stat-link adds the shared pointer/hover/focus. */
+const STAT_GO = `<span class="adm-stat-go" aria-hidden="true">→</span>`;
+function statLink(route, cls, inner, dest, style = "") {
+  return `<a class="${cls} adm-stat-link" href="#/${esc(route)}" data-nav="${esc(route)}" title="Open ${esc(dest)}"${style ? ` style="${style}"` : ""}>${inner}</a>`;
+}
+// Same look for a box that filters the view it sits on (no route change).
+function statButton(cls, inner, title, attrs = "") {
+  return `<button type="button" class="${cls} adm-stat-link" title="${esc(title)}" ${attrs}>${inner}</button>`;
+}
+
 function esc(value) {
   if (value === null || value === undefined) return "";
   return String(value)
@@ -599,11 +613,11 @@ function jobReportHtml(data, runId) {
       <div class="adm-card" style="margin-bottom:14px">
         <div class="adm-card-title">Collected data <span class="adm-hint">(live counts)</span></div>
         <div class="adm-stats cols-3">
-          <div class="adm-stat"><div class="adm-stat-label">Pages</div><div class="adm-stat-value">${counts.pages ?? 0}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Posts</div><div class="adm-stat-value">${counts.posts ?? 0}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Comments</div><div class="adm-stat-value">${counts.comments ?? 0}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">AI analyzed</div><div class="adm-stat-value">${counts.analyzed ?? 0}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Leads</div><div class="adm-stat-value ${counts.leads ? "gold" : ""}">${counts.leads ?? 0}</div></div>
+          ${statLink(`pages?run=${encodeURIComponent(runId)}`, "adm-stat", `<div class="adm-stat-label">Pages ${STAT_GO}</div><div class="adm-stat-value">${counts.pages ?? 0}</div>`, "the pages of this run")}
+          ${statLink(`posts?run=${encodeURIComponent(runId)}`, "adm-stat", `<div class="adm-stat-label">Posts ${STAT_GO}</div><div class="adm-stat-value">${counts.posts ?? 0}</div>`, "the posts of this run")}
+          ${statLink("ci", "adm-stat", `<div class="adm-stat-label">Comments ${STAT_GO}</div><div class="adm-stat-value">${counts.comments ?? 0}</div>`, "Comment Intelligence")}
+          ${statLink("ai", "adm-stat", `<div class="adm-stat-label">AI analyzed ${STAT_GO}</div><div class="adm-stat-value">${counts.analyzed ?? 0}</div>`, "AI & Analysis")}
+          ${statLink("leads", "adm-stat", `<div class="adm-stat-label">Leads ${STAT_GO}</div><div class="adm-stat-value ${counts.leads ? "gold" : ""}">${counts.leads ?? 0}</div>`, "Leads")}
         </div>
         <div class="adm-kv" style="margin-top:10px">
           ${j.pages_found !== undefined && j.pages_found !== null ? `<div class="adm-kv-row"><dt>Pages found</dt><dd>${esc(j.pages_found)}</dd></div>` : ""}
@@ -1112,7 +1126,15 @@ function viewNotFound() {
 
 function bindNav(root) {
   $$("[data-nav]", root).forEach((el) => {
-    el.onclick = () => {
+    el.onclick = (e) => {
+      if (el.tagName === "A") {
+        // let the browser handle "open in new tab/window"
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        // a new hash is rendered once by the hashchange router; only a link to
+        // the route already open needs an explicit navigate() to re-render
+        if (el.getAttribute("href") !== location.hash) return;
+        e.preventDefault();
+      }
       let params = null;
       if (el.dataset.navParams) {
         try { params = JSON.parse(el.dataset.navParams); } catch (err) {}
@@ -1195,26 +1217,22 @@ async function viewDashboard() {
         <a class="adm-btn small ghost" href="#/organizations">${icon("organizations", 13)} Manage Organizations →</a>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:12px;margin-bottom:14px">
-        <div style="background:var(--surface);padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-          <div class="adm-stat-label">Total Orgs</div>
+        ${statLink("organizations", "adm-saas-stat", `
+          <div class="adm-stat-label">Total Orgs ${STAT_GO}</div>
           <div style="font-size:20px;font-weight:700;color:var(--text)">${Number((saas.platform || {}).organizations_total || 0).toLocaleString()}</div>
-          <div class="adm-hint" style="color:var(--green)">${Number((saas.platform || {}).organizations_active || 0)} active</div>
-        </div>
-        <div style="background:var(--surface);padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-          <div class="adm-stat-label">Platform Users</div>
+          <div class="adm-hint" style="color:var(--green)">${Number((saas.platform || {}).organizations_active || 0)} active</div>`, "Organizations")}
+        ${statLink("users", "adm-saas-stat", `
+          <div class="adm-stat-label">Platform Users ${STAT_GO}</div>
           <div style="font-size:20px;font-weight:700;color:var(--text)">${Number((saas.platform || {}).users_total || 0).toLocaleString()}</div>
-          <div class="adm-hint" style="color:var(--green)">${Number((saas.platform || {}).users_active || 0)} active</div>
-        </div>
-        <div style="background:var(--surface);padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-          <div class="adm-stat-label">Total Searches</div>
+          <div class="adm-hint" style="color:var(--green)">${Number((saas.platform || {}).users_active || 0)} active</div>`, "Users")}
+        ${statLink("jobs", "adm-saas-stat", `
+          <div class="adm-stat-label">Total Searches ${STAT_GO}</div>
           <div style="font-size:20px;font-weight:700;color:var(--text)">${Number((saas.product || {}).searches_total || 0).toLocaleString()}</div>
-          <div class="adm-hint">All tenants</div>
-        </div>
-        <div style="background:var(--surface);padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border)">
-          <div class="adm-stat-label">Total Leads</div>
+          <div class="adm-hint">All tenants</div>`, "Jobs")}
+        ${statLink("leads", "adm-saas-stat", `
+          <div class="adm-stat-label">Total Leads ${STAT_GO}</div>
           <div style="font-size:20px;font-weight:700;color:var(--amber-deep)">${Number((saas.product || {}).leads_total || 0).toLocaleString()}</div>
-          <div class="adm-hint">Identified</div>
-        </div>
+          <div class="adm-hint">Identified</div>`, "Leads")}
       </div>
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 12px;background:rgba(0,0,0,0.03);border-radius:8px;font-size:12px">
         <span style="font-weight:600;color:var(--text-dim)">System Health:</span>
@@ -1233,19 +1251,16 @@ async function viewDashboard() {
         ${delta(leads)}
       </div>
       <div class="adm-hero-stat">
-        <div>
-          <div class="adm-stat-label">Searches</div>
+        ${statLink("jobs", "adm-hero-link", `
+          <div class="adm-stat-label">Searches ${STAT_GO}</div>
           <div class="adm-stat-value">${Number(searches.value).toLocaleString()}</div>
-          <div class="adm-kpi-delta ${(searches.change || 0) >= 0 ? "up" : "down"}">${searches.change !== null && searches.change !== undefined ? `${searches.change >= 0 ? "▲" : "▼"} ${Math.abs(searches.change).toFixed(1)}%` : ""}</div>
-        </div>
-        <div>
-          <div class="adm-stat-label">Running now</div>
-          <div class="adm-stat-value ${kpiOf("running").value ? "ok" : ""}">${kpiOf("running").value}</div>
-        </div>
-        <div>
-          <div class="adm-stat-label">Success rate</div>
-          <div class="adm-stat-value">${data.performance.success_rate !== null && data.performance.success_rate !== undefined ? `${data.performance.success_rate}%` : "—"}</div>
-        </div>
+          <div class="adm-kpi-delta ${(searches.change || 0) >= 0 ? "up" : "down"}">${searches.change !== null && searches.change !== undefined ? `${searches.change >= 0 ? "▲" : "▼"} ${Math.abs(searches.change).toFixed(1)}%` : ""}</div>`, "Jobs")}
+        ${statLink("jobs?status=running", "adm-hero-link", `
+          <div class="adm-stat-label">Running now ${STAT_GO}</div>
+          <div class="adm-stat-value ${kpiOf("running").value ? "ok" : ""}">${kpiOf("running").value}</div>`, "running jobs")}
+        ${statLink("jobs?status=completed", "adm-hero-link", `
+          <div class="adm-stat-label">Success rate ${STAT_GO}</div>
+          <div class="adm-stat-value">${data.performance.success_rate !== null && data.performance.success_rate !== undefined ? `${data.performance.success_rate}%` : "—"}</div>`, "completed jobs")}
       </div>
     </div>
     <div class="adm-dash-head">
@@ -1258,16 +1273,19 @@ async function viewDashboard() {
       </div>
     </div>
     <div class="adm-kpi-grid" data-widget="kpis" style="${dashStyle("kpis")}">
-      ${data.kpis.map((k) => `
-        <div class="adm-kpi" data-nav="${kpiNav[k.key][0]}" data-nav-params='${JSON.stringify(kpiNav[k.key][1])}'>
+      ${data.kpis.map((k) => {
+        const [view, params] = kpiNav[k.key] || ["dashboard", {}];
+        const qs = qsOf(params).toString();
+        const ico = kpiIco[k.key] || ["dashboard", "gray"];
+        return statLink(`${view}${qs ? "?" + qs : ""}`, "adm-kpi", `
           <div class="adm-kpi-top">
-            <span class="adm-kpi-label">${esc(k.label)}</span>
-            <span class="adm-kpi-ico ${kpiIco[k.key][1]}">${icon(kpiIco[k.key][0], 13)}</span>
+            <span class="adm-kpi-label">${esc(k.label)} ${STAT_GO}</span>
+            <span class="adm-kpi-ico ${ico[1]}">${icon(ico[0], 13)}</span>
           </div>
           <div class="adm-kpi-value">${Number(k.value).toLocaleString()}</div>
           ${delta(k)}
-          ${sparkSvg(k.series)}
-        </div>`).join("")}
+          ${sparkSvg(k.series)}`, k.label);
+      }).join("")}
     </div>
     <div class="adm-grid-2">
       <div class="adm-card" data-widget="activity" style="${dashStyle("activity")}">
@@ -1346,10 +1364,10 @@ async function viewDashboard() {
               </div>
             </div>`}
         <div class="adm-stats cols-4">
-          <div class="adm-stat"><div class="adm-stat-label">Comments</div><div class="adm-stat-value">${fmtNum(t.comments ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Matched → AI</div><div class="adm-stat-value gold">${fmtNum(t.matched ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Skipped (NOT_MATCHED)</div><div class="adm-stat-value">${fmtNum(t.not_matched ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Filter coverage</div><div class="adm-stat-value">${t.coverage_pct !== null && t.coverage_pct !== undefined ? t.coverage_pct + "%" : "—"}</div></div>
+          ${statLink("keyword-rules?tab=comments&status=all", "adm-stat", `<div class="adm-stat-label">Comments ${STAT_GO}</div><div class="adm-stat-value">${fmtNum(t.comments ?? 0)}</div>`, "all filtered comments")}
+          ${statLink("keyword-rules?tab=comments&status=MATCHED", "adm-stat", `<div class="adm-stat-label">Matched → AI ${STAT_GO}</div><div class="adm-stat-value gold">${fmtNum(t.matched ?? 0)}</div>`, "matched comments")}
+          ${statLink("keyword-rules?tab=comments&status=NOT_MATCHED", "adm-stat", `<div class="adm-stat-label">Skipped (NOT_MATCHED) ${STAT_GO}</div><div class="adm-stat-value">${fmtNum(t.not_matched ?? 0)}</div>`, "skipped comments")}
+          ${statLink("keyword-rules?tab=rules", "adm-stat", `<div class="adm-stat-label">Filter coverage ${STAT_GO}</div><div class="adm-stat-value">${t.coverage_pct !== null && t.coverage_pct !== undefined ? t.coverage_pct + "%" : "—"}</div>`, "Keyword Rules")}
         </div>`;
       })()}
     </div>
@@ -1608,6 +1626,7 @@ async function viewJobDetail(runId) {
     };
   });
   $("#jdRefresh").onclick = () => viewJobDetail(runId);
+  bindNav(root);
   if (running) {
     jobPollTimer = setInterval(() => {
       if (document.hidden) return;
@@ -1638,11 +1657,10 @@ async function viewFailed() {
       </div>
       ${topErr ? `
       <div class="adm-hero-stat" style="margin-left:0">
-        <div>
-          <div class="adm-stat-label">Most common error</div>
+        ${statLink("logs?level=ERROR", "adm-hero-link", `
+          <div class="adm-stat-label">Most common error ${STAT_GO}</div>
           <div class="adm-cell-sub" style="max-width:340px;color:var(--text-dim)">${esc(topErr.message)}</div>
-          <div class="adm-stat-hint">${topErr.count} run(s)</div>
-        </div>
+          <div class="adm-stat-hint">${topErr.count} run(s)</div>`, "error logs")}
       </div>` : ""}
     </div>
     <div class="adm-card">
@@ -1684,6 +1702,7 @@ async function viewFailed() {
         }, "Retry");
     };
   });
+  bindNav(root);
   const retryAll = $("#retryAll");
   if (retryAll) retryAll.onclick = () => confirmModal(
     "Retry all failed runs", `Re-run all <b>${data.items.length}</b> failed runs shown here, one by one, with their original URLs and limits?`,
@@ -1727,19 +1746,16 @@ async function viewLeads() {
         <div class="adm-hero-sub"><strong>${Number(s.with_contact || 0).toLocaleString()}</strong> with verified phone or email</div>
       </div>
       <div class="adm-hero-stat">
-        <div>
-          <div class="adm-stat-label">Found this week</div>
-          <div class="adm-stat-value">${Number(s.this_week || 0).toLocaleString()}</div>
-        </div>
-        <div>
-          <div class="adm-stat-label">Avg score</div>
-          <div class="adm-stat-value">${s.avg_score !== null && s.avg_score !== undefined ? s.avg_score : "—"}</div>
-        </div>
-        ${platEntries.map(([p, c]) => `
-        <div>
-          <div class="adm-stat-label">${esc(p)}</div>
-          <div class="adm-stat-value">${Number(c).toLocaleString()}</div>
-        </div>`).join("")}
+        ${statLink("analytics", "adm-hero-link", `
+          <div class="adm-stat-label">Found this week ${STAT_GO}</div>
+          <div class="adm-stat-value">${Number(s.this_week || 0).toLocaleString()}</div>`, "Analytics (leads per day)")}
+        ${statLink("scoring", "adm-hero-link", `
+          <div class="adm-stat-label">Avg score ${STAT_GO}</div>
+          <div class="adm-stat-value">${s.avg_score !== null && s.avg_score !== undefined ? s.avg_score : "—"}</div>`, "Lead Scoring")}
+        ${platEntries.map(([p, c]) => statButton("adm-hero-link", `
+          <div class="adm-stat-label">${esc(p)} ${STAT_GO}</div>
+          <div class="adm-stat-value">${Number(c).toLocaleString()}</div>`, `Show only ${p} leads`,
+          `data-lead-platform="${esc(p)}" aria-pressed="${f.platform === p ? "true" : "false"}"`)).join("")}
       </div>
     </div>
     <div class="adm-card">
@@ -1805,6 +1821,14 @@ async function viewLeads() {
     viewLeads();
   };
   $("#applyFilters").onclick = apply;
+  bindNav(root);
+  $$("[data-lead-platform]", root).forEach((btn) => {
+    btn.onclick = () => {
+      state.filters.leadsOffset = 0;
+      f.platform = f.platform === btn.dataset.leadPlatform ? "" : btn.dataset.leadPlatform;
+      viewLeads();
+    };
+  });
   $("#clearFilters").onclick = () => {
     Object.assign(f, { platform: "", quality: "", status: "", q: "" });
     state.filters.leadsOffset = 0;
@@ -1982,19 +2006,16 @@ async function viewAnalytics() {
         <div class="adm-hero-sub">${wotw !== null ? `<strong>${wotw >= 0 ? "▲" : "▼"} ${Math.abs(wotw).toFixed(1)}%</strong> week-over-week` : `${data.range ? `from ${esc(data.range.from)} to ${esc(data.range.to)}` : ""}`}</div>
       </div>
       <div class="adm-hero-stat">
-        <div>
-          <div class="adm-stat-label">Success rate</div>
+        ${statLink("failed", "adm-hero-link", `
+          <div class="adm-stat-label">Success rate ${STAT_GO}</div>
           <div class="adm-stat-value">${t.success_rate !== null && t.success_rate !== undefined ? `${t.success_rate}%` : "—"}</div>
-          <div class="adm-stat-hint">${t.failed ?? 0} failed of ${t.jobs ?? 0}</div>
-        </div>
-        <div>
-          <div class="adm-stat-label">Pages</div>
-          <div class="adm-stat-value">${(t.pages ?? 0).toLocaleString()}</div>
-        </div>
-        <div>
-          <div class="adm-stat-label">Comments</div>
-          <div class="adm-stat-value">${(t.comments ?? 0).toLocaleString()}</div>
-        </div>
+          <div class="adm-stat-hint">${t.failed ?? 0} failed of ${t.jobs ?? 0}</div>`, "Failed Jobs")}
+        ${statLink("pages", "adm-hero-link", `
+          <div class="adm-stat-label">Pages ${STAT_GO}</div>
+          <div class="adm-stat-value">${(t.pages ?? 0).toLocaleString()}</div>`, "Pages")}
+        ${statLink("ci", "adm-hero-link", `
+          <div class="adm-stat-label">Comments ${STAT_GO}</div>
+          <div class="adm-stat-value">${(t.comments ?? 0).toLocaleString()}</div>`, "Comment Intelligence")}
       </div>
     </div>
     <div class="adm-grid-2">
@@ -2479,9 +2500,9 @@ async function viewApify() {
       <div class="adm-card-title">Usage this month <span class="adm-hint">(real usageUsd from run records, last 30 days)</span></div>
       ${u && (u.actors || []).length ? `
         <div class="adm-stats cols-4">
-          <div class="adm-stat"><div class="adm-stat-label">Total cost</div><div class="adm-stat-value gold">$${money(u.total_cost)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Runs with usage</div><div class="adm-stat-value">${u.runs_with_usage}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Actors used</div><div class="adm-stat-value">${u.actors.length}</div></div>
+          ${statLink("usage", "adm-stat", `<div class="adm-stat-label">Total cost ${STAT_GO}</div><div class="adm-stat-value gold">$${money(u.total_cost)}</div>`, "Usage & Cost")}
+          ${statLink("usage", "adm-stat", `<div class="adm-stat-label">Runs with usage ${STAT_GO}</div><div class="adm-stat-value">${u.runs_with_usage}</div>`, "Usage & Cost")}
+          ${statLink("actors", "adm-stat", `<div class="adm-stat-label">Actors used ${STAT_GO}</div><div class="adm-stat-value">${u.actors.length}</div>`, "Actors")}
         </div>
         ${u.actors.map((a, i) => `
           <div class="adm-bar-row">
@@ -3027,10 +3048,14 @@ async function viewCI() {
   const root = $("#view");
   const role = state.user.role;
   const hashParams = new URLSearchParams(location.hash.split("?")[1] || "");
+  // is_lead / contact come from the Pipeline stat boxes (the API supports both)
+  const ciLeads = hashParams.get("is_lead") === "true" ? "true" : "";
+  const ciContact = hashParams.get("contact") === "true" ? "true" : "";
   const qs = qsOf({
     platform: hashParams.get("platform") || "",
     intent: hashParams.get("intent") || "",
     quality: hashParams.get("quality") || "",
+    is_lead: ciLeads, contact: ciContact,
     limit: 40,
   });
   const [data, ci, krStats] = await Promise.all([
@@ -3058,12 +3083,12 @@ async function viewCI() {
       <div class="adm-card">
         <div class="adm-card-title">Pipeline <span class="adm-hint">(all-time)</span></div>
         <div class="adm-stats cols-3">
-          <div class="adm-stat"><div class="adm-stat-label">Total</div><div class="adm-stat-value">${fmtNum(summary.total ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Analyzed</div><div class="adm-stat-value">${fmtNum(summary.analyzed ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Leads</div><div class="adm-stat-value gold">${fmtNum(summary.leads ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Contacts</div><div class="adm-stat-value">${fmtNum(summary.contacts ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">High value</div><div class="adm-stat-value">${fmtNum(summary.high_value ?? 0)}</div></div>
-          <div class="adm-stat"><div class="adm-stat-label">Avg confidence</div><div class="adm-stat-value">${summary.avg_confidence !== null && summary.avg_confidence !== undefined ? (summary.avg_confidence * 100).toFixed(0) + "%" : "—"}</div></div>
+          ${statLink("ci", "adm-stat", `<div class="adm-stat-label">Total ${STAT_GO}</div><div class="adm-stat-value">${fmtNum(summary.total ?? 0)}</div>`, "the full comment feed")}
+          ${statLink("ai", "adm-stat", `<div class="adm-stat-label">Analyzed ${STAT_GO}</div><div class="adm-stat-value">${fmtNum(summary.analyzed ?? 0)}</div>`, "AI & Analysis")}
+          ${statLink("leads", "adm-stat", `<div class="adm-stat-label">Leads ${STAT_GO}</div><div class="adm-stat-value gold">${fmtNum(summary.leads ?? 0)}</div>`, "Leads")}
+          ${statLink("ci?contact=true", "adm-stat", `<div class="adm-stat-label">Contacts ${STAT_GO}</div><div class="adm-stat-value">${fmtNum(summary.contacts ?? 0)}</div>`, "comments with contact details")}
+          ${statLink("ci?quality=high&is_lead=true", "adm-stat", `<div class="adm-stat-label">High value ${STAT_GO}</div><div class="adm-stat-value">${fmtNum(summary.high_value ?? 0)}</div>`, "high-quality leads (sorted by score)")}
+          ${statLink("scoring", "adm-stat", `<div class="adm-stat-label">Avg confidence ${STAT_GO}</div><div class="adm-stat-value">${summary.avg_confidence !== null && summary.avg_confidence !== undefined ? (summary.avg_confidence * 100).toFixed(0) + "%" : "—"}</div>`, "Lead Scoring (confidence weight)")}
         </div>
         ${summary.intents && Object.keys(summary.intents).length ? `
           <div class="adm-bar-list" style="margin-top:12px">
@@ -3105,6 +3130,8 @@ async function viewCI() {
           <option value="">all qualities</option>
           ${["high", "medium", "low"].map((q) => `<option value="${q}" ${hashParams.get("quality") === q ? "selected" : ""}>${q}</option>`).join("")}
         </select>
+        ${ciLeads ? `<button type="button" class="adm-btn small" data-ci-clear="is_lead" title="Remove this filter">Leads only ✕</button>` : ""}
+        ${ciContact ? `<button type="button" class="adm-btn small" data-ci-clear="contact" title="Remove this filter">With contact ✕</button>` : ""}
       </div>
       <div class="adm-feed">
         ${items.length ? items.map((it) => `
@@ -3126,14 +3153,21 @@ async function viewCI() {
           </div>`).join("") : emptyState("ci", "No comments match these filters.")}
       </div>
     </div>`;
-  $$("#ciFilters select", root).forEach((sel) => sel.addEventListener("change", () => {
+  const ciGo = (drop = "") => {
+    // a late change event from a select of a view already replaced: ignore it
+    if (state.view !== "ci" || !root.querySelector("#ciFilters")) return;
+    const pick = (k) => root.querySelector(`[data-filter="${k}"]`).value;
     const params = qsOf({
-      platform: root.querySelector('[data-filter="platform"]').value,
-      intent: root.querySelector('[data-filter="intent"]').value,
-      quality: root.querySelector('[data-filter="quality"]').value,
+      platform: pick("platform"),
+      intent: pick("intent"),
+      quality: pick("quality"),
+      is_lead: drop === "is_lead" ? "" : ciLeads,
+      contact: drop === "contact" ? "" : ciContact,
     });
     navigate(`ci${params.toString() ? "?" + params.toString() : ""}`);
-  }));
+  };
+  $$("#ciFilters select", root).forEach((sel) => sel.addEventListener("change", () => ciGo()));
+  $$("[data-ci-clear]", root).forEach((btn) => { btn.onclick = () => ciGo(btn.dataset.ciClear); });
   bindNav(root);
   if (role !== "viewer") {
     $$(".adm-switch input", root).forEach((el) => el.addEventListener("change", async () => {
@@ -3193,6 +3227,17 @@ function krCatName(key, catalog) {
 async function viewKeywordRules() {
   const root = $("#view");
   const role = state.user.role;
+  // Deep links from stat boxes: #/keyword-rules?tab=comments&status=MATCHED.
+  // Applied once, then dropped from the URL so the in-page tabs stay in charge.
+  const krHash = new URLSearchParams(location.hash.split("?")[1] || "");
+  if (krHash.has("tab") || krHash.has("status")) {
+    if (KR_TABS[krHash.get("tab")]) KR_TAB = krHash.get("tab");
+    const st = krHash.get("status");
+    if (st && ["all", "MATCHED", "NOT_MATCHED", "NO_FILTER"].includes(st)) {
+      Object.assign(KR_CF, { status: st, q: "", keyword: "", offset: 0 });
+    }
+    history.replaceState(null, "", "#/keyword-rules");
+  }
   const canManage = role !== "viewer";
   const data = await api("/api/comment-filters/rules");
   let stats = null;
@@ -3226,10 +3271,10 @@ async function viewKeywordRules() {
         ${canManage ? `<button class="adm-btn small" id="krNewRule2">${icon("plus", 13)} New Rule</button>` : ""}
       </div>`}
     <div class="adm-grid-2" style="grid-template-columns:repeat(4,1fr)">
-      <div class="adm-kpi"><div class="adm-kpi-top"><span class="adm-kpi-label">Comments filtered</span></div><div class="adm-kpi-value">${fmtNum(t.filtered ?? 0)}</div><span class="adm-hint">of ${fmtNum(t.comments ?? 0)} total${t.coverage_pct != null ? ` · ${t.coverage_pct}%` : ""}</span></div>
-      <div class="adm-kpi"><div class="adm-kpi-top"><span class="adm-kpi-label">Matched → AI</span></div><div class="adm-kpi-value gold">${fmtNum(t.matched ?? 0)}</div><span class="adm-hint">${t.match_pct != null ? `${t.match_pct}% of filtered` : ""}</span></div>
-      <div class="adm-kpi"><div class="adm-kpi-top"><span class="adm-kpi-label">Skipped (NOT_MATCHED)</span></div><div class="adm-kpi-value">${fmtNum(t.not_matched ?? 0)}</div><span class="adm-hint">kept stored, no AI call</span></div>
-      <div class="adm-kpi"><div class="adm-kpi-top"><span class="adm-kpi-label">AI calls saved</span></div><div class="adm-kpi-value violet">${fmtNum(ai.comment_count ?? 0)}</div><span class="adm-hint">costs are never estimated</span></div>
+      ${statButton("adm-kpi", `<div class="adm-kpi-top"><span class="adm-kpi-label">Comments filtered ${STAT_GO}</span></div><div class="adm-kpi-value">${fmtNum(t.filtered ?? 0)}</div><span class="adm-hint">of ${fmtNum(t.comments ?? 0)} total${t.coverage_pct != null ? ` · ${t.coverage_pct}%` : ""}</span>`, "Show all filtered comments", `data-kr-show="all"`)}
+      ${statButton("adm-kpi", `<div class="adm-kpi-top"><span class="adm-kpi-label">Matched → AI ${STAT_GO}</span></div><div class="adm-kpi-value gold">${fmtNum(t.matched ?? 0)}</div><span class="adm-hint">${t.match_pct != null ? `${t.match_pct}% of filtered` : ""}</span>`, "Show matched comments", `data-kr-show="MATCHED"`)}
+      ${statButton("adm-kpi", `<div class="adm-kpi-top"><span class="adm-kpi-label">Skipped (NOT_MATCHED) ${STAT_GO}</span></div><div class="adm-kpi-value">${fmtNum(t.not_matched ?? 0)}</div><span class="adm-hint">kept stored, no AI call</span>`, "Show skipped comments", `data-kr-show="NOT_MATCHED"`)}
+      ${statLink("ai", "adm-kpi", `<div class="adm-kpi-top"><span class="adm-kpi-label">AI calls saved ${STAT_GO}</span></div><div class="adm-kpi-value violet">${fmtNum(ai.comment_count ?? 0)}</div><span class="adm-hint">costs are never estimated</span>`, "AI & Analysis")}
     </div>
     <div class="adm-card">
       <div class="adm-filters">
@@ -3243,6 +3288,14 @@ async function viewKeywordRules() {
   root.querySelectorAll("[data-kr-tab]").forEach((btn) => {
     btn.onclick = () => { KR_TAB = btn.dataset.krTab; viewKeywordRules(); };
   });
+  root.querySelectorAll("[data-kr-show]").forEach((btn) => {
+    btn.onclick = () => {
+      KR_TAB = "comments";
+      Object.assign(KR_CF, { status: btn.dataset.krShow, q: "", keyword: "", offset: 0 });
+      viewKeywordRules();
+    };
+  });
+  bindNav(root);
   if (canManage) {
     $("#krNewRule").onclick = () => krOpenEditor(null, catalog);
     const btn2 = $("#krNewRule2");
@@ -3604,11 +3657,11 @@ async function viewLogs() {
       <button class="adm-btn" id="logExportBtn">${icon("download", 14)} Export</button>`)}
     <div class="adm-card" id="logSummaryCards">
       <div class="adm-log-summary" id="logSummary">
-        <div class="adm-log-stat critical"><span class="num" id="logCritCount">—</span><span class="lbl">Critical</span></div>
-        <div class="adm-log-stat error"><span class="num" id="logErrCount">—</span><span class="lbl">Errors</span></div>
-        <div class="adm-log-stat warn"><span class="num" id="logWarnCount">—</span><span class="lbl">Warnings</span></div>
-        <div class="adm-log-stat info"><span class="num" id="logInfoCount">—</span><span class="lbl">Info</span></div>
-        <div class="adm-log-stat debug"><span class="num" id="logDebugCount">—</span><span class="lbl">Debug</span></div>
+        ${[["critical", "CRITICAL", "logCritCount", "Critical"], ["error", "ERROR", "logErrCount", "Errors"],
+           ["warn", "WARNING", "logWarnCount", "Warnings"], ["info", "INFO", "logInfoCount", "Info"],
+           ["debug", "DEBUG", "logDebugCount", "Debug"]].map(([cls, lv, id, label]) =>
+          statButton(`adm-log-stat ${cls}`, `<span class="num" id="${id}">—</span><span class="lbl">${label} ${STAT_GO}</span>`,
+            `Show ${label.toLowerCase()} only`, `data-log-level="${lv}" aria-pressed="${lvl === lv ? "true" : "false"}"`)).join("")}
       </div>
     </div>
     <div class="adm-card">
@@ -3856,6 +3909,15 @@ async function viewLogs() {
     _loadLogs();
   };
   $("#logClearFilters").onclick = $("#logClear").onclick;
+  $$("[data-log-level]", root).forEach((btn) => {
+    btn.onclick = () => {
+      const lv = btn.dataset.logLevel;
+      $("#logLevel").value = $("#logLevel").value === lv ? "" : lv;
+      $$("[data-log-level]", root).forEach((b) =>
+        b.setAttribute("aria-pressed", b.dataset.logLevel === $("#logLevel").value ? "true" : "false"));
+      $("#logApply").onclick();
+    };
+  });
   $("#logQ").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#logApply").onclick(); });
   $("#logJumpLatest").onclick = () => {
     _userScrolled = false;
@@ -3873,6 +3935,8 @@ async function viewLogs() {
     const sec = parseInt(autoRefreshSelect.value);
     if (sec > 0) {
       _logAutoRefresh = setInterval(() => {
+        // stop once the user has left the Logs view (its inputs are gone)
+        if (state.view !== "logs" || !$("#logQ")) { clearInterval(_logAutoRefresh); _logAutoRefresh = null; return; }
         if (!_userScrolled) _loadLogs();
       }, sec * 1000);
     }
@@ -4200,11 +4264,10 @@ async function viewOrgDetail(orgId) {
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px;margin-bottom:18px">
-      <div class="adm-card" style="padding:14px">
-        <div class="adm-stat-label">Members</div>
+      ${statButton("adm-card", `
+        <div class="adm-stat-label">Members ${STAT_GO}</div>
         <div style="font-size:22px;font-weight:700">${members.length}</div>
-        <div class="adm-hint">Accounts</div>
-      </div>
+        <div class="adm-hint">Accounts</div>`, "Jump to the member list", `id="orgMembersStat" style="padding:14px"`)}
       <div class="adm-card" style="padding:14px">
         <div class="adm-stat-label">Searches</div>
         <div style="font-size:22px;font-weight:700">${Number(metrics.searches_count || 0).toLocaleString()}</div>
@@ -4248,7 +4311,7 @@ async function viewOrgDetail(orgId) {
       </div>
     </div>
 
-    <div class="adm-card">
+    <div class="adm-card" id="orgMembers" tabindex="-1">
       <div class="adm-card-head-row" style="margin-bottom:12px">
         <div class="adm-card-title">Organization Members (${members.length})</div>
       </div>
@@ -4283,6 +4346,13 @@ async function viewOrgDetail(orgId) {
         </tbody>
       </table></div>
     </div>`;
+
+  const membersStat = $("#orgMembersStat");
+  if (membersStat) membersStat.onclick = () => {
+    const card = $("#orgMembers");
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.focus({ preventScroll: true });
+  };
 
   // Bind Suspend/Activate
   const suspendBtn = $("#orgDetailSuspendBtn");

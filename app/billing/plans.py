@@ -27,6 +27,7 @@ DEFAULT_PLANS: List[Dict[str, Any]] = [
         "status": "active",
         "price_monthly": 0.0,
         "price_yearly": 0.0,
+        "allows_byok": False,
         "currency": "USD",
         "trial_days": 0,
         "display_order": 1,
@@ -53,6 +54,10 @@ DEFAULT_PLANS: List[Dict[str, Any]] = [
         "status": "active",
         "price_monthly": 49.0,
         "price_yearly": 490.0,
+        "allows_byok": True,
+        # taken off the price when the customer brings that API key (the plan price includes both)
+        "api_addons": {"apify": {"monthly": 12.0, "yearly": 120.0},
+                       "gemini": {"monthly": 8.0, "yearly": 80.0}},
         "currency": "USD",
         "trial_days": 14,
         "display_order": 2,
@@ -83,6 +88,10 @@ DEFAULT_PLANS: List[Dict[str, Any]] = [
         "status": "active",
         "price_monthly": 149.0,
         "price_yearly": 1490.0,
+        "allows_byok": True,
+        # taken off the price when the customer brings that API key (the plan price includes both)
+        "api_addons": {"apify": {"monthly": 36.0, "yearly": 360.0},
+                       "gemini": {"monthly": 24.0, "yearly": 240.0}},
         "currency": "USD",
         "trial_days": 14,
         "display_order": 3,
@@ -117,6 +126,10 @@ DEFAULT_PLANS: List[Dict[str, Any]] = [
         "status": "active",
         "price_monthly": 399.0,
         "price_yearly": 3990.0,
+        "allows_byok": True,
+        # taken off the price when the customer brings that API key (the plan price includes both)
+        "api_addons": {"apify": {"monthly": 96.0, "yearly": 960.0},
+                       "gemini": {"monthly": 64.0, "yearly": 640.0}},
         "currency": "USD",
         "trial_days": 14,
         "display_order": 4,
@@ -153,6 +166,10 @@ DEFAULT_PLANS: List[Dict[str, Any]] = [
         "status": "active",
         "price_monthly": 999.0,
         "price_yearly": 9990.0,
+        "allows_byok": True,
+        # taken off the price when the customer brings that API key (the plan price includes both)
+        "api_addons": {"apify": {"monthly": 240.0, "yearly": 2400.0},
+                       "gemini": {"monthly": 160.0, "yearly": 1600.0}},
         "currency": "USD",
         "trial_days": 30,
         "display_order": 5,
@@ -286,6 +303,93 @@ def _clean_plan(doc: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# ── Who provides each external API, and what it costs ─────────────────────────
+# A plan's price_monthly / price_yearly is the ALL-INCLUDED price (LeadAI
+# provides Apify and Gemini). ``api_addons[api][cycle]`` is taken off when the
+# customer brings that API's key instead. Plans without api_addons fall back
+# to the older single "bring both" price (price_*_byok), split 60/40.
+API_PROVIDERS = ("apify", "gemini")
+API_LABELS = {"apify": "Apify (scraping)", "gemini": "Google Gemini (AI analysis)"}
+COVERAGE_VALUES = ("leadai", "own")
+ALL_INCLUDED = {"apify": "leadai", "gemini": "leadai"}
+_LEGACY_SPLIT = {"apify": 0.6, "gemini": 0.4}
+
+
+def normalize_coverage(value: Any = None, *, api_mode: Optional[str] = None) -> Dict[str, str]:
+    """{"apify": "leadai"|"own", "gemini": ...}; ``api_mode="byok"`` (old
+    all-or-nothing switch) means "own" for both."""
+    out = dict(ALL_INCLUDED)
+    if isinstance(value, dict):
+        for api in API_PROVIDERS:
+            v = str(value.get(api) or "").strip().lower()
+            if v in ("own", "byok", "customer"):
+                out[api] = "own"
+    elif api_mode and str(api_mode).strip().lower() == "byok":
+        out = {api: "own" for api in API_PROVIDERS}
+    return out
+
+
+def _money2(v: Any) -> float:
+    try:
+        return round(max(0.0, float(v or 0)), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def plan_api_pricing(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """{"allows_own": bool, "addons": {api: {"monthly": x, "yearly": y}}}."""
+    allows = bool(plan.get("allows_byok", True)) and _money2(plan.get("price_monthly")) > 0
+    stored = plan.get("api_addons") if isinstance(plan.get("api_addons"), dict) else None
+    addons: Dict[str, Dict[str, float]] = {}
+    for api in API_PROVIDERS:
+        addons[api] = {}
+        for cycle in ("monthly", "yearly"):
+            full = _money2(plan.get(f"price_{cycle}"))
+            if stored is not None:
+                val = _money2((stored.get(api) or {}).get(cycle))
+            else:
+                legacy = plan.get(f"price_{cycle}_byok")
+                gap = max(0.0, full - _money2(legacy)) if legacy not in (None, "", 0, 0.0) else 0.0
+                val = round(gap * _LEGACY_SPLIT[api], 2)
+            addons[api][cycle] = min(val, full)
+    return {"allows_own": allows, "addons": addons}
+
+
+def price_for(plan: Dict[str, Any], coverage: Optional[Dict[str, str]], cycle: str) -> float:
+    """What the customer pays for ``plan`` per ``cycle`` with this API coverage.
+    The one place the price is computed (checkout, renewal, pricing pages)."""
+    cycle = "yearly" if cycle == "yearly" else "monthly"
+    full = _money2(plan.get(f"price_{cycle}"))
+    cov = normalize_coverage(coverage)
+    pricing = plan_api_pricing(plan)
+    if not pricing["allows_own"]:
+        return full
+    off = sum(pricing["addons"][api][cycle] for api in API_PROVIDERS if cov[api] == "own")
+    return round(max(0.0, full - off), 2)
+
+
+def coverage_options(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every coverage choice this plan offers, with its monthly / yearly price."""
+    combos = [("all_included", "All included", {"apify": "leadai", "gemini": "leadai"}),
+              ("own_apify", "Own Apify key", {"apify": "own", "gemini": "leadai"}),
+              ("own_gemini", "Own Gemini key", {"apify": "leadai", "gemini": "own"}),
+              ("own_both", "Bring both keys", {"apify": "own", "gemini": "own"})]
+    allows = plan_api_pricing(plan)["allows_own"]
+    return [{"key": k, "label": label, "coverage": cov,
+             "price_monthly": price_for(plan, cov, "monthly"), "price_yearly": price_for(plan, cov, "yearly")}
+            for k, label, cov in combos if allows or k == "all_included"]
+
+
+def coverage_label(coverage: Optional[Dict[str, str]]) -> str:
+    cov = normalize_coverage(coverage)
+    own = [api for api in API_PROVIDERS if cov[api] == "own"]
+    if not own:
+        return "All included"
+    if len(own) == 2:
+        return "Bring both keys"
+    return f"Own {own[0].capitalize()} key"
+
+
 async def ensure_default_plans(db=None) -> None:
     """Seed initial default plans if the collection is unpopulated or missing standard plans."""
     if db is None:
@@ -302,11 +406,19 @@ async def ensure_default_plans(db=None) -> None:
                 to_insert["updated_at"] = utcnow()
                 await db.plans.insert_one(to_insert)
                 logger.info(f"Seeded SaaS plan: {plan_spec['name']} ({plan_spec['slug']})")
-        # Backfill new limit keys onto existing plans (never overwrite values)
+        # Backfill new limit keys and per-API pricing onto existing plans (never overwrite)
+        defaults_by_slug = {p["slug"]: p for p in DEFAULT_PLANS}
         async for plan in db.plans.find({}):
-            seed = PLAN_LIMIT_SEED.get(plan.get("slug"), {})
+            slug = plan.get("slug")
+            seed = PLAN_LIMIT_SEED.get(slug, {})
             limits = plan.get("limits") or {}
             missing = {f"limits.{k}": v for k, v in seed.items() if k not in limits}
+            def_spec = defaults_by_slug.get(slug)
+            if def_spec:
+                if "allows_byok" not in plan:
+                    missing["allows_byok"] = def_spec.get("allows_byok", True)
+                if "api_addons" not in plan and def_spec.get("api_addons"):
+                    missing["api_addons"] = def_spec["api_addons"]
             if missing:
                 await db.plans.update_one({"_id": plan["_id"]}, {"$set": missing})
         invalidate_plan_cache()

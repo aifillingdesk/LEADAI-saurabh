@@ -483,6 +483,42 @@
     return box;
   };
   let cycle = 'monthly';
+  // Who provides each external API: 'leadai' (included in the price) or 'own'
+  // (the customer's own key: cheaper, they pay Apify / Google directly).
+  // Prices always come from the API's coverage_options, never computed here.
+  const API_CHOICES = [
+    { key: 'apify', label: 'Apify (scraping)', name: 'Apify' },
+    { key: 'gemini', label: 'Google Gemini (AI)', name: 'Gemini' },
+  ];
+  const coverage = (function () {
+    const out = { apify: 'leadai', gemini: 'leadai' };
+    try {
+      const qs = new URLSearchParams(location.search);
+      API_CHOICES.forEach(a => { if (qs.get(a.key) === 'own') out[a.key] = 'own'; });
+      if (qs.get('cycle') === 'yearly') cycle = 'yearly';
+    } catch (_) { /* no query string */ }
+    return out;
+  })();
+  const allowsOwn = p => p.allows_own_keys === true;
+  /** Coverage this plan is sold with (plans without own keys: LeadAI provides both). */
+  const effCoverage = p => allowsOwn(p) ? coverage : { apify: 'leadai', gemini: 'leadai' };
+  /** The API's price entry for the chosen combination (all-included entry as the fallback). */
+  function coverageOption(p) {
+    const cov = effCoverage(p);
+    const opts = Array.isArray(p.coverage_options) ? p.coverage_options : [];
+    const hit = opts.find(o => o && o.coverage && o.coverage.apify === cov.apify && o.coverage.gemini === cov.gemini)
+      || opts.find(o => o && o.key === 'all_included');
+    return hit || { key: 'all_included', label: 'All included', coverage: { apify: 'leadai', gemini: 'leadai' },
+      price_monthly: p.price_monthly, price_yearly: p.price_yearly };
+  }
+  /** CTA link that carries the plan, billing period and API choices through sign-up / checkout. */
+  function planHref(base, p, opt) {
+    const qs = new URLSearchParams();
+    qs.set('plan', p.slug || '');
+    if (cycle === 'yearly') qs.set('cycle', 'yearly');
+    API_CHOICES.forEach(a => qs.set(a.key, opt.coverage && opt.coverage[a.key] === 'own' ? 'own' : 'leadai'));
+    return base + (base.indexOf('?') < 0 ? '?' : '&') + qs.toString();
+  }
   function renderPlans(host, sec, plans) {
     clear(host);
     if (plans === null) {
@@ -502,41 +538,73 @@
           h('a', { class: 'btn btn-secondary', href: '/contact', text: 'Contact us' }))));
       return;
     }
+    const rerender = (focusSel, msg) => {
+      renderPlans(host, sec, plans);
+      const b = focusSel && host.querySelector(focusSel); if (b) b.focus();
+      const st = host.parentNode && host.parentNode.querySelector('.plans-status'); if (st && msg) st.textContent = msg;
+    };
     const yearly = cycle === 'yearly';
     let bestSave = 0;
-    plans.forEach(p => { const m = Number(p.price_monthly) || 0, y = Number(p.price_yearly) || 0;
-      if (m > 0 && y > 0 && y < m * 12) bestSave = Math.max(bestSave, Math.round((1 - y / (m * 12)) * 100)); });
+    plans.forEach(p => {
+      const o = coverageOption(p), m = Number(o.price_monthly) || 0, y = Number(o.price_yearly) || 0;
+      if (m > 0 && y > 0 && y < m * 12) bestSave = Math.max(bestSave, Math.round((1 - y / (m * 12)) * 100));
+    });
+
+    // API coverage: one compact "LeadAI provides / own key" switch per external API
+    const choices = plans.some(allowsOwn) ? h('div', { class: 'api-choices' },
+      h('div', { class: 'api-choice-row' }, API_CHOICES.map(a => {
+        const gid = 'api-choice-' + a.key;
+        const mk = (val, label) => h('button', { type: 'button', 'aria-pressed': String(coverage[a.key] === val),
+          'data-api': a.key, 'data-val': val,
+          onclick: () => {
+            if (coverage[a.key] === val) return;
+            coverage[a.key] = val;
+            rerender('[data-api="' + a.key + '"][data-val="' + val + '"]',
+              a.label + ': ' + (val === 'own' ? 'your own key' : 'provided by LeadAI') + '. Prices updated.');
+          } }, label);
+        return h('div', { class: 'api-choice' },
+          h('span', { class: 'api-choice-label', id: gid, text: a.label }),
+          h('div', { class: 'billing-toggle', role: 'group', 'aria-labelledby': gid },
+            mk('leadai', 'LeadAI provides'), mk('own', 'I’ll use my own key')));
+      })),
+      h('p', { class: 'api-choice-note', text: 'Bring your own key = lower price; you pay Apify / Google directly.' })) : null;
+
     const hasYearly = plans.some(p => Number(p.price_yearly) > 0);
-    if (hasYearly) {
-      const mk = (c, label) => h('button', { type: 'button', 'aria-pressed': String(cycle === c),
+    const cycleToggle = hasYearly ? (function () {
+      const mk = (c, label) => h('button', { type: 'button', 'aria-pressed': String(cycle === c), 'data-cycle': c,
         onclick: () => {
           if (cycle === c) return;
-          cycle = c; renderPlans(host, sec, plans);
-          const b = host.querySelector('[aria-pressed="true"]'); if (b) b.focus();
-          const st = host.parentNode && host.parentNode.querySelector('.plans-status'); if (st) st.textContent = (c === 'yearly' ? 'Showing yearly prices' : 'Showing monthly prices');
+          cycle = c;
+          rerender('[data-cycle="' + c + '"]', c === 'yearly' ? 'Showing yearly prices' : 'Showing monthly prices');
         } },
         label, c === 'yearly' && bestSave ? h('span', { class: 'save', text: 'Save ' + bestSave + '%' }) : null);
-      host.appendChild(h('div', { class: 'pricing-center' },
-        h('div', { class: 'billing-toggle' + (yearly ? ' is-yearly' : ''), role: 'group', 'aria-label': 'Billing period' }, mk('monthly', 'Monthly'), mk('yearly', 'Yearly'))));
-    }
+      return h('div', { class: 'pricing-center' },
+        h('div', { class: 'billing-toggle' + (yearly ? ' is-yearly' : ''), role: 'group', 'aria-label': 'Billing period' }, mk('monthly', 'Monthly'), mk('yearly', 'Yearly')));
+    })() : null;
+    host.appendChild(h('div', { class: 'pricing-controls' }, choices, cycleToggle));
+
     const cta = sec.cta_primary && safeUrl(sec.cta_primary.url) ? sec.cta_primary : { label: 'Request a demo', url: '/request-demo' };
     host.appendChild(h('div', { class: 'plans' }, plans.map(p => {
-      const useYear = yearly && Number(p.price_yearly) > 0;
-      const price = Number(useYear ? p.price_yearly : p.price_monthly) || 0;
+      const opt = coverageOption(p);
+      const useYear = yearly && Number(opt.price_yearly) > 0;
+      const price = Number(useYear ? opt.price_yearly : opt.price_monthly) || 0;
       const free = price === 0;
       const meta = [];
       if (useYear) meta.push('≈ ' + money(price / 12, p.currency) + ' / month, billed yearly');
       if (Number(p.trial_days) > 0) meta.push(p.trial_days + '-day trial');
-      const href = safeUrl(cta.url) + (cta.url.indexOf('?') < 0 ? '?' : '&') + 'plan=' + encodeURIComponent(p.slug || '');
-      return h('article', { class: 'plan' + (p.popular ? ' popular' : ''), 'aria-labelledby': 'plan-' + p.slug },
+      const own = API_CHOICES.filter(a => opt.coverage && opt.coverage[a.key] === 'own').map(a => a.name);
+      const covNote = !allowsOwn(p) ? h('span', { class: 'plan-cov', text: 'LeadAI-provided only' })
+        : own.length ? h('span', { class: 'plan-cov is-own', text: 'Your own ' + own.join(' + ') + ' key' + (own.length > 1 ? 's' : '') })
+          : h('span', { class: 'plan-cov', text: 'Apify + Gemini included' });
+      return h('article', { class: 'plan' + (p.popular ? ' popular' : ''), 'aria-labelledby': 'plan-' + p.slug, 'data-plan': p.slug },
         p.popular ? h('span', { class: 'plan-badge', text: 'Most popular' }) : null,
         h('h3', { id: 'plan-' + p.slug, text: p.name }),
         h('p', { class: 'plan-desc', text: p.description || '' }),
         h('p', { class: 'plan-price' }, h('strong', { text: free ? 'Free' : money(price, p.currency) }),
           free ? null : h('span', { text: useYear ? '/ year' : '/ month' })),
-        h('p', { class: 'plan-meta', text: meta.join(' · ') }),
+        h('p', { class: 'plan-meta' }, covNote, meta.length ? h('span', { text: meta.join(' · ') }) : null),
         h('ul', { 'aria-label': 'Included' }, (p.highlights || []).map(f => h('li', null, svg('check'), f))),
-        h('a', { class: 'btn w-full ' + (p.popular ? 'btn-primary' : 'btn-secondary'), href: href, text: cta.label,
+        h('a', { class: 'btn w-full ' + (p.popular ? 'btn-primary' : 'btn-secondary'), href: planHref(safeUrl(cta.url), p, opt), text: cta.label,
           'aria-label': cta.label + ' — ' + p.name }));
     })));
   }

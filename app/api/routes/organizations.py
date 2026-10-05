@@ -169,6 +169,11 @@ async def get_current_organization(ctx: TenantContext = Depends(require_org_perm
         raise HTTPException(status_code=404, detail="Organization not found")
     cleaned = _clean_doc(org)
     cleaned.pop("metadata", None)
+    # customers' own API keys are write-only: only masked hints and status leave the server
+    cleaned.pop("custom_api_keys", None)
+    cleaned.pop("api_key_alerts", None)
+    from app.services.tenant_api_keys import public_config
+    cleaned["api_keys"] = public_config(org)
     cleaned["user_role"] = ctx.user_role
     cleaned["permissions"] = ctx.permissions
     # effective business context (industry used by lead analysis)

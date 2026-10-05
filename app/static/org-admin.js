@@ -158,6 +158,7 @@
     table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 10v10"/>',
     x: '<path d="M18 6L6 18M6 6l12 12"/>',
     chevron: '<path d="M9 6l6 6-6 6"/>',
+    key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L20 3M16 7l3 3M14 9l2 2"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   };
   const ico = (n, cls) => `<svg class="${cls || 'oa-ico'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n] || IC.info}</svg>`;
@@ -230,6 +231,28 @@
     } catch (e) { toast(e.message || 'Export failed', 'error'); }
     finally { busy(btn, false); }
   }
+
+  const money = (a, c) => a == null ? '—' : (Number(a) === 0 ? 'Free' : new Intl.NumberFormat(undefined, { style: 'currency', currency: (c || 'USD').toUpperCase() }).format(a));
+  // Plan checkout (Subscription page and API keys & plan): go to the payment
+  // provider's page when there is one; otherwise the request awaits confirmation.
+  async function startCheckout(body, btn) {
+    busy(btn, true, 'Starting checkout…');
+    try {
+      const r = await api('/api/billing/checkout', { method: 'POST', body });
+      const safe = safeUrl((r.checkout && (r.checkout.redirect_url || r.checkout.url)) || '');
+      if (safe) location.href = safe; else { toast('Checkout created — awaiting confirmation.', 'success'); route(); }
+      return true;
+    } catch (e) { toast(e.message, 'error'); busy(btn, false); return false; }
+  }
+
+  // ── Linked KPI tile ─────────────────────────────────────────────────
+  // A stat box that opens the page behind its number. labelHtml / valueHtml /
+  // metaHtml are already-escaped HTML; o.title is the accessible hint.
+  function statCard(href, labelHtml, valueHtml, metaHtml, o) {
+    o = o || {};
+    return `<a class="oa-card oa-stat" href="${attr(href)}"${o.data ? ' ' + o.data : ''}${o.title ? ` title="${attr(o.title)}"` : ''}><span class="oa-stat-label">${labelHtml}</span>${valueHtml}${metaHtml ? `<span class="oa-stat-meta">${metaHtml}</span>` : ''}</a>`;
+  }
+  const statVal = (n, style) => `<span class="oa-stat-value"${style ? ` style="${style}"` : ''}>${num(n)}</span>`;
 
   // ── Shared view states ──────────────────────────────────────────────
   function stateHtml(kind, title, desc, actions) {
@@ -657,7 +680,7 @@
   // ════════════════════════════════════════════════════════════════════
   const NAV = [
     { group: 'Overview', items: [['dashboard', 'Dashboard', 'home']] },
-    { group: 'Organization', items: [['organization', 'Organization', 'building'], ['team', 'Team', 'users']] },
+    { group: 'Organization', items: [['organization', 'Organization', 'building'], ['team', 'Team', 'users'], ['integrations', 'API keys & plan', 'key']] },
     { group: 'LeadAI', items: [['search', 'URL Search', 'search'], ['searches', 'Searches', 'list'], ['pages', 'Pages', 'file'], ['posts', 'Posts', 'message'], ['comments', 'Comments', 'chat']] },
     { group: 'Lead management', items: [['leads', 'All leads', 'target'], ['leads/assigned', 'Assigned leads', 'userCheck'], ['pipeline', 'Lifecycle', 'flow'], ['rules', 'Lead rules', 'filter']] },
     { group: 'Operations', items: [['apify', 'Apify jobs', 'cpu'], ['analytics', 'Analytics & reports', 'chart'], ['exports', 'Exports', 'download']] },
@@ -755,26 +778,15 @@
             </div>
           </div>
           <div class="oa-biz-grid">
-            <div>
-              <div class="oa-biz-stat-label">Industry</div>
-              <div class="oa-biz-stat-val">${esc(bizSum.industry || 'Not set')}</div>
-            </div>
-            <div>
-              <div class="oa-biz-stat-label">Business Type</div>
-              <div class="oa-biz-stat-val">${esc(bizSum.business_type || 'General')}</div>
-            </div>
-            <div>
-              <div class="oa-biz-stat-label">Target Customer</div>
-              <div class="oa-biz-stat-val">${esc((bizSum.target_customers || []).join(', ') || 'Buyers')}</div>
-            </div>
-            <div>
-              <div class="oa-biz-stat-label">Active Keywords</div>
-              <div class="oa-biz-stat-val" style="color:var(--primary)">${num(bizSum.active_keywords_count)}</div>
-            </div>
-            <div>
-              <div class="oa-biz-stat-label">Excluded Terms</div>
-              <div class="oa-biz-stat-val">${num(bizSum.excluded_keywords_count)}</div>
-            </div>
+            ${[['#organization/business', 'Industry', esc(bizSum.industry || 'Not set'), ''],
+              ['#organization/business', 'Business Type', esc(bizSum.business_type || 'General'), ''],
+              ['#organization/business', 'Target Customer', esc((bizSum.target_customers || []).join(', ') || 'Buyers'), ''],
+              ['#rules?tab=active', 'Active Keywords', num(bizSum.active_keywords_count), 'color:var(--primary)'],
+              ['#rules?tab=excluded', 'Excluded Terms', num(bizSum.excluded_keywords_count), ''],
+            ].map(([h, k, val, style]) => `<a class="oa-biz-stat" href="${h}">
+              <div class="oa-biz-stat-label">${esc(k)}</div>
+              <div class="oa-biz-stat-val"${style ? ` style="${style}"` : ''}>${val}</div>
+            </a>`).join('')}
           </div>
         </div>` : '';
 
@@ -789,7 +801,7 @@
         </div>
         <div class="oa-grid oa-grid-2" data-trend aria-busy="true">${['Searches', 'Leads'].map(() => '<div class="oa-card"><div class="oa-skel oa-skel-line" style="width:40%"></div><div class="oa-skel" style="height:190px;margin-top:14px"></div></div>').join('')}</div>
         <div class="oa-grid oa-grid-3">
-          <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Token usage</div>${ico('token')}</div>${tok ? `${meter('Tokens used', tok.used, tok.allocated, tok.percentage)}<p class="oa-small oa-muted" style="margin-top:10px"><b style="color:var(--text-primary)">${num(tok.remaining)}</b> tokens remaining${tok.expires_at ? ' · expire ' + esc(fmtDate(tok.expires_at)) : ''}</p>` : '<p class="oa-muted oa-small">Your plan is not token-metered.</p>'}</div>
+          <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Token usage</div><a class="oa-link oa-small" href="#subscription">Balance</a></div>${tok ? `${meter('Tokens used', tok.used, tok.allocated, tok.percentage)}<p class="oa-small oa-muted" style="margin-top:10px"><b style="color:var(--text-primary)">${num(tok.remaining)}</b> tokens remaining${tok.expires_at ? ' · expire ' + esc(fmtDate(tok.expires_at)) : ''}</p>` : '<p class="oa-muted oa-small">Your plan is not token-metered.</p>'}</div>
           <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Subscription</div><a class="oa-link oa-small" href="#subscription">Manage</a></div>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:1.25rem;font-weight:800">${esc((d.plan && d.plan.name) || 'No plan')}</span>${pill(planStatus, planStatus === 'none' ? 'No subscription' : planStatus === 'active' ? 'Active' : label(planStatus))}</div>
             <p class="oa-small oa-muted" style="margin-top:8px">${sub.current_period_end ? (sub.cancel_at_period_end ? 'Ends ' : 'Renews ') + esc(fmtDate(sub.current_period_end)) : (d.plan && d.plan.is_demo ? 'Demo plan' : 'No renewal date')}</p>
@@ -828,8 +840,10 @@
 
   // ── Organization ───────────────────────────────────────────────────
   ROUTES.organization = {
-    title: (p) => 'Organization · ' + ({ branding: 'Branding', settings: 'Settings', business: 'Business profile' }[p[1]] || 'Profile'),
+    title: (p) => 'Organization · ' + ({ branding: 'Branding', settings: 'Settings', business: 'Business profile', apikeys: 'API keys & plan' }[p[1]] || 'Profile'),
     async render(v) {
+      // the old "API Keys" tab moved to its own page
+      if (v.parts[1] === 'apikeys') { history.replaceState(null, '', '#integrations'); return route(); }
       const tab = ['profile', 'business', 'branding', 'settings'].indexOf(v.parts[1]) >= 0 ? v.parts[1] : 'profile';
       if (tab === 'business') return renderBusinessProfile(v);
       const org = await getOrg(true);
@@ -948,7 +962,7 @@
       });
     },
   };
-  const ORG_TABS = [['#organization/profile', 'Profile'], ['#organization/business', 'Business profile'], ['#organization/branding', 'Branding'], ['#organization/settings', 'Settings']];
+  const ORG_TABS = [['#organization/profile', 'Profile'], ['#organization/business', 'Business profile'], ['#organization/branding', 'Branding'], ['#organization/settings', 'Settings'], ['#integrations', 'API keys & plan']];
   // Business profile: the industry and business description that LeadAI's
   // lead analysis (AI prompt, rule vocabulary, optional comment filter) uses.
   async function renderBusinessProfile(v) {
@@ -1052,6 +1066,255 @@
         busy(btn, false);
       }
     });
+  }
+
+  // ── API keys & plan ────────────────────────────────────────────────
+  // Per external API (Apify, Google Gemini) the organization either uses
+  // LeadAI's (included in the plan price) or brings its own key (lower price;
+  // the customer pays the provider). Every price shown comes from the API.
+  // Keys are write-only: the page only ever receives a masked hint.
+  const IK_APIS = ['apify', 'gemini'];
+  const IK = {
+    apify: { name: 'Apify', what: 'Scraping Facebook, Instagram, YouTube and LinkedIn', keyName: 'Apify API token', payer: 'Apify',
+      help: 'https://console.apify.com/settings/integrations', helpText: 'Get your Apify API token', ph: 'apify_api_…' },
+    gemini: { name: 'Google Gemini', what: 'AI analysis: intent detection and lead scoring', keyName: 'Gemini API key', payer: 'Google',
+      help: 'https://aistudio.google.com/app/apikey', helpText: 'Get a Gemini API key', ph: 'AIza…' },
+  };
+  const ikSame = (a, b) => IK_APIS.every(k => (a || {})[k] === (b || {})[k]);
+  const ikPer = (c) => (c === 'yearly' ? 'year' : 'month');
+  const ikPrice = (a, cur, c) => a == null ? '—' : money(a, cur) + (Number(a) ? '/' + ikPer(c) : '');
+  function ikCovLabel(cov) {
+    const own = IK_APIS.filter(k => (cov || {})[k] === 'own');
+    return !own.length ? 'All included' : own.length === 2 ? 'Bring both keys' : 'Own ' + IK[own[0]].name.replace('Google ', '') + ' key';
+  }
+  // key timestamps arrive as naive UTC ISO strings (no zone): read them as UTC
+  const ikUtc = (v) => (typeof v === 'string' && /T\d\d:\d\d(:\d\d(\.\d+)?)?$/.test(v) ? v + 'Z' : v);
+  function ikKeyState(k) {
+    if (!k || !k.configured) return ['none', 'Not added'];
+    if (k.verified) return ['active', 'Verified'];
+    return k.last_error ? ['failed', 'Error'] : ['pending', 'Not verified'];
+  }
+
+  ROUTES.integrations = {
+    title: () => 'API keys & plan',
+    async render(v) {
+      const d = await api('/api/org-admin/integrations/api-keys');
+      if (!v.alive()) return;
+      const I = d.integrations || {};
+      const st = { I, manage: !!d.can_manage, cycle: (I.subscription && I.subscription.billing_cycle) || 'monthly',
+        open: {}, err: {}, note: {}, intent: {} };
+      renderIntegrations(v, st);
+    },
+  };
+
+  function renderIntegrations(v, st) {
+    async function reload() {
+      const d = await api('/api/org-admin/integrations/api-keys');
+      st.I = d.integrations || {}; st.manage = !!d.can_manage;
+    }
+    function paint(focusSel) {
+      if (!v.alive()) return;
+      const I = st.I, plan = I.plan || {}, sub = I.subscription, cov = I.coverage || {}, keys = I.keys || {}, opts = I.options || [];
+      const cur = plan.currency || 'USD', allows = !!plan.allows_own_keys, manage = st.manage;
+      const curOpt = opts.find(o => ikSame(o.coverage, cov));
+      const cheaperNext = sub && Number(sub.next_price) < Number(sub.amount);
+      const fig = (lbl, val, meta, id) => `<div class="oa-ik-fig"${id ? ` data-fig="${id}"` : ''}><span class="oa-ik-fig-l">${esc(lbl)}</span><b>${val}</b>${meta ? `<span class="oa-ik-fig-m">${meta}</span>` : ''}</div>`;
+
+      const summary = `<section class="oa-card oa-ik-summary" aria-labelledby="ik-sum-t">
+        <div class="oa-ik-sum-head"><div><span class="oa-ik-fig-l">Your current choice</span><h2 class="oa-ik-choice" id="ik-sum-t">${esc(I.label || ikCovLabel(cov))}</h2>
+          <span class="oa-small oa-muted">Apify: <b>${cov.apify === 'own' ? 'your own key' : 'LeadAI'}</b> · Gemini: <b>${cov.gemini === 'own' ? 'your own key' : 'LeadAI'}</b></span></div>
+          ${plan.is_demo ? pill('demo', 'Demo plan') : sub ? pill('active', 'Paid subscription') : pill('none', 'No paid subscription')}</div>
+        <div class="oa-ik-figs">
+          ${fig('Plan', esc(plan.name || 'No plan'), sub ? esc(cap(sub.billing_cycle)) + ' billing' : (plan.is_demo ? 'Demo' : 'No paid subscription'))}
+          ${sub ? fig('You pay now', esc(ikPrice(sub.amount, cur, sub.billing_cycle)), sub.paid_for_label ? 'Paid for: ' + esc(sub.paid_for_label) : '', 'now')
+              : fig('You pay now', 'Nothing yet', plan.is_demo ? 'Demo plan' : 'Choose a plan on the Subscription page', 'now')}
+          ${sub ? fig('Next renewal', esc(ikPrice(sub.next_price, cur, sub.billing_cycle)), (cheaperNext ? '<span class="oa-ik-good">Lower price</span> · ' : '') + 'on ' + esc(fmtDate(ikUtc(sub.current_period_end))), 'next')
+              : fig('Price with this choice', curOpt && Number(curOpt.price_monthly) ? esc(ikPrice(curOpt.price_monthly, cur, 'monthly')) : '—', curOpt && Number(curOpt.price_yearly) ? 'or ' + esc(ikPrice(curOpt.price_yearly, cur, 'yearly')) : '', 'next')}
+        </div>
+        <div class="oa-note">${ico('info')}<span><b>Bring your own key = lower price;</b> you pay Apify / Google directly for what you use. Mix as you like: your own Apify key, your own Gemini key, both, or neither.</span></div>
+      </section>`;
+
+      const notAllowed = allows ? '' : `<div class="alert alert-info oa-ik-alert">${ico('info', 'alert-icon')}<div class="alert-body"><div class="alert-title">Own API keys are available on paid plans</div>
+        <div>On the ${esc(plan.name || 'current')} plan LeadAI provides Apify and Google Gemini for you. Choose a paid plan to bring your own keys and pay less.</div><div class="alert-actions"><a href="#subscription">See plans</a></div></div></div>`;
+
+      const card = (a) => {
+        const m = IK[a], k = keys[a] || {}, own = cov[a] === 'own', ks = ikKeyState(k);
+        const addon = ((plan.addons || {})[a] || {})[st.cycle];
+        const broken = own && !(k.configured && k.verified);
+        const seg = allows
+          ? `<div class="oa-seg oa-ik-seg" role="group" aria-labelledby="ik-${a}-who">
+              <button type="button" data-cov="leadai" aria-pressed="${!own}" ${manage ? '' : 'disabled'}>LeadAI</button>
+              <button type="button" data-cov="own" aria-pressed="${own}" ${manage ? '' : 'disabled'}>Your own key</button></div>`
+          : `<b class="oa-ik-who-ro">LeadAI</b>`;
+        return `<section class="oa-card oa-ik-api" data-api="${a}" aria-labelledby="ik-${a}-t">
+          <div class="oa-card-head"><div style="min-width:0"><h2 class="oa-card-title" id="ik-${a}-t" tabindex="-1">${esc(m.name)}</h2><div class="oa-card-sub">${esc(m.what)}</div></div>${pill(ks[0], ks[1])}</div>
+          <div class="oa-ik-who"><span class="oa-label" id="ik-${a}-who">Who provides it</span>${seg}
+            ${allows && Number(addon) ? `<span class="oa-hint">Your own key takes ${esc(ikPrice(addon, cur, st.cycle))} off the plan price.</span>` : ''}</div>
+          ${broken ? `<div class="alert alert-danger oa-ik-alert">${ico('alert', 'alert-icon')}<div class="alert-body">${esc(m.name)} is set to your own key, but ${k.configured ? 'the key is not verified' : 'no key is saved'}. Searches that need ${esc(m.name)} stop until you ${k.configured ? 'fix the key' : 'add a key'}${manage ? ' or switch back to LeadAI' : ''}.</div></div>` : ''}
+          ${st.note[a] ? `<div class="alert alert-info oa-ik-alert">${ico('info', 'alert-icon')}<div class="alert-body">${esc(st.note[a])}</div></div>` : ''}
+          ${kv([['Saved key', k.configured ? `<code class="oa-mono oa-ik-hint">${esc(k.hint || '••••')}</code>` : '<span class="oa-muted">None</span>'],
+                k.configured && !k.verified && k.last_error ? ['Problem', `<span class="oa-ik-lasterr">${esc(k.last_error)}</span>`] : null,
+                k.configured ? [k.verified ? 'Verified' : 'Saved', timeTag(ikUtc(k.verified ? (k.verified_at || k.updated_at) : k.updated_at))] : null])}
+          <p class="oa-err oa-ik-msg" role="alert" data-ik-err>${esc(st.err[a] || '')}</p>
+          ${manage ? `<div class="oa-actions oa-ik-acts">
+              <button type="button" class="btn btn-primary btn-sm" data-ik-add aria-expanded="${!!st.open[a]}" aria-controls="ik-${a}-form">${ico('plus')} ${k.configured ? 'Replace key' : 'Add key'}</button>
+              ${k.configured ? `<button type="button" class="btn btn-secondary btn-sm" data-ik-test>${ico('refresh')} Test</button><button type="button" class="btn btn-ghost btn-sm oa-ik-rm" data-ik-remove>Remove key</button>` : ''}</div>
+            <form class="oa-ik-form" id="ik-${a}-form" data-ik-form ${st.open[a] ? '' : 'hidden'} novalidate autocomplete="off">
+              <label class="oa-label" for="ik-${a}-key">${esc(k.configured ? 'New ' + m.keyName : m.keyName)}</label>
+              <div class="oa-ik-row"><input class="form-input" type="password" id="ik-${a}-key" name="ik_${a}_secret" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="500" placeholder="${attr(m.ph)}" aria-describedby="ik-${a}-kh"/>
+                <button type="submit" class="btn btn-primary btn-sm">Save &amp; test</button><button type="button" class="btn btn-ghost btn-sm" data-ik-cancel>Cancel</button></div>
+              <span class="oa-hint" id="ik-${a}-kh">Stored encrypted and tested with ${esc(m.payer)} right away. It is never shown again, only its last characters.</span>
+            </form>` : ''}
+          <p class="oa-small oa-ik-help"><a class="oa-link" href="${attr(m.help)}" target="_blank" rel="noopener noreferrer">${esc(m.helpText)} ↗</a></p>
+        </section>`;
+      };
+
+      const optCycle = st.cycle;
+      const options = `<section class="oa-card" aria-labelledby="ik-opt-t">
+        <div class="oa-card-head"><div><h2 class="oa-card-title" id="ik-opt-t">Compare your options</h2><div class="oa-card-sub">${esc(plan.name || 'Your')} plan · price per ${ikPer(optCycle)}</div></div>
+          <div class="oa-seg" role="group" aria-label="Billing cycle"><button type="button" data-ik-cycle="monthly" aria-pressed="${optCycle === 'monthly'}">Monthly</button><button type="button" data-ik-cycle="yearly" aria-pressed="${optCycle === 'yearly'}">Yearly</button></div></div>
+        ${opts.length ? `<ul class="oa-ik-opts">${opts.map(o => {
+          const isCur = ikSame(o.coverage, cov);
+          const paid = sub && sub.paid_for && ikSame(o.coverage, sub.paid_for) && !isCur;
+          return `<li class="oa-ik-opt${isCur ? ' current' : ''}"${isCur ? ' aria-current="true"' : ''}><div class="oa-ik-opt-head"><b>${esc(o.label)}</b>${isCur ? pill('active', 'Current') : paid ? pill('none', 'Paid for') : ''}</div>
+            <div class="oa-plan-price">${esc(money(o['price_' + optCycle], cur))}</div>${Number(o['price_' + optCycle]) ? `<span class="oa-small oa-muted oa-ik-per">per ${ikPer(optCycle)}</span>` : ''}
+            <span class="oa-small oa-muted">Apify: ${o.coverage.apify === 'own' ? 'your key' : 'LeadAI'} · Gemini: ${o.coverage.gemini === 'own' ? 'your key' : 'LeadAI'}</span></li>`;
+        }).join('')}</ul>` : '<p class="oa-muted oa-small">No pricing is available for your plan.</p>'}
+        <p class="oa-hint" style="margin-top:12px">${sub ? `You are billed ${esc(sub.billing_cycle)}. Switching to your own key applies now and lowers the price from your next renewal; letting LeadAI provide an API you didn't pay for goes through checkout.` : 'Without a paid subscription, changes apply right away.'}</p>
+      </section>`;
+
+      v.el.innerHTML = head('API keys & plan', 'Choose who provides Apify and Google Gemini for your organization, and manage your own keys.') +
+        summary + notAllowed + `<div class="oa-grid oa-grid-2 oa-ik-apis">${IK_APIS.map(card).join('')}</div>` + options +
+        (manage ? '' : '<p class="oa-hint" style="margin-top:12px">You can view these settings. Changing them requires the “Org settings” permission (organization owner or admin).</p>');
+      wire();
+      if (focusSel) { const f = $(focusSel, v.el); if (f) f.focus(); }
+    }
+
+    function wire() {
+      $$('[data-ik-cycle]', v.el).forEach(b => b.onclick = () => { st.cycle = b.dataset.ikCycle; paint(); });
+      $$('.oa-ik-api', v.el).forEach(cardEl => {
+        const a = cardEl.dataset.api;
+        $$('[data-cov]', cardEl).forEach(b => b.onclick = () => switchTo(a, b.dataset.cov, b));
+        const add = $('[data-ik-add]', cardEl), form = $('[data-ik-form]', cardEl);
+        if (add) add.onclick = () => { st.open[a] = !st.open[a]; if (!st.open[a]) { st.intent[a] = null; st.note[a] = ''; } paint(st.open[a] ? `#ik-${a}-key` : null); };
+        const cancel = $('[data-ik-cancel]', cardEl);
+        if (cancel) cancel.onclick = () => { st.open[a] = false; st.intent[a] = null; st.note[a] = ''; st.err[a] = ''; paint(`#ik-${a}-t`); };
+        if (form) form.onsubmit = (e) => { e.preventDefault(); saveKey(a, form); };
+        const t = $('[data-ik-test]', cardEl); if (t) t.onclick = () => testKey(a, t);
+        const r = $('[data-ik-remove]', cardEl); if (r) r.onclick = () => removeKey(a, r);
+      });
+    }
+    const showErr = (a, msg) => { st.err[a] = msg || ''; const el = $(`.oa-ik-api[data-api="${a}"] [data-ik-err]`, v.el); if (el) el.textContent = st.err[a]; };
+
+    async function saveKey(a, form) {
+      const m = IK[a], input = form.elements[`ik_${a}_secret`], btn = $('button[type=submit]', form);
+      const key = input.value.trim();
+      if (!key) { input.setAttribute('aria-invalid', 'true'); showErr(a, 'Paste your ' + m.keyName + ' first.'); input.focus(); return; }
+      input.removeAttribute('aria-invalid'); showErr(a, '');
+      busy(btn, true, 'Saving & testing…');
+      let r;
+      try { r = await api(`/api/org-admin/integrations/api-keys/${a}`, { method: 'PUT', body: { key } }); }
+      catch (e) { busy(btn, false); input.setAttribute('aria-invalid', 'true'); showErr(a, e.message); input.focus(); return; }
+      input.value = '';
+      const ok = !!(r.test && r.test.valid);
+      st.open[a] = false;
+      st.err[a] = '';   // a rejected key shows its reason in the card's "Problem" row
+      toast(ok ? m.name + ' key saved and verified.' : (r.message || 'Key saved, but it could not be verified.'), ok ? 'success' : 'warning');
+      try { await reload(); } catch (e) { toast(e.message, 'error'); }
+      const wanted = st.intent[a] === 'own';
+      st.intent[a] = null; st.note[a] = '';
+      paint(`#ik-${a}-t`);
+      if (ok && wanted && (st.I.coverage || {})[a] !== 'own') {
+        const b = $(`.oa-ik-api[data-api="${a}"] [data-cov="own"]`, v.el);
+        switchTo(a, 'own', b);
+      }
+    }
+
+    async function testKey(a, btn) {
+      const m = IK[a];
+      busy(btn, true, 'Testing…'); showErr(a, '');
+      try {
+        const r = await api(`/api/org-admin/integrations/api-keys/${a}/test`, { method: 'POST' });
+        const ok = !!(r.test && r.test.valid);
+        st.err[a] = '';
+        toast(ok ? m.name + ' key works.' : m.name + ' key failed the test.', ok ? 'success' : 'warning');
+        await reload(); paint(`#ik-${a}-t`);
+      } catch (e) { busy(btn, false); showErr(a, e.message); }
+    }
+
+    async function removeKey(a, btn) {
+      const m = IK[a], own = (st.I.coverage || {})[a] === 'own';
+      const ok = await confirmDialog(`Remove your ${m.name} key?`,
+        own ? `${m.name} is set to use your own key. After removing it, searches that need ${m.name} stop until you add a new key or switch ${m.name} back to LeadAI.`
+            : `The saved key is deleted. LeadAI keeps providing ${m.name}, so nothing else changes.`,
+        { danger: true, confirm: 'Remove key' });
+      if (!ok) return;
+      busy(btn, true, 'Removing…');
+      try {
+        const r = await api(`/api/org-admin/integrations/api-keys/${a}`, { method: 'DELETE' });
+        toast(r.message || 'Key removed.', own ? 'warning' : 'success');
+        st.err[a] = ''; st.open[a] = false;
+        await reload(); paint(`#ik-${a}-t`);
+      } catch (e) { busy(btn, false); showErr(a, e.message); }
+    }
+
+    async function switchTo(a, val, btn) {
+      const I = st.I, m = IK[a], cov = I.coverage || {}, k = (I.keys || {})[a] || {}, plan = I.plan || {}, sub = I.subscription;
+      const cur = plan.currency || 'USD';
+      if (!st.manage || cov[a] === val) return;
+      showErr(a, '');
+      if (val === 'own' && !(k.configured && k.verified)) {
+        st.intent[a] = 'own'; st.open[a] = true;
+        st.note[a] = k.configured
+          ? `Your saved ${m.name} key isn't verified. Save a working key (or test it again) first — then ${m.name} switches to your own key.`
+          : `Add your ${m.keyName} first. Once it's verified, ${m.name} switches to your own key.`;
+        paint(`#ik-${a}-key`);
+        return;
+      }
+      const req = Object.assign({}, cov, { [a]: val });
+      const opt = (I.options || []).find(o => ikSame(o.coverage, req));
+      const label = ikCovLabel(req);
+      let title, msg, confirm, toCheckout = false;
+      if (sub) {
+        const c = sub.billing_cycle || 'monthly', p = opt ? opt['price_' + c] : null;
+        if (val === 'leadai' && sub.paid_for && sub.paid_for[a] === 'own') {
+          toCheckout = true;
+          title = `Let LeadAI provide ${m.name}?`;
+          msg = `Your paid plan doesn't include ${m.name}. With LeadAI providing it (${label}) your plan costs ${ikPrice(p, cur, c)}. Continue to checkout; the change applies once the payment is confirmed.`;
+          confirm = 'Continue to checkout';
+        } else if (val === 'own') {
+          title = `Use your own ${m.name} key?`;
+          msg = `Your own key is used from now on and you pay ${m.payer} directly for what you use. Your plan becomes ${ikPrice(p, cur, c)} (${label}) from your next renewal on ${fmtDate(ikUtc(sub.current_period_end))}.`;
+          confirm = 'Use my own key';
+        } else {
+          title = `Let LeadAI provide ${m.name} again?`;
+          msg = `It's already part of what you paid for this period, so it applies right away. From your next renewal on ${fmtDate(ikUtc(sub.current_period_end))} your plan is ${ikPrice(p, cur, c)} (${label}).`;
+          confirm = 'Switch to LeadAI';
+        }
+      } else {
+        title = val === 'own' ? `Use your own ${m.name} key?` : `Let LeadAI provide ${m.name}?`;
+        msg = `This applies right away.${val === 'own' ? ` You pay ${m.payer} directly for what you use.` : ''}` +
+          (opt && Number(opt.price_monthly) ? ` With this choice (${label}) the ${plan.name || ''} plan costs ${ikPrice(opt.price_monthly, cur, 'monthly')} or ${ikPrice(opt.price_yearly, cur, 'yearly')}.` : '');
+        confirm = val === 'own' ? 'Use my own key' : 'Switch to LeadAI';
+      }
+      if (!(await confirmDialog(title, msg, { confirm }))) return;
+      busy(btn, true, 'Saving…');
+      let r;
+      try { r = await api('/api/org-admin/integrations/api-coverage', { method: 'PUT', body: { [a]: val } }); }
+      catch (e) { busy(btn, false); showErr(a, e.message); return; }
+      if (r.status === 'checkout_required') {
+        const agreed = toCheckout && opt && Number(opt['price_' + r.billing_cycle]) === Number(r.new_price);
+        if (!agreed && !(await confirmDialog('Continue to checkout?', `${r.message || ''} New price: ${ikPrice(r.new_price, r.currency || cur, r.billing_cycle)}.`, { confirm: 'Continue to checkout' }))) { busy(btn, false); return; }
+        await startCheckout({ plan_slug: r.plan_slug, billing_cycle: r.billing_cycle, api_coverage: r.requested }, btn);
+        return;
+      }
+      toast(r.message || (r.status === 'unchanged' ? 'Nothing changed.' : 'Saved.'), 'success');
+      if (r.integrations) st.I = r.integrations; else { try { await reload(); } catch (_) { /* */ } }
+      st.intent[a] = null; st.note[a] = '';
+      paint(`#ik-${a}-t`);
+    }
+
+    paint();
   }
   function fld(name, lbl, val, type, ro, extra, hint) {
     return `<div class="oa-field"><label for="f-${attr(name)}">${esc(lbl)}</label><input class="form-input" id="f-${attr(name)}" name="${attr(name)}" type="${attr(type)}" value="${attr(val == null ? '' : val)}" ${ro || ''} ${extra || ''} aria-describedby="e-${attr(name)}"/>${hint ? `<span class="oa-hint">${esc(hint)}</span>` : ''}<span class="oa-err" id="e-${attr(name)}" role="alert"></span></div>`;
@@ -1295,10 +1558,10 @@
     v.el.innerHTML = head(u.name || u.email, u.email, actions, ['#team/users', 'Team']) +
       (reason ? `<div class="oa-note" style="margin-bottom:16px">${ico('info')}<span>${esc(reason)}</span></div>` : '') +
       `<div class="oa-grid oa-grid-4">
-        <div class="oa-card oa-stat"><span class="oa-stat-label">Searches</span><span class="oa-stat-value">${num(us.searches)}</span><span class="oa-stat-meta">${num(us.failed_searches)} failed</span></div>
-        <div class="oa-card oa-stat"><span class="oa-stat-label">Leads found</span><span class="oa-stat-value">${num(us.leads)}</span><span class="oa-stat-meta">${num(us.assigned_leads)} assigned to them</span></div>
-        <div class="oa-card oa-stat"><span class="oa-stat-label">Exports</span><span class="oa-stat-value">${num(us.exports)}</span></div>
-        <div class="oa-card oa-stat"><span class="oa-stat-label">Tokens used</span><span class="oa-stat-value">${num(us.tokens_used)}</span></div>
+        ${statCard('#searches' + qs({ user_id: u.user_id }), 'Searches', statVal(us.searches), `<span>${num(us.failed_searches)} failed</span>`, { title: 'Searches run by ' + (u.name || u.email) })}
+        ${statCard('#leads' + qs({ owner: u.user_id }), 'Leads found', statVal(us.leads), `<span>${num(us.assigned_leads)} assigned to them</span>`, { title: 'Leads found by ' + (u.name || u.email) })}
+        ${statCard('#exports', 'Exports', statVal(us.exports), '<span>Export history</span>', { title: 'Organization export history' })}
+        ${statCard(can('org_billing.view') ? '#subscription' : '#analytics', 'Tokens used', statVal(us.tokens_used), `<span>${can('org_billing.view') ? 'Token balance' : 'Token usage'}</span>`, { title: 'Organization token balance and usage' })}
       </div>
       <div class="oa-grid oa-grid-2">
         <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Account</div></div>${kv([['Role', roleTag(u.role)], ['Status', pill(u.status)], ['Last login', timeTag(u.last_login)], ['Joined', esc(fmtDate(u.joined_at))]])}
@@ -1445,7 +1708,7 @@
     if (!v.alive()) return;
     const cancel = s.status === 'running' && can('search.cancel') ? '<button type="button" class="btn btn-danger" data-cancel>Cancel search</button>' : '';
     v.el.innerHTML = head('Search details', s.url, cancel + `<a class="btn btn-secondary" href="#pages?run_id=${attr(s.run_id)}">Pages</a><a class="btn btn-primary" href="#leads?run_id=${attr(s.run_id)}">Leads (${num(s.leads)})</a>`, ['#searches', 'Searches']) +
-      `<div class="oa-grid oa-grid-4">${[['Pages', s.pages], ['Posts', s.posts], ['Comments', s.comments], ['Leads', s.leads]].map(([k, n]) => `<div class="oa-card oa-stat"><span class="oa-stat-label">${esc(k)}</span><span class="oa-stat-value">${num(n)}</span></div>`).join('')}</div>
+      `<div class="oa-grid oa-grid-4">${[['Pages', s.pages, 'pages'], ['Posts', s.posts, 'posts'], ['Comments', s.comments, 'comments'], ['Leads', s.leads, 'leads']].map(([k, n, to]) => statCard('#' + to + qs({ run_id: s.run_id }), esc(k), statVal(n), '<span>From this search</span>', { title: k + ' found by this search' })).join('')}</div>
       <div class="oa-grid oa-grid-2"><div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Run</div>${pill(s.status)}</div>${kv([['URL', extLink(s.url)], ['Platform', esc(plat(s.platform))], ['Run by', esc(s.user_name || s.user_email || '—')], ['Started', esc(fmtDate(s.created_at, true))], ['Finished', esc(fmtDate(s.completed_at, true))], ['Duration', s.duration_seconds != null ? esc(s.duration_seconds + ' s') : '—'], ['Phase', esc(label(s.phase || '—'))], ['Message', esc(s.message || '—')]])}</div>
       <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Scrape job</div></div>${kv([['Max posts', num(s.max_posts)], ['Comments / post', num(s.max_comments_per_post)], ['Comment filter', esc((s.comment_filter && s.comment_filter.mode) || 'Organization rules / defaults')], ['Apify run', s.apify_run_id ? `<span class="oa-mono">${esc(s.apify_run_id)}</span>` : '—'], ['Dataset', s.dataset_id ? `<span class="oa-mono">${esc(s.dataset_id)}</span>` : '—']])}
         ${s.error ? `<div class="alert alert-danger" style="margin-top:14px">${ico('alert', 'alert-icon')}<div class="alert-body"><div class="alert-title">Error</div>${esc(s.error)}</div></div>` : ''}</div></div>`;
@@ -1519,8 +1782,11 @@
       const assignedView = v.parts[1] === 'assigned';
       const members = await getMembers(); if (!v.alive()) return;
       const assigneeOpts = (assignedView ? [] : [['unassigned', 'Unassigned'], ['assigned', 'Any assignee']]).concat(memberOptions(members));
-      v.el.innerHTML = head(assignedView ? 'Assigned leads' : 'All leads', assignedView ? 'Leads assigned to members — they appear in each member\'s User Portal.' : 'Every lead found in your organization. Select leads to assign or move them in bulk, or open one for notes and history.',
-        `<a class="btn btn-primary" href="#search">${ico('search')} New search</a>`) +
+      // Scopes that have no filter control (set by links such as a member's "Leads found" tile).
+      const finder = v.query.owner ? (members || []).find(m => m.user_id === v.query.owner) : null;
+      const scoped = [v.query.owner ? 'leads found by ' + (finder ? (finder.name || finder.email) : 'one member') : '', v.query.run_id ? 'search ' + v.query.run_id : ''].filter(Boolean);
+      v.el.innerHTML = head(assignedView ? 'Assigned leads' : 'All leads', (assignedView ? 'Leads assigned to members — they appear in each member\'s User Portal.' : 'Every lead found in your organization. Select leads to assign or move them in bulk, or open one for notes and history.') + (scoped.length ? ' Filtered to ' + scoped.join(', ') + '.' : ''),
+        (scoped.length ? `<a class="btn btn-ghost" href="${assignedView ? '#leads/assigned' : '#leads'}">${ico('x')} Clear filter</a>` : '') + `<a class="btn btn-primary" href="#search">${ico('search')} New search</a>`) +
         tabs([['#leads', 'All leads'], ['#leads/assigned', 'Assigned'], ['#pipeline', 'Lifecycle'], ['#rules', 'Rules']], assignedView ? '#leads/assigned' : '#leads') + '<div data-host></div>';
       const init = Object.assign({}, v.query);
       if (assignedView && !init.assignee) init.assignee = 'assigned';
@@ -1536,7 +1802,7 @@
         rowMenu: r => [{ act: 'open', label: 'Open lead' }].concat(can('leads.assign') ? [{ act: 'assign', label: r.assigned_user_id ? 'Reassign…' : 'Assign…' }] : [], can('leads.manage') ? [{ act: 'status', label: 'Change status…' }, { act: 'priority', label: 'Change priority…' }] : []),
         async onAction(act, r) { if (act === 'open') { location.hash = '#lead/' + r.id; return; } if (await leadBulk(act, [r], null, members)) t.reload(); },
         defaults: assignedView ? { assignee: 'assigned' } : {},
-        fixed: { run_id: v.query.run_id },
+        fixed: { run_id: v.query.run_id, owner: v.query.owner },
         filters: [{ name: 'q', label: 'Search', placeholder: 'Search name, text, phone, email' },
           { name: 'status', label: 'Status', type: 'select', all: 'All statuses', options: LEAD_STATUSES.map(s => [s, label(s)]) },
           { name: 'assignee', label: 'Assignee', type: 'select', all: assignedView ? 'Any assignee' : 'Anyone', options: assigneeOpts },
@@ -1611,12 +1877,13 @@
       const histMethod = (m) => String(m || '').indexOf('auto:') === 0 ? 'automatically (' + label(String(m).slice(5)) + ')' : m === 'bulk' ? 'bulk action' : '';
       const canManage = can('leads.manage'); const canAssign = can('leads.assign');
       const asg = (members || []).find(m => m.user_id === lead.assigned_user_id);
+      const qual = ['hot', 'warm', 'cold'].indexOf(lead.lead_quality) >= 0 ? lead.lead_quality : '';
       const assigneeName = lead.assigned_user_id ? ((asg && (asg.name || asg.email)) || lead.assigned_to || 'Assigned') : 'Unassigned';
       v.el.innerHTML = head(lead.commenter_name || 'Lead', `${plat(lead.platform || '')} lead${page.page_name ? ' from ' + page.page_name : ''}`, '', ['#leads', 'Leads']) +
         `<div class="oa-grid oa-grid-3">
-          <div class="oa-card oa-stat"><span class="oa-stat-label">Lead score</span><span class="oa-stat-value">${esc(lead.lead_score == null ? '—' : lead.lead_score)}</span><span class="oa-stat-meta">${esc(label(lead.lead_quality || ''))} ${lead.confidence != null ? '· ' + Math.round(lead.confidence * 100) + '% confidence' : ''}</span></div>
-          <div class="oa-card oa-stat"><span class="oa-stat-label">Status</span><span style="margin-top:6px">${pill(status)}</span><span class="oa-stat-meta">Priority: ${esc(lead.lead_priority || lead.priority || '—')}</span></div>
-          <div class="oa-card oa-stat"><span class="oa-stat-label">Assignee</span><span style="font-weight:700;font-size:1.1rem">${esc(assigneeName)}</span></div>
+          ${statCard(qual ? '#leads' + qs({ quality: qual }) : '#leads?sort=score', 'Lead score', `<span class="oa-stat-value">${esc(lead.lead_score == null ? '—' : lead.lead_score)}</span>`, `${esc(label(lead.lead_quality || ''))} ${lead.confidence != null ? '· ' + Math.round(lead.confidence * 100) + '% confidence' : ''}`, { title: qual ? 'All ' + qual + ' leads' : 'Leads by score' })}
+          ${statCard('#leads' + qs({ status }), 'Status', `<span style="margin-top:6px">${pill(status)}</span>`, `Priority: ${esc(lead.lead_priority || lead.priority || '—')}`, { title: 'Leads with this status' })}
+          ${statCard('#leads' + qs({ assignee: lead.assigned_user_id || 'unassigned' }), 'Assignee', `<span style="font-weight:700;font-size:1.1rem">${esc(assigneeName)}</span>`, lead.assigned_user_id ? 'Their assigned leads' : 'All unassigned leads', { title: lead.assigned_user_id ? 'Leads assigned to ' + assigneeName : 'Unassigned leads' })}
         </div>
         <div class="oa-grid oa-grid-2">
           <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Comment</div></div><p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(lead.comment_text || '')}</p>
@@ -1682,8 +1949,21 @@
       const edit = d.can_edit;
       const sum = d.summary || {};
       const allKws = d.keywords || [];
-      let activeTab = 'all'; // all | active | suggested | custom | excluded
+      // Summary tiles: [tab, icon, label, count, meta, value style]. Each opens its tab of the library.
+      const KW_TABS = [['active', 'check', 'Active Keywords', sum.active_count, 'Used in comment analysis', 'color:var(--primary)'],
+        ['suggested', 'cpu', 'Suggested Terms', sum.suggested_count, 'Ready to activate', ''],
+        ['custom', 'plus', 'Custom Added', sum.custom_count, 'Organization specific', ''],
+        ['excluded', 'x', 'Excluded Terms', sum.excluded_count, 'Conversations ignored', '']];
+      const tabHash = (t) => t === 'all' ? '#rules' : '#rules?tab=' + t;
+      let activeTab = KW_TABS.some(t => t[0] === v.query.tab) ? v.query.tab : 'all'; // all | active | suggested | custom | excluded
       let searchQuery = '';
+      // Bring the keyword table (on the chosen tab) into view, e.g. after a summary tile is used.
+      const showLibrary = () => {
+        const btn = $(`.oa-kw-tab[data-tab="${activeTab}"]`, v.el); if (!btn) return;
+        const lib = btn.closest('.oa-card');
+        if (lib) lib.scrollIntoView({ block: 'start' });
+        btn.focus({ preventScroll: true });
+      };
 
       const renderView = () => {
         const filtered = allKws.filter(k => {
@@ -1702,14 +1982,11 @@
 
           <!-- Stats Strip -->
           <div class="oa-grid oa-grid-4" style="margin-bottom:16px">
-            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('check')} Active Keywords</span><span class="oa-stat-value" style="color:var(--primary)">${num(sum.active_count)}</span><span class="oa-stat-meta">Used in comment analysis</span></div>
-            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('cpu')} Suggested Terms</span><span class="oa-stat-value">${num(sum.suggested_count)}</span><span class="oa-stat-meta">Ready to activate</span></div>
-            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('plus')} Custom Added</span><span class="oa-stat-value">${num(sum.custom_count)}</span><span class="oa-stat-meta">Organization specific</span></div>
-            <div class="oa-card oa-stat"><span class="oa-stat-label">${ico('x')} Excluded Terms</span><span class="oa-stat-value">${num(sum.excluded_count)}</span><span class="oa-stat-meta">Conversations ignored</span></div>
+            ${KW_TABS.map(([tab, icon, k, n, meta, style]) => statCard(tabHash(tab), ico(icon) + ' ' + esc(k), statVal(n, style), esc(meta), { data: `data-kwtab="${tab}"${activeTab === tab ? ' aria-current="true"' : ''}`, title: 'Show ' + k.toLowerCase() + ' in the keyword library' })).join('')}
           </div>
 
           <!-- Library Main Card -->
-          <div class="oa-card">
+          <div class="oa-card oa-kw-lib">
             <div class="oa-kw-lib-head">
               <div class="oa-kw-tabs" role="tablist">
                 <button type="button" class="oa-kw-tab ${activeTab === 'all' ? 'active' : ''}" data-tab="all">All (${num(allKws.length)})</button>
@@ -1783,9 +2060,21 @@
             </form>
           </div>`;
 
+        // Summary tiles are real links (#rules?tab=…); a plain click switches the tab in place
+        // instead of reloading the library, and still records the URL for Back / sharing.
+        $$('[data-kwtab]', v.el).forEach(a => {
+          a.onclick = (e) => {
+            if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            activeTab = a.dataset.kwtab;
+            if (location.hash !== a.getAttribute('href')) { try { history.pushState(null, '', a.getAttribute('href')); } catch (_) { /* */ } }
+            renderView(); showLibrary();
+          };
+        });
+
         // Bind tabs
         $$('.oa-kw-tab', v.el).forEach(b => {
-          b.onclick = () => { activeTab = b.dataset.tab; renderView(); };
+          b.onclick = () => { activeTab = b.dataset.tab; try { history.replaceState(null, '', tabHash(activeTab)); } catch (_) { /* */ } renderView(); };
         });
 
         // Search input
@@ -2067,6 +2356,7 @@
       };
 
       renderView();
+      if (activeTab !== 'all') { v.parts._keepFocus = true; showLibrary(); }
     },
   };
   function chipEditor(box, initial, readonly, danger) {
@@ -2105,7 +2395,7 @@
       v.el.innerHTML = head('Apify jobs', 'Scraping activity for your organization. View only — scraping infrastructure is managed by LeadAI.') +
         `<div class="oa-grid oa-grid-4">${[['Running', j.running || 0, 'running'], ['Completed', j.completed || 0, 'completed'], ['Failed', (j.error || 0) + (j.failed || 0), 'error'], ['Cancelled', j.cancelled || 0, 'cancelled']].map(([k, n, st]) =>
           `<a class="oa-card oa-stat" href="#apify?status=${attr(st)}"><span class="oa-stat-label">${pill(st, k)}</span><span class="oa-stat-value">${num(n)}</span></a>`).join('')}</div>
-        <div class="oa-grid oa-grid-3">${[['Pages scraped', s.pages, '#pages'], ['Posts scraped', s.posts, '#posts'], ['Comments scraped', s.comments, '#comments']].map(([k, n, h]) => `<a class="oa-card oa-stat" href="${h}"><span class="oa-stat-label">${esc(k)}</span><span class="oa-stat-value">${num(n)}</span><span class="oa-stat-meta">Browse →</span></a>`).join('')}</div>
+        <div class="oa-grid oa-grid-3">${[['Pages scraped', s.pages, '#pages'], ['Posts scraped', s.posts, '#posts'], ['Comments scraped', s.comments, '#comments']].map(([k, n, h]) => `<a class="oa-card oa-stat" href="${h}"><span class="oa-stat-label">${esc(k)}</span><span class="oa-stat-value">${num(n)}</span><span class="oa-stat-meta">Browse</span></a>`).join('')}</div>
         <div style="margin-top:20px">${tabs([['#apify', 'Scrape jobs'], ['#apify/runs', 'Actor runs']], tab === 'runs' ? '#apify/runs' : '#apify')}</div><div data-host></div>`;
       if (tab === 'jobs') {
         dataTable($('[data-host]', v.el), {
@@ -2157,7 +2447,10 @@
       v.el.innerHTML = head('Analytics & reports', `${fmtDate(d.from)} – ${fmtDate(d.to)}`, `<button type="button" class="btn btn-secondary" data-usage>${ico('download')} Usage report</button>`) +
         `<form class="oa-toolbar" data-range><div class="oa-seg" role="group" aria-label="Date range">${seg.map(([k, l]) => `<button type="button" data-p="${k}" aria-pressed="${preset === k}">${l}</button>`).join('')}</div>
           <label class="sr-only" for="an-from">From</label><input class="form-input" type="date" id="an-from" name="from" value="${attr(d.from)}"/><label class="sr-only" for="an-to">To</label><input class="form-input" type="date" id="an-to" name="to" value="${attr(d.to)}"/><button type="submit" class="btn btn-secondary">Apply</button></form>
-        <div class="oa-grid oa-grid-4">${[['Searches', t.searches], ['Leads', t.leads], ['Tokens used', t.tokens], ['New users', t.new_users]].map(([k, n]) => `<div class="oa-card oa-stat"><span class="oa-stat-label">${esc(k)}</span><span class="oa-stat-value">${num(n)}</span></div>`).join('')}</div>
+        <div class="oa-grid oa-grid-4">${[['Searches', t.searches, '#searches' + qs({ from: d.from, to: d.to }), 'Searches in this period'],
+          ['Leads', t.leads, '#leads' + qs({ from: d.from, to: d.to }), 'Leads in this period'],
+          ['Tokens used', t.tokens, '#subscription', 'Token balance'],
+          ['New users', t.new_users, '#team/users?sort=joined&order=desc', 'Newest members first']].map(([k, n, h, meta]) => statCard(h, esc(k), statVal(n), esc(meta))).join('')}</div>
         <div class="oa-grid oa-grid-2">${columnChart('Searches per day', d.series.searches, d.days)}${columnChart('Leads per day', d.series.leads, d.days)}</div>
         <div class="oa-grid oa-grid-2">${columnChart('Tokens consumed per day', d.series.tokens, d.days)}${columnChart('AI requests per day', d.series.ai_requests, d.days)}</div>
         <h2 class="oa-section-title" style="margin:24px 0 12px">Leads</h2>
@@ -2188,7 +2481,8 @@
   ROUTES.subscription = {
     title: () => 'Subscription',
     async render(v) {
-      const res = await Promise.allSettled([api('/api/billing/subscription'), api('/api/billing/usage'), api('/api/billing/plans'), api('/api/billing/invoices'), api('/api/org-admin/billing/history')]);
+      const res = await Promise.allSettled([api('/api/billing/subscription'), api('/api/billing/usage'), api('/api/billing/plans'), api('/api/billing/invoices'), api('/api/org-admin/billing/history'),
+        api('/api/org-admin/integrations/api-keys'), api('/api/public/pricing', { noRedirect: true })]);
       if (!v.alive()) return;
       if (res[0].status === 'rejected') throw res[0].reason;
       const sub = res[0].value.subscription || {};
@@ -2196,38 +2490,57 @@
       const plans = res[2].status === 'fulfilled' ? res[2].value.plans : [];
       const invoices = res[3].status === 'fulfilled' ? res[3].value.invoices : [];
       const hist = res[4].status === 'fulfilled' ? res[4].value : { items: [], payments: [] };
+      // who provides Apify / Gemini, and each plan's price for that choice (always from the API)
+      const integ = res[5].status === 'fulfilled' ? (res[5].value.integrations || null) : null;
+      const covOpts = Object.fromEntries((res[6].status === 'fulfilled' ? res[6].value.plans || [] : []).map(p => [p.slug, p.coverage_options || []]));
+      const myCov = (integ && integ.coverage) || { apify: 'leadai', gemini: 'leadai' };
+      const isub = integ && integ.subscription;
       const plan = sub.plan || (usage && usage.plan) || {};
       const active = !!sub.has_subscription && sub.status === 'active';
       const pending = sub.pending;
       const manage = can('org_billing.manage');
       const cycleKey = 'oa_cycle';
       let cycle = 'monthly'; try { cycle = sessionStorage.getItem(cycleKey) || 'monthly'; } catch (_) { /* */ }
+      const planOffer = (p) => {
+        const list = covOpts[p.slug] || [];
+        const o = list.find(x => ikSame(x.coverage, myCov));
+        if (o) return { price: o['price_' + cycle], cov: myCov, own: myCov.apify === 'own' || myCov.gemini === 'own' };
+        const all = list.find(x => x.key === 'all_included');
+        return { price: all ? all['price_' + cycle] : (cycle === 'yearly' ? p.price_yearly : p.price_monthly), cov: { apify: 'leadai', gemini: 'leadai' }, own: false };
+      };
       const metricNames = { team_members: 'Users', monthly_searches: 'Searches', monthly_posts: 'Posts', monthly_comments: 'Comments', monthly_ai_analyses: 'AI analyses', monthly_exports: 'Exports', api_requests: 'API requests' };
-      const money = (a, c) => a == null ? '—' : (Number(a) === 0 ? 'Free' : new Intl.NumberFormat(undefined, { style: 'currency', currency: (c || 'USD').toUpperCase() }).format(a));
       const subState = sub.has_subscription ? (sub.status || 'none') : (sub.is_demo ? 'demo' : 'none');
       const statusText = active ? 'Active' : subState === 'none' ? 'No subscription' : label(subState);
       v.el.innerHTML = head('Subscription', 'Your plan, usage against its limits, invoices and billing history.') +
-        (pending ? `<div class="alert alert-warning" style="margin-bottom:16px">${ico('alert', 'alert-icon')}<div class="alert-body"><div class="alert-title">Plan change pending confirmation</div>${esc((pending.plan && pending.plan.name) || pending.plan_id)} (${esc(pending.billing_cycle || '')}) — status: ${pill(pending.status)}. ${pending.status === 'pending_payment' ? 'Complete the payment to continue.' : 'Our team confirms payments and activates your new plan shortly.'}${pending.checkout_session_id ? ` <a href="/billing/status?session=${encodeURIComponent(pending.checkout_session_id)}">View payment status</a>` : ''}</div></div>` : '') +
+        (pending ? `<div class="alert alert-warning" style="margin-bottom:16px">${ico('alert', 'alert-icon')}<div class="alert-body"><div class="alert-title">Plan change pending confirmation</div>${esc((pending.plan && pending.plan.name) || pending.plan_id)} (${esc(pending.billing_cycle || '')}${pending.api_coverage ? ' · ' + esc(ikCovLabel(pending.api_coverage)) : ''}) — status: ${pill(pending.status)}. ${pending.status === 'pending_payment' ? 'Complete the payment to continue.' : 'Our team confirms payments and activates your new plan shortly.'}${pending.checkout_session_id ? ` <a href="/billing/status?session=${encodeURIComponent(pending.checkout_session_id)}">View payment status</a>` : ''}</div></div>` : '') +
         `<div class="oa-grid oa-grid-3">
           <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Current plan</div>${pill(subState === 'active' && !active ? 'pending' : subState, statusText)}</div>
             <div style="font-size:1.5rem;font-weight:800">${esc(plan.name || 'No plan')}</div>
-            <div style="margin-top:12px">${kv([['Billing', esc(label(sub.billing_cycle || (sub.is_demo ? 'demo' : '—')))], ['Started', esc(fmtDate(sub.started_at || sub.current_period_start))], [sub.cancel_at_period_end ? 'Ends' : 'Renews', esc(fmtDate(sub.current_period_end))], ['Amount', esc(sub.amount != null ? money(sub.amount, sub.currency) : '—')]])}</div>
+            <div style="margin-top:12px">${kv([['Billing', esc(label(sub.billing_cycle || (sub.is_demo ? 'demo' : '—')))],
+              ['API keys', `<a class="oa-link" href="#integrations">${esc(integ ? (integ.label || ikCovLabel(myCov)) : 'View')}</a>`],
+              ['Started', esc(fmtDate(sub.started_at || sub.current_period_start))], [sub.cancel_at_period_end ? 'Ends' : 'Renews', esc(fmtDate(sub.current_period_end))], ['Amount', esc(sub.amount != null ? money(sub.amount, sub.currency) : '—')],
+              isub && !sub.cancel_at_period_end ? ['Next renewal', esc(ikPrice(isub.next_price, (integ.plan || {}).currency, isub.billing_cycle)) + (Number(isub.next_price) < Number(isub.amount) ? ' <span class="oa-ik-good">· lower price</span>' : '')] : null])}</div>
             ${sub.cancel_at_period_end ? `<div class="alert alert-warning" style="margin-top:12px">${ico('alert', 'alert-icon')}<div class="alert-body">Cancellation scheduled for the end of this period.</div></div>` : ''}
             ${manage && active ? `<div class="oa-actions" style="margin-top:14px">${sub.cancel_at_period_end ? '<button type="button" class="btn btn-secondary btn-sm" data-reactivate>Keep my subscription</button>' : (isOwner() ? '<button type="button" class="btn btn-danger btn-sm" data-cancel>Request cancellation</button>' : '<span class="oa-hint">Only the organization owner can cancel.</span>')}</div>` : ''}</div>
           <div class="oa-card" style="grid-column:span 2"><div class="oa-card-head"><div class="oa-card-title">Usage vs limits</div><span class="oa-card-sub">${usage && usage.period && usage.period.end ? 'Resets ' + esc(fmtDate(usage.period.end)) : ''}</span></div>
             ${usage ? Object.entries(usage.metrics || {}).filter(([, m]) => m.limit).map(([k, m]) => meter(metricNames[k] || label(k), m.used, m.limit, m.percentage)).join('') || '<p class="oa-muted oa-small">Your plan has no metered limits.</p>' : '<p class="oa-muted oa-small">Usage unavailable.</p>'}
             ${usage && usage.tokens ? meter('Tokens', usage.tokens.used, usage.tokens.allocated) + `<p class="oa-hint" style="margin-top:6px">${num(usage.tokens.remaining)} tokens remaining</p>` : ''}</div>
         </div>
-        <div class="oa-card"><div class="oa-card-head"><div class="oa-card-title">Plans</div><div class="oa-seg" role="group" aria-label="Billing cycle"><button type="button" data-cycle="monthly" aria-pressed="${cycle === 'monthly'}">Monthly</button><button type="button" data-cycle="yearly" aria-pressed="${cycle === 'yearly'}">Yearly</button></div></div>
+        <div class="oa-card"><div class="oa-card-head" style="flex-wrap:wrap;gap:12px"><div class="oa-card-title">Plans & Pricing</div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <div class="oa-seg" role="group" aria-label="Billing cycle"><button type="button" data-cycle="monthly" aria-pressed="${cycle === 'monthly'}">Monthly</button><button type="button" data-cycle="yearly" aria-pressed="${cycle === 'yearly'}">Yearly</button></div>
+          </div>
+        </div>
+          <p class="oa-hint" style="margin-bottom:14px">Prices are for your API choice: <b>${esc(ikCovLabel(myCov))}</b>. Bring your own Apify or Gemini key to pay less — <a class="oa-link" href="#integrations">API keys &amp; plan</a>.</p>
           ${plans.length ? `<div class="oa-plans">${plans.map(p => {
-            const price = cycle === 'yearly' ? p.price_yearly : p.price_monthly;
+            const offer = planOffer(p), price = offer.price;
             const isCur = active && (p.slug === sub.plan_id || p.slug === plan.slug);
             const isPend = pending && pending.plan_id === p.slug;
             const hl = Array.isArray(p.highlights) && p.highlights.length ? p.highlights : Object.entries(p.limits || {}).filter(([, n]) => n).slice(0, 6).map(([k, n]) => num(n) + ' ' + label(k).replace(/^monthly /, '') + (k.indexOf('monthly') === 0 ? ' / month' : ''));
-            return `<div class="oa-plan ${isCur ? 'current' : ''}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>${esc(p.name)}</b>${isCur ? pill('active', 'Current') : isPend ? pill('pending', 'Pending') : ''}</div>
+            return `<div class="oa-plan ${isCur ? 'current' : ''}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>${esc(p.name)}</b>${isCur ? pill('active', 'Current') : isPend ? pill('pending', 'Pending') : offer.own ? pill('trial', ikCovLabel(offer.cov)) : ''}</div>
               <div class="oa-plan-price">${esc(money(price, p.currency))}${price ? `<small> / ${cycle === 'yearly' ? 'year' : 'month'}</small>` : ''}</div>${p.description ? `<p class="oa-small oa-muted">${esc(p.description)}</p>` : ''}
               <ul>${hl.map(h => `<li>${esc(h)}</li>`).join('')}</ul>
-              ${manage ? (isCur ? '<button type="button" class="btn btn-secondary" disabled>Current plan</button>' : isPend ? '<button type="button" class="btn btn-secondary" disabled>Awaiting confirmation</button>' : price ? `<button type="button" class="btn btn-primary" data-plan="${attr(p.slug)}" data-name="${attr(p.name)}">${active ? 'Switch to ' + esc(p.name) : 'Choose ' + esc(p.name)}</button>` : '<button type="button" class="btn btn-secondary" disabled>Not purchasable</button>') : ''}</div>`;
+              ${manage ? (isCur ? '<button type="button" class="btn btn-secondary" disabled>Current plan</button>' : isPend ? '<button type="button" class="btn btn-secondary" disabled>Awaiting confirmation</button>' : price ? `<button type="button" class="btn btn-primary" data-plan="${attr(p.slug)}" data-name="${attr(p.name)}" data-cov="${attr(JSON.stringify(offer.cov))}" data-price="${attr(money(price, p.currency))}">${active ? 'Switch to ' + esc(p.name) : 'Choose ' + esc(p.name)}</button>` : '<button type="button" class="btn btn-secondary" disabled>Not purchasable</button>') : ''}</div>`;
           }).join('')}</div>${manage ? '' : '<p class="oa-hint" style="margin-top:10px">Changing the plan requires the billing permission.</p>'}` : stateHtml('empty', 'No plans available', 'Contact support to change your plan.')}</div>
         <h2 class="oa-section-title" style="margin:24px 0 12px">Invoices</h2><div data-inv></div>
         <h2 class="oa-section-title" style="margin:24px 0 12px">Payments</h2><div data-pay></div>
@@ -2269,14 +2582,9 @@
       });
       $$('[data-cycle]', v.el).forEach(b => b.onclick = () => { try { sessionStorage.setItem(cycleKey, b.dataset.cycle); } catch (_) { /* */ } route(); });
       $$('[data-plan]', v.el).forEach(b => b.onclick = async () => {
-        if (!(await confirmDialog(`Choose ${b.dataset.name}?`, `You'll be taken to checkout for the ${cycle} ${b.dataset.name} plan. Your new plan activates after payment is confirmed by our team.`, { confirm: 'Continue to checkout' }))) return;
-        busy(b, true, 'Starting checkout…');
-        try {
-          const r = await api('/api/billing/checkout', { method: 'POST', body: { plan_slug: b.dataset.plan, billing_cycle: cycle } });
-          const dest = (r.checkout && (r.checkout.redirect_url || r.checkout.url)) || '';
-          const safe = safeUrl(dest);
-          if (safe) location.href = safe; else { toast('Checkout created — awaiting confirmation.', 'success'); route(); }
-        } catch (e) { toast(e.message, 'error'); busy(b, false); }
+        let cov = { apify: 'leadai', gemini: 'leadai' }; try { cov = JSON.parse(b.dataset.cov); } catch (_) { /* */ }
+        if (!(await confirmDialog(`Choose ${b.dataset.name}?`, `You'll be taken to checkout for the ${cycle} ${b.dataset.name} plan (${ikCovLabel(cov)}, ${b.dataset.price} per ${ikPer(cycle)}). Your new plan activates after payment is confirmed by our team.`, { confirm: 'Continue to checkout' }))) return;
+        await startCheckout({ plan_slug: b.dataset.plan, billing_cycle: cycle, api_coverage: cov }, b);
       });
       const c = $('[data-cancel]', v.el);
       if (c) c.onclick = async () => {

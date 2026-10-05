@@ -2690,6 +2690,8 @@ async def list_organizations(
             except Exception:
                 pass
 
+        doc.pop("custom_api_keys", None)  # stored customer keys never leave the server
+        doc.pop("api_key_alerts", None)
         serialized = _serialize_oid(doc)
         serialized["id"] = org_id
         serialized["member_count"] = member_count
@@ -2815,8 +2817,13 @@ async def get_organization(org_id: str):
         raise HTTPException(status_code=404, detail="Organization not found")
 
     real_org_id = str(org["_id"])
+    from app.services.tenant_api_keys import public_config
+    api_keys = public_config(org)
+    # stored customer keys never leave the server, only their masked status
+    org = {k: v for k, v in org.items() if k not in ("custom_api_keys", "api_key_alerts")}
     serialized = _serialize_oid(org)
     serialized["id"] = real_org_id
+    serialized["api_keys"] = api_keys
 
     # Retrieve members
     members = []

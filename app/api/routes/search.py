@@ -299,9 +299,11 @@ async def _apply_plan_caps(ctx, max_posts, max_comments, requested_posts, reques
 
 
 async def _charge_tokens(ctx, action: str, reference: str) -> None:
-    """Spend the configured token cost of ``action`` (402 when short)."""
+    """Spend the configured token cost of ``action`` (402 when short). The share
+    of the action that runs on the organization's own API keys isn't charged."""
+    from app.billing.api_coverage import token_cost_for
     from app.lifecycle.config import token_cost
-    cost = token_cost(action)
+    cost = await asyncio.to_thread(token_cost_for, ctx.organization_id, action, token_cost(action))
     if not cost:
         return
     from app.billing.tokens import consume
@@ -317,8 +319,9 @@ async def _charge_tokens(ctx, action: str, reference: str) -> None:
 
 async def _refund_tokens(ctx, action: str, reference: str, why: str) -> None:
     """Give back the cost of ``action`` charged by _charge_tokens."""
+    from app.billing.api_coverage import token_cost_for
     from app.lifecycle.config import token_cost
-    cost = token_cost(action)
+    cost = await asyncio.to_thread(token_cost_for, ctx.organization_id, action, token_cost(action))
     if not cost:
         return
     from app.billing.tokens import refund

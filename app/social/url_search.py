@@ -146,7 +146,7 @@ def run_url_search(run_id: str, initial_url: str, max_posts: int = 20,
                  message="Search cancelled by user", completed_at=utcnow())
         return cancelled()
 
-    from app.admin.settings import get_apify_token, is_platform_enabled
+    from app.admin.settings import is_platform_enabled
     if not is_platform_enabled(platform):
         msg = (f"Searching {platform} is currently disabled by the "
                "administrator.")
@@ -154,16 +154,24 @@ def run_url_search(run_id: str, initial_url: str, max_posts: int = 20,
         return {"status": "error", "error": msg, "success": False,
                 "page_id": None}
 
-    if not get_apify_token():
-        msg = ("APIFY_API_TOKEN is not set in .env — add it and restart. "
-               "Get a free token at https://apify.com/account/integrations")
+    from app.services.tenant_api_keys import get_tenant_apify_token_sync
+    effective_token, token_source = get_tenant_apify_token_sync(organization_id)
+    if not effective_token:
+        if token_source == "organization_missing":
+            from app.services.tenant_api_keys import own_key_problem, record_key_failure
+            problem = own_key_problem(organization_id, "apify") or {}
+            msg = problem.get("message") or "Your organization's own Apify key is missing."
+            record_key_failure(organization_id, "apify", problem.get("code", "OWN_APIFY_KEY_MISSING"), msg)
+        else:
+            msg = ("APIFY_API_TOKEN is not set in .env — add it and restart. "
+                   "Get a free token at https://apify.com/account/integrations")
         progress(status="error", error=msg)
         return {"status": "error", "error": msg, "success": False,
                 "page_id": None}
 
     progress(phase="page", platform=platform,
              message=f"Fetching {platform} page details…")
-    scraper = get_scraper(platform)
+    scraper = get_scraper(platform, organization_id=organization_id)
     audit_run("apify.job_created", "apify", platform=platform,
               url=canonical_url, max_posts=max_posts,
               max_comments_per_post=max_comments_per_post)

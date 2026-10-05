@@ -2274,3 +2274,85 @@ a:hover { color: var(--amber-text); text-decoration: underline; text-underline-o
 @media (prefers-reduced-motion: reduce) {
   .adm-badge::before, .adm-status-dot { animation: none !important; }
 }
+
+/* ── Clickable stat / KPI boxes ─────────────────────────────────────────
+   statLink()/statButton() in admin.js: every number box opens the module
+   that lists its data. Real <a>/<button>, so keyboard + focus ring work;
+   the → after the label is the visible affordance. */
+.adm-stat-link {
+  color: inherit;
+  text-decoration: none;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+a.adm-stat-link { display: block; }
+button.adm-stat-link { -webkit-appearance: none; appearance: none; margin: 0; width: 100%; }
+.adm-stat-link:hover { color: inherit; }
+.adm-stat-link:hover,
+.adm-stat-link:hover * { text-decoration: none; }
+.adm-stat-link:hover,
+.adm-stat-link:focus-visible { border-color: var(--mint-hover); }
+.adm-stat-link:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+.adm-stat-go {
+  display: inline-block;
+  margin-left: 3px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+  color: var(--text-faint);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+.adm-stat-link:hover .adm-stat-go,
+.adm-stat-link:focus-visible .adm-stat-go { color: var(--mint-text); transform: translateX(3px); }
+
+/* Dashboard SaaS strip (was inline-styled divs) */
+.adm-saas-stat {
+  background: var(--surface);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  transition: border-color 0.15s, transform 0.18s ease, box-shadow 0.18s ease;
+}
+.adm-saas-stat:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.adm-saas-stat:focus-visible { border-radius: var(--radius-sm); }
+
+/* Figures inside a hero banner */
+.adm-hero-stat > .adm-hero-link {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: auto;
+  padding: 6px 10px;
+  margin: -6px -10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s, border-color 0.15s;
+}
+.adm-hero-link:hover,
+.adm-hero-link:focus-visible,
+.adm-hero-link[aria-pressed="true"] { background: var(--violet-soft); border-color: var(--mint-hover); }
+.adm-hero-link:focus-visible { border-radius: var(--radius-sm); }
+
+/* Card-styled stat buttons (organization detail) */
+button.adm-card.adm-stat-link { transition: border-color 0.15s, transform 0.18s ease, box-shadow 0.18s ease; }
+button.adm-card.adm-stat-link:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+
+/* Log level counters filter the log list */
+.adm-log-stat.adm-stat-link { text-align: center; transition: border-color 0.15s, background 0.15s; }
+.adm-log-stat.adm-stat-link:hover { background: var(--surface); }
+.adm-log-stat.adm-stat-link:focus-visible { border-radius: 12px; }
+.adm-log-stat[aria-pressed="true"] { background: var(--violet-soft); border-color: var(--violet); }
+
+@media (prefers-reduced-motion: reduce) {
+  .adm-stat-link:hover,
+  .adm-stat-link:hover .adm-stat-go,
+  .adm-stat-link:focus-visible .adm-stat-go { transform: none; }
+}

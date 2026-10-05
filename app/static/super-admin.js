@@ -356,7 +356,7 @@
     o = o || {};
     var tag = o.href ? 'button' : 'div';
     return '<' + tag + ' class="sa-kpi ' + (o.tone || '') + '"' + (o.href ? ' type="button" data-go="' + esc(o.href) + '"' : '') + '>' +
-      '<div class="k" title="' + esc(label) + '">' + (o.icon ? ICON_SVG(o.icon) : '') + '<span>' + esc(label) + '</span></div>' + (Array.isArray(value) && value.length > 1 ? '<div class="v v-multi">' + value.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('') + '</div>' : '<div class="v">' + esc(Array.isArray(value) ? value[0] : value) + '</div>') + (sub ? '<div class="s">' + sub + '</div>' : '') +
+      '<div class="k" title="' + esc(label) + '">' + (o.icon ? ICON_SVG(o.icon) : '') + '<span>' + esc(label) + '</span></div>' + (o.valueHtml != null ? '<div class="v v-status">' + o.valueHtml + '</div>' : Array.isArray(value) && value.length > 1 ? '<div class="v v-multi">' + value.map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('') + '</div>' : '<div class="v">' + esc(Array.isArray(value) ? value[0] : value) + '</div>') + (sub ? '<div class="s">' + sub + '</div>' : '') +
       (o.href ? '<span class="go" aria-hidden="true">' + (/^\/admin/.test(o.href) ? '↗' : '→') + '</span>' : '') + '</' + tag + '>';
   }
 
@@ -652,7 +652,7 @@
         try {
           var h = location.hash.split('?'), p = new URLSearchParams(h[1] || '');
           if (key === items[0][0]) p.delete('tab'); else p.set('tab', key);
-          ['page', 'status', 'unread', 'range'].forEach(function (k) { if (k !== 'range' || key !== 'overview') p.delete(k); });
+          ['page', 'status', 'unread', 'range', 'kind', 'success', 'from', 'stage', 'suspicious', 'manual', 'type', 'severity', 'active_only', 'q', 'section', 'sort', 'coverage'].forEach(function (k) { if (k !== 'range' || key !== 'overview') p.delete(k); });
           var s = p.toString();
           history.replaceState(null, '', h[0] + (s ? '?' + s : ''));
         } catch (e) { /* ignore */ }
@@ -681,6 +681,17 @@
   function go(hash) {
     if (/^\/admin/.test(hash)) { window.open(hash, '_blank', 'noopener'); return; }
     location.hash = hash.charAt(0) === '#' ? hash : '#' + hash;
+  }
+  // ?section=<name> on any route: scroll to [data-section="<name>"] once it has rendered
+  // (tab bodies load after the view resolves, so look for it for a few seconds).
+  function revealSection(name) {
+    if (!name) return;
+    var tries = 0, smooth = !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    (function look() {
+      var el = $$('#view [data-section]').filter(function (x) { return x.getAttribute('data-section') === name; })[0];
+      if (el) { el.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' }); return; }
+      if (++tries < 40) setTimeout(look, 100);
+    })();
   }
   function header(title, desc, actions) {
     return '<div class="sa-head"><div class="sa-head-text"><h1 tabindex="-1">' + esc(title) + '</h1>' + (desc ? '<p>' + esc(desc) + '</p>' : '') + '</div>' +
@@ -732,6 +743,17 @@
       kpi('Platform errors (7d)', fmtN(errs), fmtN(d.errors.system_errors_7d) + ' server · ' + fmtN(d.errors.security_high_7d) + ' security', { href: '#/security', tone: errs ? 'bad' : '', icon: 'lock' }) +
       kpi('Payments', fmtN((d.payments.by_status.succeeded || {}).count || 0), fmtN(d.payments.pending) + ' pending · ' + fmtN(d.payments.failed) + ' failed · ' + fmtN(d.payments.refund_required) + ' refund due', { href: '#/payments', tone: d.payments.refund_required ? 'warn' : '', icon: 'card' }) +
       '</div>';
+    // who provides Apify / Gemini: organization counts, each opens the subscriptions paid that way
+    var cov = d.api_coverage;
+    if (cov) {
+      var covTotal = COVERAGE_OPTS.reduce(function (a, x) { return a + (cov[x[0]] || 0); }, 0);
+      var covSub = { all_included: 'LeadAI provides Apify and Gemini', own_apify: 'own Apify · LeadAI Gemini', own_gemini: 'LeadAI Apify · own Gemini', own_both: 'own Apify and Gemini keys' };
+      html += '<div class="sa-card sa-section" data-section="api-coverage"><h3><span>Who provides the APIs <span class="sa-small sa-muted">organizations · Apify (scraping) &amp; Gemini (AI)</span></span><a class="sa-link" href="#/subscriptions?tab=all">Subscriptions →</a></h3>' +
+        '<div class="sa-grid sa-kpis">' + COVERAGE_OPTS.map(function (x) {
+          var n = cov[x[0]] || 0;
+          return kpi(x[1], fmtN(n), esc(covSub[x[0]]) + (covTotal ? ' · ' + Math.round(n * 100 / covTotal) + '%' : ''), { href: '#/subscriptions?coverage=' + x[0], icon: x[0] === 'all_included' ? 'layers' : 'key' });
+        }).join('') + '</div></div>';
+    }
     // needs attention + subscriptions mix + health
     var attn = [
       [d.demo.pending_requests, 'demo request(s) waiting for approval', '#/demo?status=pending', 'warn'],
@@ -905,6 +927,123 @@
     if (res) { toast('Token expiry saved'); if (after) after(); }
   }
 
+  // ── Organization: who provides Apify / Gemini, its own keys (masked hints only) and what it pays ──
+  function keyState(k) { // -> [pill status, label]
+    if (!k || !k.configured) return ['inactive', 'No key saved'];
+    if (k.last_error) return ['failed', k.verified ? 'Verified · last call failed' : 'Not working'];
+    return k.verified ? ['active', 'Verified'] : ['pending', 'Not verified'];
+  }
+  async function orgApiCoverage(el, orgId, orgName, after) {
+    var base = '/api/super-admin/organizations/' + encodeURIComponent(orgId);
+    var it = (await api(base + '/api-coverage')).integrations || {};
+    var cov = it.coverage || {}, keys = it.keys || {}, plan = it.plan || {}, sub = it.subscription, cur = plan.currency || 'USD';
+    var curKey = coverageKey(cov), addons = plan.addons || {};
+    var cycleTxt = function (c) { return c === 'yearly' ? 'year' : 'month'; };
+    var problem = function (a) { var k = keys[a] || {}; return cov[a] === 'own' && (!k.configured || !k.verified || !!k.last_error); };
+    var html = '<div class="sa-grid sa-kpis">' + API_KEYS.map(function (a) {
+      var st = keyState(keys[a]);
+      return kpi(API_SHORT[a], cov[a] === 'own' ? 'Own key' : 'LeadAI', esc(cov[a] === 'own' ? st[1] : 'included in the plan price'),
+        { href: '#key-' + a, icon: 'key', tone: problem(a) ? 'bad' : '' });
+    }).join('') +
+      kpi('Pays now', sub ? fmtMoney(sub.amount, cur) : 'No paid plan', sub ? esc('per ' + cycleTxt(sub.billing_cycle) + ' · paid for ' + (sub.paid_for_label || '—')) : esc(plan.name ? plan.name + ' plan' : 'demo / trial / free'), { href: '#api-plan', icon: 'card' }) +
+      kpi('Next price', sub ? fmtMoney(sub.next_price, cur) : '—', sub ? esc('from ' + fmtDate(sub.current_period_end) + ' · ' + (it.label || coverageLabel(cov))) : 'no renewal due', { href: '#api-plan', icon: 'repeat', tone: sub && money2(sub.next_price) !== money2(sub.amount) ? 'warn' : '' }) +
+      '</div>';
+    html += '<div class="sa-grid sa-2 sa-section">' + API_KEYS.map(function (a) {
+      var k = keys[a] || {}, own = cov[a] === 'own', st = keyState(k), ad = addons[a] || {};
+      return '<div class="sa-card" data-section="key-' + a + '" tabindex="-1"><h3><span>' + esc(API_LABEL[a]) + '</span>' + (own ? badge('Own key', 'primary') : badge('LeadAI-provided', 'success')) + '</h3>' +
+        (own && problem(a) ? '<div class="alert alert-warning" style="margin-bottom:10px"><div class="alert-body">' + esc(API_SHORT[a]) + ' work for this organization stops until a working key is saved or LeadAI provides it — an own-key API never falls back to LeadAI\'s key.</div></div>' : '') +
+        '<dl class="sa-kv"><dt>Provided by</dt><dd>' + (own ? 'The customer\'s own key' : 'LeadAI (included in the plan price)') + '</dd>' +
+        '<dt>Saved key</dt><dd>' + (k.configured ? '<span class="sa-mono" title="Masked — the key itself is never shown">' + esc(k.hint || '••••••••') + '</span>' : '<span class="sa-muted">None</span>') + '</dd>' +
+        '<dt>Status</dt><dd>' + pill(st[0], st[1]) + '</dd>' +
+        (k.configured ? '<dt>Verified</dt><dd>' + esc(k.verified_at ? fmtDT(k.verified_at) : 'Never') + '</dd>' : '') +
+        (k.last_error ? '<dt>Last error</dt><dd style="color:var(--danger-text)">' + esc(k.last_error) + '</dd>' : '') +
+        (k.updated_at ? '<dt>Key updated</dt><dd>' + esc(fmtDT(k.updated_at)) + '</dd>' : '') +
+        '<dt>Own-key saving</dt><dd>' + (plan.allows_own_keys ? esc(fmtMoney(ad.monthly, cur) + ' / month · ' + fmtMoney(ad.yearly, cur) + ' / year') : '<span class="sa-muted">Own keys not allowed on this plan</span>') + '</dd></dl>' +
+        '<div class="sa-row sa-section"><button type="button" class="btn btn-secondary btn-sm" data-cov="' + a + '" data-to="' + (own ? 'leadai' : 'own') + '">' + (own ? 'Switch to LeadAI-provided' : 'Switch to own key') + '</button>' +
+        (k.configured ? '<button type="button" class="btn btn-danger btn-sm" data-rmkey="' + a + '">Remove key</button>' : '') + '</div></div>';
+    }).join('') + '</div>';
+    var opts = it.options || [];
+    html += '<div class="sa-card sa-section" data-section="api-plan" tabindex="-1"><h3><span>Plan &amp; price</span>' + (plan.slug ? '<a class="sa-link" href="#/plans">Edit plans →</a>' : '') + '</h3>' +
+      '<div class="sa-grid sa-2"><dl class="sa-kv"><dt>Plan</dt><dd>' + esc(plan.name || '—') + (plan.slug ? ' <span class="sa-mono sa-muted">' + esc(plan.slug) + '</span>' : '') + '</dd>' +
+      '<dt>Own keys</dt><dd>' + (plan.allows_own_keys ? 'Allowed on this plan' : 'Not allowed on this plan') + '</dd>' +
+      '<dt>Uses now</dt><dd>' + esc(it.label || coverageLabel(cov)) + '</dd>' +
+      (sub ? '<dt>Paid for</dt><dd>' + esc(sub.paid_for_label || '—') + '</dd><dt>Pays</dt><dd>' + esc(fmtMoney(sub.amount, cur)) + ' / ' + esc(cycleTxt(sub.billing_cycle)) + '</dd>' +
+        '<dt>Renews</dt><dd>' + esc(fmtDate(sub.current_period_end)) + '</dd><dt>Next price</dt><dd><b>' + esc(fmtMoney(sub.next_price, cur)) + '</b> / ' + esc(cycleTxt(sub.billing_cycle)) + '</dd>'
+        : '<dt>Subscription</dt><dd><span class="sa-muted">No paid subscription — coverage changes apply at once.</span></dd>') + '</dl>' +
+      '<div>' + (opts.length ? '<div class="sa-table-wrap"><table class="sa-table sa-pgrid"><caption class="sr-only">Price for each API choice on this plan</caption><thead><tr><th scope="col">Option</th><th scope="col" class="num">Monthly</th><th scope="col" class="num">Yearly</th></tr></thead><tbody>' +
+        opts.map(function (x) {
+          var on = x.key === curKey;
+          return '<tr' + (on ? ' class="sa-cov-cur"' : '') + '><th scope="row">' + esc(x.label) + (on ? ' ' + badge('Current', 'primary') : '') + '</th><td class="num">' + esc(fmtMoney(x.price_monthly, cur)) + '</td><td class="num">' + esc(fmtMoney(x.price_yearly, cur)) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : emptyState('No prices', 'The organization has no plan yet.')) +
+      '<p class="sa-small sa-muted" style="margin:8px 0 0">Bringing an own key applies at once and the lower price starts at the next renewal. LeadAI providing an API the customer did not pay for needs checkout — or your courtesy override.</p></div></div></div>';
+    el.innerHTML = html;
+    // in-tab stat boxes scroll to their card instead of navigating
+    $$('[data-go]', el).forEach(function (b) {
+      var target = b.getAttribute('data-go');
+      if (target.charAt(0) !== '#' || target.charAt(1) === '/') return;
+      b._go = true;
+      b.setAttribute('aria-label', b.textContent.replace(/\s+/g, ' ').trim() + ' — show details');
+      b.addEventListener('click', function (e) {
+        e.preventDefault();
+        var card = $$('[data-section]', el).filter(function (x) { return x.getAttribute('data-section') === target.slice(1); })[0];
+        if (!card) return;
+        card.scrollIntoView({ block: 'start', behavior: window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+        card.focus({ preventScroll: true });
+      });
+    });
+    $$('[data-cov]', el).forEach(function (b) {
+      b.onclick = function () { switchCoverage(b.getAttribute('data-cov'), b.getAttribute('data-to')).catch(function (e) { toast(e.message, 'error'); }); };
+    });
+    $$('[data-rmkey]', el).forEach(function (b) {
+      b.onclick = function () { removeKey(b.getAttribute('data-rmkey')).catch(function (e) { toast(e.message, 'error'); }); };
+    });
+
+    async function switchCoverage(a, to) {
+      var name = API_SHORT[a], k = keys[a] || {}, toOwn = to === 'own';
+      var noKey = toOwn && !(k.configured && k.verified);
+      var res = await openModal({ title: toOwn ? 'Switch ' + name + ' to the customer\'s own key' : 'Switch ' + name + ' to LeadAI-provided', submitLabel: 'Switch', danger: noKey, body:
+        '<p style="margin:0;color:var(--text-secondary)">' + esc(toOwn
+          ? (orgName || 'The organization') + ' will use its own ' + API_LABEL[a] + ' key and LeadAI stops providing it. Their price drops by ' + fmtMoney((addons[a] || {})[sub ? sub.billing_cycle || 'monthly' : 'monthly'], cur) + ' from the next renewal.'
+          : 'LeadAI provides ' + API_LABEL[a] + ' for ' + (orgName || 'the organization') + ' again (included in the plan price). If their subscription was paid for an own key, the customer normally completes checkout at the higher price first.') + '</p>' +
+        (noKey ? '<div class="alert alert-warning"><div class="alert-body"><div class="alert-title">No verified ' + esc(name) + ' key is saved.</div><div>Without the courtesy option the switch is refused. With it, ' + esc(name) + ' work stops until the customer saves a working key.</div></div></div>' : '') +
+        '<div class="sa-field"><label for="cvReason">Reason *</label><textarea class="form-textarea" id="cvReason" name="reason" rows="3" maxlength="300" required style="min-height:70px"></textarea><span class="hint">Recorded in the audit log.</span></div>' +
+        '<label class="sa-check"><input type="checkbox" name="force"> Apply now without payment (courtesy)</label>' +
+        '<span class="sa-small sa-muted" style="margin-top:-6px">Skips checkout and the customer rules; audited with your reason.</span>' +
+        '<div data-cvres role="status" aria-live="polite"></div>',
+        onSubmit: async function (f, fd) {
+          var reason = String(fd.get('reason') || '').trim();
+          if (reason.length < 3) throw new Error('Enter a reason of at least 3 characters.');
+          var body = { reason: reason, force: !!fd.get('force') }; body[a] = to;
+          var out = await api(base + '/api-coverage', { method: 'PUT', body: body });
+          if (out.status === 'checkout_required') {
+            $('[data-cvres]', f).innerHTML = '<div class="alert alert-warning"><div class="alert-body"><div class="alert-title">Checkout required — nothing changed</div><div>' + esc(out.message || 'The customer must pay the new price first.') + '</div>' +
+              (out.new_price != null ? '<div>New price: <b>' + esc(fmtMoney(out.new_price, out.currency || cur)) + '</b> / ' + esc(cycleTxt(out.billing_cycle)) + '</div>' : '') +
+              '<div>Tick “Apply now without payment (courtesy)” to grant it anyway.</div></div></div>';
+            return false;
+          }
+          return out;
+        } });
+      if (!res) return;
+      toast(res.status === 'unchanged' ? 'Nothing changed — ' + name + ' already works that way' : name + ': ' + (to === 'own' ? 'own key' : 'LeadAI-provided') + (res.status === 'scheduled' ? ' (price drops at renewal)' : '') + (res.message ? ' — ' + res.message : ''), res.status === 'unchanged' ? 'info' : 'success');
+      if (after) after();
+    }
+    async function removeKey(a) {
+      var name = API_SHORT[a], k = keys[a] || {};
+      var r = await openModal({ title: 'Remove ' + name + ' key', submitLabel: 'Remove key', danger: true, body:
+        '<p style="margin:0;color:var(--text-secondary)">' + esc('Deletes the saved ' + API_LABEL[a] + ' key (' + (k.hint || 'masked') + ') of ' + (orgName || 'this organization') + ' — for example when it was reported compromised. The organization\'s admins are notified.' +
+          (cov[a] === 'own' ? ' ' + name + ' work stops until they save a new key or switch to LeadAI-provided.' : '')) + '</p>' +
+        '<div class="sa-field"><label for="rkReason">Reason *</label><textarea class="form-textarea" id="rkReason" name="reason" rows="3" maxlength="300" required style="min-height:70px"></textarea><span class="hint">Recorded in the audit log and included in the notice to the organization\'s admins.</span></div>',
+        onSubmit: function (f, fd) {
+          var reason = String(fd.get('reason') || '').trim();
+          if (reason.length < 3) throw new Error('Enter a reason of at least 3 characters.');
+          return api(base + '/api-keys/' + encodeURIComponent(a), { method: 'DELETE', body: { reason: reason } });
+        } });
+      if (!r) return;
+      toast(name + ' key removed — the organization\'s admins were notified');
+      if (after) after();
+    }
+  }
+
   async function viewOrganizations(root, q) {
     root.innerHTML = header('Organizations', 'All tenants across the platform. Archive = soft delete (data kept, access blocked).',
       '<button type="button" class="btn btn-primary btn-sm" id="oNew">+ New organization</button>') + '<div id="oList"></div>';
@@ -959,25 +1098,29 @@
     if (o.status !== 'disabled' && o.status !== 'archived') statusBtns.push('<button type="button" class="btn btn-danger btn-sm" data-st="disabled">Deactivate</button>');
     if (o.status !== 'archived') statusBtns.push('<button type="button" class="btn btn-danger btn-sm" data-st="archived">Archive</button>');
     setTitle(o.name, 'Customers › Organizations');
+    var odTab = function (t) { return '#/organizations/' + encodeURIComponent(id) + '?tab=' + t; };
+    // who provides Apify / Gemini (older orgs: the all-or-nothing api_mode switch)
+    var oCov = o.api_coverage || (o.api_mode === 'byok' ? { apify: (o.custom_api_keys || {}).apify ? 'own' : 'leadai', gemini: (o.custom_api_keys || {}).gemini ? 'own' : 'leadai' } : {});
     root.innerHTML = '<div class="sa-row sa-small" style="margin-bottom:6px"><a class="sa-link" href="#/organizations">← Organizations</a></div>' +
       header(o.name, (o.slug || '') + ' · created ' + fmtDate(o.created_at),
         pill(o.status) + '<button type="button" class="btn btn-secondary btn-sm" id="odEdit">Edit</button>' +
         '<button type="button" class="btn btn-secondary btn-sm" id="odTok">Adjust tokens</button>' +
         (o.status !== 'archived' ? '<button type="button" class="btn btn-secondary btn-sm" id="odImp">Impersonate</button>' : '') + statusBtns.join('')) +
       '<div class="sa-grid sa-kpis">' +
-      kpi('Members', fmtN(o.member_count), fmtN((o.admins || []).length) + ' admins') +
-      kpi('Subscription', o.subscription ? (o.subscription.plan_id || '—') : 'None', o.subscription ? pill(o.subscription.status) : '') +
-      kpi('Tokens left', o.tokens ? fmtN(o.tokens.remaining) : '—', o.tokens ? fmtN(o.tokens.used) + ' used of ' + fmtN(o.tokens.allocated) : 'not metered', { tone: o.tokens && o.tokens.allocated && o.tokens.used / o.tokens.allocated >= 0.8 ? 'warn' : '' }) +
-      kpi('Searches', fmtN(u.total_searches), fmtN(u.running_searches) + ' running · ' + fmtN(u.failed_searches) + ' failed', { tone: u.failed_searches ? 'warn' : '' }) +
-      kpi('Leads', fmtN(u.total_leads), fmtN(u.hot_leads) + ' hot') +
-      kpi('AI calls', fmtN(u.ai_calls), fmtN(u.active_sessions) + ' active sessions') +
+      kpi('Members', fmtN(o.member_count), fmtN((o.admins || []).length) + ' admins', { href: odTab('members') }) +
+      kpi('Subscription', o.subscription ? (o.subscription.plan_id || '—') : 'None', o.subscription ? pill(o.subscription.status) : '', { href: odTab('subscription') }) +
+      kpi('Tokens left', o.tokens ? fmtN(o.tokens.remaining) : '—', o.tokens ? fmtN(o.tokens.used) + ' used of ' + fmtN(o.tokens.allocated) : 'not metered', { href: odTab('tokens'), tone: o.tokens && o.tokens.allocated && o.tokens.used / o.tokens.allocated >= 0.8 ? 'warn' : '' }) +
+      kpi('Searches', fmtN(u.total_searches), fmtN(u.running_searches) + ' running · ' + fmtN(u.failed_searches) + ' failed', { href: odTab('searches'), tone: u.failed_searches ? 'warn' : '' }) +
+      kpi('Leads', fmtN(u.total_leads), fmtN(u.hot_leads) + ' hot', { href: odTab('leads') }) +
+      kpi('AI calls', fmtN(u.ai_calls), fmtN(u.active_sessions) + ' active sessions', { href: '#/ai' }) +
+      kpi('API keys', coverageLabel(oCov), API_KEYS.map(function (a) { return esc(API_SHORT[a]) + ': ' + (oCov[a] === 'own' ? 'own key' : 'LeadAI'); }).join(' · '), { href: odTab('api'), icon: 'key' }) +
       '</div><div class="sa-section" id="odTabs"></div>';
     $('#odEdit', root).onclick = function () { editOrgModal(o, reload).catch(function (e) { toast(e.message, 'error'); }); };
     $('#odTok', root).onclick = function () { adjustTokens(id, reload).catch(function (e) { toast(e.message, 'error'); }); };
     if ($('#odImp', root)) $('#odImp', root).onclick = function () { impersonate(o).catch(function (e) { toast(e.message, 'error'); }); };
     $$('[data-st]', root).forEach(function (b) { b.onclick = function () { orgStatusAction(o, b.getAttribute('data-st'), reload).catch(function (e) { toast(e.message, 'error'); }); }; });
 
-    tabs($('#odTabs', root), [['overview', 'Overview'], ['members', 'Users & Admins'], ['subscription', 'Subscription'], ['tokens', 'Usage & tokens'], ['searches', 'Searches'], ['leads', 'Leads'], ['activity', 'Activity'], ['sessions', 'Sessions']], q.tab || 'overview', async function (key, el) {
+    tabs($('#odTabs', root), [['overview', 'Overview'], ['members', 'Users & Admins'], ['subscription', 'Subscription'], ['api', 'API keys & plan'], ['tokens', 'Usage & tokens'], ['searches', 'Searches'], ['leads', 'Leads'], ['activity', 'Activity'], ['sessions', 'Sessions']], q.tab || 'overview', async function (key, el) {
       if (key === 'overview') {
         var dr = o.demo_request;
         el.innerHTML = '<div class="sa-grid sa-2"><div class="sa-card"><h3>Profile</h3><dl class="sa-kv">' +
@@ -1070,6 +1213,8 @@
         });
         $('#tkAdj', el).onclick = function () { adjustTokens(id, reload).catch(function (e) { toast(e.message, 'error'); }); };
         $('#tkExp', el).onclick = function () { if (!b) return toast('Grant tokens first', 'warning'); tokenExpiry(id, b.expires_at, reload).catch(function (e) { toast(e.message, 'error'); }); };
+      } else if (key === 'api') {
+        await orgApiCoverage(el, id, o.name, reload);
       } else if (key === 'searches') {
         searchesList(el, { organization_id: id });
       } else if (key === 'leads') {
@@ -1267,15 +1412,17 @@
     var reload = function () { route(); };
     var protectedAcct = u.is_platform_admin && u.platform_role === 'super_admin';
     setTitle(u.name || u.email, 'Customers › Users');
+    var udTab = function (t) { return '#/users/' + encodeURIComponent(id) + '?tab=' + t; };
     root.innerHTML = '<div class="sa-row sa-small" style="margin-bottom:6px"><a class="sa-link" href="#/users">← Users</a></div>' +
       header(u.name || u.email, u.email + ' · joined ' + fmtDate(u.created_at),
         pill(u.status || 'active') + (protectedAcct ? pill('info', 'Super Admin') : '<button type="button" class="btn btn-secondary btn-sm" id="udEmail">Change email</button><button type="button" class="btn btn-secondary btn-sm" id="udPw">Set password</button><button type="button" class="btn btn-secondary btn-sm" id="udReset">Reset access</button><button type="button" class="btn btn-secondary btn-sm" id="udRevoke">Sign out everywhere</button>' +
           ((u.status || 'active') !== 'active' ? '<button type="button" class="btn btn-secondary btn-sm" data-st="active">Activate</button>' : '<button type="button" class="btn btn-danger btn-sm" data-st="suspended">Suspend</button>') +
           (u.status !== 'disabled' ? '<button type="button" class="btn btn-danger btn-sm" data-st="disabled">Deactivate</button>' : ''))) +
       '<div class="sa-grid sa-kpis">' +
-      kpi('Searches', fmtN(us.searches), fmtN(us.running) + ' running · ' + fmtN(us.failed) + ' failed', { tone: us.failed ? 'warn' : '' }) +
-      kpi('Leads', fmtN(us.leads)) + kpi('Exports', fmtN(us.exports)) + kpi('Tokens consumed', fmtN(us.tokens_consumed)) +
-      kpi('Active sessions', fmtN(u.active_sessions)) + kpi('Last login', ago(u.last_login)) + '</div>' +
+      kpi('Searches', fmtN(us.searches), fmtN(us.running) + ' running · ' + fmtN(us.failed) + ' failed', { href: udTab('searches'), tone: us.failed ? 'warn' : '' }) +
+      kpi('Leads', fmtN(us.leads), '', { href: udTab('leads') }) + kpi('Exports', fmtN(us.exports), '', { href: '/admin#/exports' }) +
+      kpi('Tokens consumed', fmtN(us.tokens_consumed), '', { href: (u.memberships || []).length ? '#/organizations/' + encodeURIComponent(u.memberships[0].organization_id) + '?tab=tokens' : '#/tokens' }) +
+      kpi('Active sessions', fmtN(u.active_sessions), '', { href: udTab('sessions') }) + kpi('Last login', ago(u.last_login), '', { href: '#/security?tab=logins&q=' + encodeURIComponent(u.email || '') }) + '</div>' +
       '<div class="sa-section" id="udTabs"></div>';
     if (!protectedAcct) {
       $('#udEmail', root).onclick = function () { changeEmailDialog('/api/super-admin/users/' + encodeURIComponent(id) + '/email', u.email).then(function (r) { if (r) reload(); }, function (e) { toast(e.message, 'error'); }); };
@@ -1362,18 +1509,22 @@
     openDrawer('Demo request', async function (body, close) {
       var r = (await api('/api/super-admin/demo-requests/' + encodeURIComponent(id))).request;
       var d = r.demo || {}, t = d.tokens || {};
+      // usage boxes open the demo organization (tab); without one they fall back to the demo inbox
+      var orgGo = function (tab) { return r.organization_id ? '#/organizations/' + encodeURIComponent(r.organization_id) + (tab ? '?tab=' + tab : '') : '#/demo?q=' + encodeURIComponent(r.email || ''); };
       body.innerHTML = '<dl class="sa-kv"><dt>Company</dt><dd>' + esc(r.company) + '</dd><dt>Name</dt><dd>' + esc(r.name) + '</dd><dt>Email</dt><dd>' + esc(r.email) + '</dd><dt>Phone</dt><dd>' + esc(r.phone || '—') + '</dd>' +
         '<dt>Requested</dt><dd>' + esc(fmtDT(r.created_at)) + '</dd><dt>Status</dt><dd>' + pill(r.status) + (r.status === 'converted' ? ' <span class="sa-small sa-muted">converted automatically when the subscription was confirmed</span>' : '') + '</dd>' +
         (r.message ? '<dt>Message</dt><dd>' + esc(r.message) + '</dd>' : '') +
         (r.industry ? '<dt>Industry</dt><dd>' + esc(r.industry) + '</dd>' : '') + (r.requested_plan ? '<dt>Interested in plan</dt><dd>' + esc(r.requested_plan) + '</dd>' : '') +
         '<dt>Terms accepted</dt><dd>' + esc(r.terms_accepted_at ? fmtDT(r.terms_accepted_at) : '—') + '</dd>' +
         '<dt>Organization</dt><dd><a class="sa-link" href="#/organizations/' + esc(r.organization_id) + '">Open organization →</a></dd></dl>' +
-        '<div class="sa-grid sa-kpis sa-section">' + kpi('Searches', fmtN((r.usage || {}).searches)) + kpi('Leads', fmtN((r.usage || {}).leads)) +
-        kpi('Tokens used', fmtN(t.used || 0), t.allocated ? 'of ' + fmtN(t.allocated) : '') + kpi('Time left', d.is_demo ? (d.expired ? 'Expired' : d.days_remaining + ' days') : '—', d.expires_at ? 'until ' + fmtDate(d.expires_at) : '') + '</div>' +
+        '<div class="sa-grid sa-kpis sa-section">' + kpi('Searches', fmtN((r.usage || {}).searches), '', { href: orgGo('searches') }) + kpi('Leads', fmtN((r.usage || {}).leads), '', { href: orgGo('leads') }) +
+        kpi('Tokens used', fmtN(t.used || 0), t.allocated ? 'of ' + fmtN(t.allocated) : '', { href: orgGo('tokens') }) + kpi('Time left', d.is_demo ? (d.expired ? 'Expired' : d.days_remaining + ' days') : '—', d.expires_at ? 'until ' + fmtDate(d.expires_at) : '', { href: orgGo('') }) + '</div>' +
         '<div class="sa-row sa-section" id="drBtns"></div><h4 class="sa-section">History</h4>' + timeline(r.history);
       var btns = demoButtons(r);
       $('#drBtns', body).innerHTML = btns.map(function (x) { return '<button type="button" class="btn btn-sm ' + x[2] + '" data-a="' + x[0] + '">' + x[1] + '</button>'; }).join('');
       $$('[data-a]', body).forEach(function (b) { b.onclick = function () { demoAction(r, b.getAttribute('data-a'), function () { close(); if (after) after(); }).catch(function (e) { toast(e.message, 'error'); }); }; });
+      $$('[data-go]', body).forEach(function (b) { b.addEventListener('click', close); });
+      bindGo(body);
     });
   }
 
@@ -1459,11 +1610,67 @@
   // ════════════════════════════════════════════════════════
   //  PLANS & PRICING
   // ════════════════════════════════════════════════════════
+  // ── API coverage: who provides Apify (scraping) and Gemini (AI) ──
+  // The plan price is the ALL-INCLUDED price; api_addons[api][cycle] comes off when the
+  // customer brings that API's key. These helpers only mirror app.billing.plans for
+  // DISPLAY (previews, list columns) — the server computes and validates every real price.
+  var API_KEYS = ['apify', 'gemini'];
+  var API_LABEL = { apify: 'Apify (scraping)', gemini: 'Google Gemini (AI analysis)' };
+  var API_SHORT = { apify: 'Apify', gemini: 'Gemini' };
+  var COVERAGE_OPTS = [
+    ['all_included', 'All included', { apify: 'leadai', gemini: 'leadai' }],
+    ['own_apify', 'Own Apify key', { apify: 'own', gemini: 'leadai' }],
+    ['own_gemini', 'Own Gemini key', { apify: 'leadai', gemini: 'own' }],
+    ['own_both', 'Bring both keys', { apify: 'own', gemini: 'own' }]];
+  var COVERAGE_FILTER = [['', 'All coverage'], ['all_included', 'All included'], ['own_apify', 'Own Apify'], ['own_gemini', 'Own Gemini'], ['own_both', 'Bring both']];
+  function money2(v) { var n = Number(v); return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0; }
+  function planAllowsOwn(p) { return p.allows_byok !== false && money2(p.price_monthly) > 0; }
+  function planAddons(p) {
+    var stored = p.api_addons && typeof p.api_addons === 'object' ? p.api_addons : null, split = { apify: 0.6, gemini: 0.4 }, out = {};
+    API_KEYS.forEach(function (a) {
+      out[a] = {};
+      ['monthly', 'yearly'].forEach(function (c) {
+        var full = money2(p['price_' + c]), v;
+        if (stored) v = money2((stored[a] || {})[c]);
+        else { var legacy = money2(p['price_' + c + '_byok']); v = legacy ? Math.round(Math.max(0, full - legacy) * split[a] * 100) / 100 : 0; }
+        out[a][c] = Math.min(v, full);
+      });
+    });
+    return out;
+  }
+  function coveragePrice(full, addons, cov, cycle, allows) {
+    full = money2(full);
+    if (!allows) return full;
+    var off = API_KEYS.reduce(function (s, a) { return s + (cov[a] === 'own' ? money2((addons[a] || {})[cycle]) : 0); }, 0);
+    return Math.round(Math.max(0, full - off) * 100) / 100;
+  }
+  function coverageKey(cov) {
+    cov = cov || {};
+    var a = cov.apify === 'own', g = cov.gemini === 'own';
+    return a && g ? 'own_both' : a ? 'own_apify' : g ? 'own_gemini' : 'all_included';
+  }
+  function coverageLabel(cov) { var k = coverageKey(cov); return COVERAGE_OPTS.filter(function (o) { return o[0] === k; })[0][1]; }
+  /** The 4-option price table (all included / own Apify / own Gemini / both) for a plan-like object. */
+  function priceGridHtml(p, o) {
+    o = o || {};
+    var allows = o.allows != null ? o.allows : planAllowsOwn(p), addons = o.addons || planAddons(p), cur = p.currency || 'USD';
+    var rows = COVERAGE_OPTS.filter(function (x) { return allows || x[0] === 'all_included'; });
+    return '<div class="sa-table-wrap"><table class="sa-table sa-pgrid"><caption class="sr-only">Price per API coverage choice</caption><thead><tr><th scope="col">Customer chooses</th><th scope="col" class="num">Monthly</th><th scope="col" class="num">Yearly</th></tr></thead><tbody>' +
+      rows.map(function (x) {
+        var cur2 = o.current === x[0];
+        return '<tr' + (cur2 ? ' class="sa-cov-cur"' : '') + '><th scope="row">' + esc(x[1]) + (cur2 ? ' ' + badge('Current', 'primary') : '') + '</th>' +
+          '<td class="num">' + esc(fmtMoney(coveragePrice(p.price_monthly, addons, x[2], 'monthly', allows), cur)) + '</td>' +
+          '<td class="num">' + esc(fmtMoney(coveragePrice(p.price_yearly, addons, x[2], 'yearly', allows), cur)) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
   async function planEditor(plan, after) {
     var schema = await api('/api/super-admin/plans/schema');
-    var p = plan || { status: 'inactive', is_public: false, currency: 'USD', limits: {}, features: [] };
+    var p = plan || { status: 'inactive', is_public: false, currency: 'USD', limits: {}, features: [], allows_byok: true };
     var lim = p.limits || {};
     var feats = p.features || [];
+    var apiLbl = Object.assign({}, API_LABEL, schema.api_providers || {});
+    var adds = planAddons(p);
     var body = '<div class="sa-form-grid">' +
       '<div class="sa-field"><label for="peName">Name *</label><input class="form-input" id="peName" name="name" required maxlength="80" value="' + esc(p.name || '') + '"></div>' +
       '<div class="sa-field"><label for="peSlug">Slug' + (plan ? ' <span class="sa-muted">(fixed)</span>' : '') + '</label><input class="form-input" id="peSlug" name="slug" maxlength="60" value="' + esc(p.slug || '') + '"' + (plan ? ' readonly' : '') + '></div>' +
@@ -1475,19 +1682,57 @@
       '<div class="sa-field"><label for="peO">Display order</label><input class="form-input" id="peO" name="display_order" type="number" value="' + esc(p.display_order == null ? 99 : p.display_order) + '"></div></div>' +
       '<div class="sa-field"><label for="peD">Description</label><textarea class="form-textarea" id="peD" name="description" rows="2" style="min-height:60px">' + esc(p.description || '') + '</textarea></div>' +
       '<div class="sa-row">' + [['is_public', 'Shown on the public pricing page'], ['is_default', 'Default / highlighted plan'], ['is_trial', 'Trial plan']].map(function (x) { return '<label class="sa-check"><input type="checkbox" name="' + x[0] + '"' + (p[x[0]] ? ' checked' : '') + '> ' + esc(x[1]) + '</label>'; }).join('') + '</div>' +
+      '<h4 style="margin:6px 0 0">API keys &amp; price</h4>' +
+      '<p class="sa-small sa-muted" style="margin:0">The prices above are <b>all included</b>: LeadAI provides Apify and Gemini. A customer who brings their own key for an API pays less by the amount below.</p>' +
+      '<label class="sa-check"><input type="checkbox" name="allows_own_keys" data-pe-own' + (p.allows_byok !== false ? ' checked' : '') + '> Allow customers to use their own API keys</label>' +
+      '<div class="sa-form-grid" data-pe-addons>' + API_KEYS.map(function (a) {
+        return ['monthly', 'yearly'].map(function (c) {
+          return '<div class="sa-field"><label for="pa_' + a + '_' + c + '">' + esc(apiLbl[a] || API_SHORT[a]) + ' · ' + (c === 'monthly' ? 'per month' : 'per year') + '</label>' +
+            '<input class="form-input" id="pa_' + a + '_' + c + '" name="addon:' + a + ':' + c + '" type="number" min="0" step="0.01" inputmode="decimal" value="' + esc(adds[a][c]) + '" data-pe-addon>' +
+            '<span class="hint">Taken off when the customer brings this key.</span></div>';
+        }).join('');
+      }).join('') + '</div>' +
+      '<div class="sa-field" data-section="pe-grid"><span class="sa-small" style="font-weight:600;color:var(--text-secondary)">What the customer pays <span class="sa-muted" style="font-weight:400">· preview from the numbers above; the server checks them on save</span></span><div data-pe-grid aria-live="polite"></div></div>' +
       '<h4 style="margin:6px 0 0">Limits</h4><div class="sa-form-grid">' + schema.limit_keys.map(function (k) {
         return '<div class="sa-field"><label for="pl_' + k + '">' + esc(titleCase(k)) + '</label><input class="form-input" id="pl_' + k + '" name="limit:' + k + '" type="number" min="0" step="1" value="' + esc(lim[k] == null ? '' : lim[k]) + '" placeholder="not set"></div>';
       }).join('') + '</div>' +
       '<h4 style="margin:6px 0 0">Features</h4><div class="sa-form-grid">' + Object.keys(schema.features).map(function (k) {
         return '<label class="sa-check"><input type="checkbox" name="feature" value="' + esc(k) + '"' + (feats.indexOf(k) >= 0 ? ' checked' : '') + '> ' + esc(schema.features[k]) + '</label>';
       }).join('') + '</div>';
+    var readAddons = function (form) {
+      var out = {};
+      API_KEYS.forEach(function (a) { out[a] = {}; ['monthly', 'yearly'].forEach(function (c) { var el = form.elements['addon:' + a + ':' + c]; out[a][c] = el ? money2(parseFloat(el.value)) : 0; }); });
+      return out;
+    };
     var saved = await openModal({ title: plan ? 'Edit plan — ' + p.name : 'New plan', size: 'lg', submitLabel: plan ? 'Save plan' : 'Create plan', body: body,
+      onOpen: function (form) {
+        var paint = function () {
+          var pm = parseFloat(form.elements.price_monthly.value), py = parseFloat(form.elements.price_yearly.value);
+          var preview = { price_monthly: pm, price_yearly: py, currency: String(form.elements.currency.value || 'USD').toUpperCase().slice(0, 3) || 'USD' };
+          var own = form.elements.allows_own_keys.checked, addons = readAddons(form);
+          var allows = own && money2(pm) > 0;
+          $('[data-pe-addons]', form).style.opacity = own ? '' : '.6';
+          var warn = [];
+          ['monthly', 'yearly'].forEach(function (c) {
+            var sum = API_KEYS.reduce(function (s, a) { return s + addons[a][c]; }, 0);
+            if (sum > money2(preview['price_' + c]) + 1e-9) warn.push('The ' + c + ' amounts add up to ' + fmtMoney(sum, preview.currency) + ', more than the ' + c + ' price — the server will refuse this.');
+          });
+          $('[data-pe-grid]', form).innerHTML = priceGridHtml(preview, { allows: allows, addons: addons }) +
+            (!own ? '<p class="sa-small sa-muted" style="margin:6px 0 0">Own keys are off: every customer on this plan pays the all-included price.</p>'
+              : !(money2(pm) > 0) ? '<p class="sa-small sa-muted" style="margin:6px 0 0">Free plans can\'t use own keys (there is nothing to take off).</p>' : '') +
+            warn.map(function (w) { return '<p class="sa-small" style="margin:6px 0 0;color:var(--warning-text)" role="status">' + esc(w) + '</p>'; }).join('');
+        };
+        ['price_monthly', 'price_yearly', 'currency', 'allows_own_keys'].forEach(function (n) { var el = form.elements[n]; if (el) { el.addEventListener('input', paint); el.addEventListener('change', paint); } });
+        $$('[data-pe-addon]', form).forEach(function (el) { el.addEventListener('input', paint); });
+        paint();
+      },
       onSubmit: function (f, fd) {
         var out = { name: String(fd.get('name') || '').trim(), status: fd.get('status'), currency: String(fd.get('currency') || 'USD').toUpperCase(),
           price_monthly: parseFloat(fd.get('price_monthly')) || 0, price_yearly: parseFloat(fd.get('price_yearly')) || 0,
           trial_days: parseInt(fd.get('trial_days'), 10) || 0, display_order: parseInt(fd.get('display_order'), 10) || 0,
           description: fd.get('description'), is_public: !!fd.get('is_public'), is_default: !!fd.get('is_default'), is_trial: !!fd.get('is_trial'),
-          features: fd.getAll('feature'), limits: {} };
+          features: fd.getAll('feature'), limits: {},
+          allows_own_keys: !!fd.get('allows_own_keys'), api_addons: readAddons(f) };
         if (!out.name) throw new Error('Name is required.');
         out.limits_unset = [];
         schema.limit_keys.forEach(function (k) { var v = fd.get('limit:' + k); if (v !== '' && v != null) out.limits[k] = parseInt(v, 10); else if (lim[k] != null) out.limits_unset.push(k); });
@@ -1497,19 +1742,19 @@
     if (saved) { toast(plan ? 'Plan saved' : 'Plan created'); if (after) after(); }
   }
 
-  async function viewPlans(root) {
+  async function viewPlans(root, q) {
     var data = await api('/api/super-admin/plans');
     var plans = data.plans || [];
     var reload = function () { route(); };
     var live = plans.filter(function (p) { return p.status === 'active'; });
     root.innerHTML = header('Plans', 'The single plan catalog — limits and features drive entitlements, billing and the public pricing page.',
       '<a class="btn btn-secondary btn-sm" href="#/pricing">Preview pricing page</a><button type="button" class="btn btn-primary btn-sm" id="plNew">+ New plan</button>') +
-      '<div class="sa-grid sa-kpis">' + kpi('Plans', fmtN(plans.length), fmtN(live.length) + ' active', { icon: 'layers' }) +
+      '<div class="sa-grid sa-kpis">' + kpi('Plans', fmtN(plans.length), fmtN(live.length) + ' active', { href: '#/plans?status=active', icon: 'layers' }) +
       kpi('Public', fmtN(plans.filter(function (p) { return p.is_public && p.status === 'active'; }).length), 'shown on the website', { href: '#/pricing', icon: 'globe' }) +
       kpi('Live subscriptions', fmtN(plans.reduce(function (a, p) { return a + (p.live_subscriptions || 0); }, 0)), 'across all plans', { href: '#/subscriptions', icon: 'repeat' }) + '</div>' +
       '<div class="sa-section" id="plList"></div>';
     listView($('#plList', root), {
-      data: function () { return Promise.resolve(plans); }, key: 'plans', sort: 'display_order',
+      data: function () { return Promise.resolve(plans); }, key: 'plans', sort: 'display_order', initial: { status: (q || {}).status || '' },
       filters: [{ key: 'q', label: 'Search plan name or slug…' }, { key: 'status', type: 'select', label: 'Status', options: [['', 'All statuses'], ['active', 'Active'], ['inactive', 'Inactive'], ['archived', 'Archived']] }],
       columns: [
         { label: 'Plan', sort: 'name', render: function (p) { return '<span class="cell-main">' + esc(p.name) + '</span><span class="cell-sub sa-mono">' + esc(p.slug) + '</span>'; } },
@@ -1517,6 +1762,13 @@
         { label: 'Visibility', render: function (p) { return (p.is_public ? badge('Public', 'info') : badge('Hidden', 'muted')) + (p.is_default ? ' ' + badge('Default', 'primary') : ''); } },
         { label: 'Monthly', sort: 'price_monthly', cls: 'num', render: function (p) { return esc(fmtMoney(p.price_monthly, p.currency)); } },
         { label: 'Yearly', sort: 'price_yearly', cls: 'num', render: function (p) { return esc(fmtMoney(p.price_yearly, p.currency)); } },
+        { label: 'Own keys', sort: 'own_keys', sortVal: function (p) { return planAllowsOwn(p) ? coveragePrice(p.price_monthly, planAddons(p), COVERAGE_OPTS[3][2], 'monthly', true) : -1; },
+          csv: function (p) { return planAllowsOwn(p) ? 'Yes · both own ' + fmtMoney(coveragePrice(p.price_monthly, planAddons(p), COVERAGE_OPTS[3][2], 'monthly', true), p.currency) + '/mo' : 'No'; },
+          render: function (p) {
+            if (!planAllowsOwn(p)) return badge('Own keys: no', 'muted');
+            var both = coveragePrice(p.price_monthly, planAddons(p), COVERAGE_OPTS[3][2], 'monthly', true);
+            return badge('Own keys: yes', 'success') + '<span class="cell-sub" title="Price when the customer brings both the Apify and the Gemini key">Both own: ' + esc(fmtMoney(both, p.currency)) + '/mo</span>';
+          } },
         { label: 'Trial', sort: 'trial_days', cls: 'num', render: function (p) { return esc(p.trial_days || 0) + 'd'; } },
         { label: 'Key limits', render: function (p) { var l = p.limits || {}; return '<span class="sa-small">' + esc(['monthly_tokens', 'monthly_searches', 'team_members'].filter(function (k) { return l[k] != null; }).map(function (k) { return titleCase(k) + ': ' + fmtN(l[k]); }).join(' · ') || '—') + '</span>'; } },
         { label: 'Features', cls: 'num', render: function (p) { return String((p.features || []).length); } },
@@ -1623,6 +1875,7 @@
       var s = d.subscription; s.organization_name = (d.organization || {}).name;
       body.innerHTML = '<dl class="sa-kv"><dt>Organization</dt><dd><a class="sa-link" href="#/organizations/' + esc(s.organization_id) + '">' + esc(s.organization_name || s.organization_id) + '</a></dd>' +
         '<dt>Plan</dt><dd>' + esc(s.plan_id) + '</dd><dt>Status</dt><dd>' + pill(s.status) + '</dd><dt>Amount</dt><dd>' + esc(fmtMoney(s.amount, s.currency)) + ' / ' + esc(s.billing_cycle || '—') + '</dd>' +
+        '<dt>API coverage</dt><dd>' + esc(s.api_coverage_label || coverageLabel(s.api_coverage)) + (s.next_api_coverage ? ' <span class="sa-small sa-muted">→ ' + esc(coverageLabel(s.next_api_coverage)) + ' from the next renewal</span>' : '') + '</dd>' +
         '<dt>Provider</dt><dd>' + esc(s.provider || '—') + '</dd><dt>Started</dt><dd>' + esc(fmtDT(s.started_at)) + '</dd><dt>Period end</dt><dd>' + esc(fmtDT(s.current_period_end)) + '</dd>' +
         (s.requested_by_email ? '<dt>Requested by</dt><dd>' + esc(s.requested_by_email) + '</dd>' : '') + (s.cancel_reason ? '<dt>Cancel reason</dt><dd>' + esc(s.cancel_reason) + '</dd>' : '') + '</dl>' +
         '<div class="sa-row sa-section" id="sdBtns">' + subActions(s).map(function (x) { return '<button type="button" class="btn btn-sm ' + x[2] + '" data-a="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>' +
@@ -1638,7 +1891,7 @@
   async function viewSubscriptions(root, q) {
     root.innerHTML = header('Subscriptions', 'Payment success never activates anything: verified payments wait in the confirmation queue until you confirm them.',
       '<a class="btn btn-secondary btn-sm" href="#/plans">Plans</a><a class="btn btn-secondary btn-sm" href="#/payments">Payments</a>') + '<div id="sbTabs"></div>';
-    tabs($('#sbTabs', root), [['queue', 'Confirmation queue'], ['all', 'All subscriptions']], q.status && q.status !== 'awaiting' ? 'all' : (q.tab || 'queue'), function (key, el) {
+    tabs($('#sbTabs', root), [['queue', 'Confirmation queue'], ['all', 'All subscriptions']], (q.status && q.status !== 'awaiting') || q.coverage ? 'all' : (q.tab || 'queue'), function (key, el) {
       if (key === 'queue') {
         listView(el, {
           url: function (p) { return '/api/super-admin/subscriptions/queue' + qs({ page: p.page, limit: p.limit }); }, key: 'sub-queue',
@@ -1656,13 +1909,15 @@
         });
       } else {
         listView(el, {
-          url: function (p) { return '/api/super-admin/subscriptions' + qs({ page: p.page, limit: p.limit, sort: p.sort, status: p.status, q: p.q, plan: p.plan }); },
-          rowsKey: 'subscriptions', sort: '-created_at', initial: { status: q.status || '' }, key: 'subscriptions',
+          url: function (p) { return '/api/super-admin/subscriptions' + qs({ page: p.page, limit: p.limit, sort: p.sort, status: p.status, q: p.q, plan: p.plan, coverage: p.coverage }); },
+          rowsKey: 'subscriptions', sort: '-created_at', initial: { status: q.status || '', coverage: COVERAGE_FILTER.some(function (x) { return x[0] && x[0] === q.coverage; }) ? q.coverage : '' }, key: 'subscriptions',
           exportUrl: function (st) { return reportUrl('subscriptions', { status: st.status }); },
-          filters: [{ key: 'q', label: 'Organization name…' }, { key: 'status', type: 'select', label: 'Status', options: [['', 'All statuses'], ['awaiting', 'Awaiting confirmation'], ['pending', 'Pending payment'], ['active', 'Active'], ['trialing', 'Trialing'], ['suspended', 'Suspended'], ['expired', 'Expired'], ['cancelled', 'Cancelled']] }, { key: 'plan', label: 'Plan slug' }],
+          filters: [{ key: 'q', label: 'Organization name…' }, { key: 'status', type: 'select', label: 'Status', options: [['', 'All statuses'], ['awaiting', 'Awaiting confirmation'], ['pending', 'Pending payment'], ['active', 'Active'], ['trialing', 'Trialing'], ['suspended', 'Suspended'], ['expired', 'Expired'], ['cancelled', 'Cancelled']] },
+            { key: 'coverage', type: 'select', label: 'Coverage (who provides the APIs)', options: COVERAGE_FILTER }, { key: 'plan', label: 'Plan slug' }],
           columns: [
             { label: 'Organization', render: function (s) { return '<a class="sa-link cell-main" href="#/organizations/' + esc(s.organization_id) + '">' + esc(s.organization_name) + '</a>'; } },
             { label: 'Plan', render: function (s) { return esc(s.plan_id); } },
+            { label: 'Coverage', render: function (s) { return esc(s.api_coverage_label || coverageLabel(s.api_coverage)); } },
             { label: 'Status', sort: 'status', render: function (s) { return pill(s.status); } },
             { label: 'Amount', sort: 'amount', cls: 'num', render: function (s) { return esc(fmtMoney(s.amount, s.currency)); } },
             { label: 'Cycle', render: function (s) { return esc(s.billing_cycle || '—'); } },
@@ -1693,10 +1948,11 @@
           if (ks.length > 1) return ks.map(function (k) { return fmtMoney(m[k], k); }).join(' · ');
           return fmtMoney(ks.length ? m[ks[0]] : (x.amount || 0), ks[0] || cur);
         };
-        $('#pySum', root).innerHTML = kpi('Successful', fmtN((s.succeeded || {}).count || 0), esc(amt(s.succeeded))) +
-          kpi('Pending', fmtN((s.pending || {}).count || 0), esc(amt(s.pending))) +
-          kpi('Failed', fmtN((s.failed || {}).count || 0), '', { tone: (s.failed || {}).count ? 'bad' : '' }) +
-          kpi('Refund required', fmtN((s.refund_required || {}).count || 0), 'paid, then rejected/cancelled', { tone: (s.refund_required || {}).count ? 'warn' : '' });
+        $('#pySum', root).innerHTML = kpi('Successful', fmtN((s.succeeded || {}).count || 0), esc(amt(s.succeeded)), { href: '#/payments?status=succeeded' }) +
+          kpi('Pending', fmtN((s.pending || {}).count || 0), esc(amt(s.pending)), { href: '#/payments?status=pending' }) +
+          kpi('Failed', fmtN((s.failed || {}).count || 0), '', { href: '#/payments?status=failed', tone: (s.failed || {}).count ? 'bad' : '' }) +
+          kpi('Refund required', fmtN((s.refund_required || {}).count || 0), 'paid, then rejected/cancelled', { href: '#/payments?status=refunded', tone: (s.refund_required || {}).count ? 'warn' : '' });
+        bindGo($('#pySum', root));
       },
       columns: [
         { label: 'Organization', render: function (p) { return '<a class="sa-link cell-main" href="#/organizations/' + esc(p.organization_id) + '">' + esc(p.organization_name || short(p.organization_id)) + '</a><span class="cell-sub">' + esc(p.plan_id || '') + '</span>'; } },
@@ -1722,8 +1978,10 @@
   // ════════════════════════════════════════════════════════
   //  TOKENS & USAGE
   // ════════════════════════════════════════════════════════
-  async function viewTokens(root) {
+  async function viewTokens(root, q) {
+    q = q || {};
     var s = await api('/api/super-admin/tokens/summary');
+    var sort = /^-?(used|remaining|allocated|updated_at|expires_at)$/.test(q.sort || '') ? q.sort : '-used';
     var t = s.totals;
     function tbl(rows, cols, empty) {
       return rows.length ? '<div class="sa-table-wrap"><table class="sa-table"><thead><tr>' + cols.map(function (c) { return '<th' + (c[2] ? ' class="num"' : '') + '>' + esc(c[0]) + '</th>'; }).join('') + '</tr></thead><tbody>' +
@@ -1732,17 +1990,17 @@
     var orgCell = function (r) { return '<a class="sa-link" href="#/organizations/' + esc(r.organization_id) + '?tab=tokens">' + esc(r.organization_name || short(r.organization_id)) + '</a>'; };
     root.innerHTML = header('Tokens & usage', 'Balances, consumption, warnings and anomalies across all organizations.',
       '<a class="btn btn-secondary btn-sm" href="#/demo?tab=costs">Token costs</a>') +
-      '<div class="sa-grid sa-kpis">' + kpi('Allocated', fmtN(t.allocated), fmtN(t.organizations) + ' metered orgs') + kpi('Used', fmtN(t.used), usageBar(t.allocated ? t.used * 100 / t.allocated : 0)) +
-      kpi('Remaining', fmtN(t.remaining)) + kpi('Consumed (24h)', fmtN(s.consumed_24h)) +
-      kpi('Usage warnings', fmtN(s.warnings.length), '≥ 80% used', { tone: s.warnings.length ? 'warn' : '' }) + kpi('Anomalies', fmtN(s.anomalies.length), '24h > 3× daily avg', { tone: s.anomalies.length ? 'bad' : '' }) + '</div>' +
+      '<div class="sa-grid sa-kpis">' + kpi('Allocated', fmtN(t.allocated), fmtN(t.organizations) + ' metered orgs', { href: '#/tokens?sort=-allocated&section=balances' }) + kpi('Used', fmtN(t.used), usageBar(t.allocated ? t.used * 100 / t.allocated : 0), { href: '#/tokens?sort=-used&section=balances' }) +
+      kpi('Remaining', fmtN(t.remaining), 'lowest balances first', { href: '#/tokens?sort=remaining&section=balances' }) + kpi('Consumed (24h)', fmtN(s.consumed_24h), 'daily trend in analytics', { href: '#/analytics?range=7d' }) +
+      kpi('Usage warnings', fmtN(s.warnings.length), '≥ 80% used', { href: '#/tokens?section=warnings', tone: s.warnings.length ? 'warn' : '' }) + kpi('Anomalies', fmtN(s.anomalies.length), '24h > 3× daily avg', { href: '#/tokens?section=anomalies', tone: s.anomalies.length ? 'bad' : '' }) + '</div>' +
       '<div class="alert alert-info sa-section"><div class="alert-body"><div class="alert-title">Over-limit behaviour</div><div>' + esc(s.over_limit_behaviour) + '</div></div></div>' +
-      '<div class="sa-grid sa-2 sa-section"><div class="sa-card"><h3>Usage warnings (≥ 80%)</h3>' + tbl(s.warnings, [['Organization', orgCell], ['Used', function (r) { return usageBar(r.percentage); }], ['Remaining', function (r) { return fmtN(r.remaining); }, 1]], 'No organization above 80%') + '</div>' +
-      '<div class="sa-card"><h3>Anomalies (last 24h)</h3>' + tbl(s.anomalies, [['Organization', orgCell], ['Last 24h', function (r) { return fmtN(r.last_24h); }, 1], ['Daily avg', function (r) { return fmtN(r.daily_average); }, 1], ['Factor', function (r) { return r.factor ? r.factor + '×' : 'new'; }, 1]], 'No unusual consumption') + '</div></div>' +
+      '<div class="sa-grid sa-2 sa-section"><div class="sa-card" data-section="warnings"><h3>Usage warnings (≥ 80%)</h3>' + tbl(s.warnings, [['Organization', orgCell], ['Used', function (r) { return usageBar(r.percentage); }], ['Remaining', function (r) { return fmtN(r.remaining); }, 1]], 'No organization above 80%') + '</div>' +
+      '<div class="sa-card" data-section="anomalies"><h3>Anomalies (last 24h)</h3>' + tbl(s.anomalies, [['Organization', orgCell], ['Last 24h', function (r) { return fmtN(r.last_24h); }, 1], ['Daily avg', function (r) { return fmtN(r.daily_average); }, 1], ['Factor', function (r) { return r.factor ? r.factor + '×' : 'new'; }, 1]], 'No unusual consumption') + '</div></div>' +
       (s.expired.length ? '<div class="sa-card sa-section"><h3>Expired balances</h3>' + tbl(s.expired, [['Organization', orgCell], ['Expired', function (r) { return esc(fmtDT(r.expires_at)); }], ['Remaining', function (r) { return fmtN(r.remaining); }, 1]], '') + '</div>' : '') +
-      '<div class="sa-card sa-section"><h3>Balances</h3><div id="tkList"></div></div>';
+      '<div class="sa-card sa-section" data-section="balances"><h3>Balances</h3><div id="tkList"></div></div>';
     listView($('#tkList', root), {
       url: function (p) { return '/api/super-admin/tokens' + qs({ page: p.page, limit: p.limit, sort: p.sort, q: p.q }); },
-      sort: '-used', filters: [{ key: 'q', label: 'Organization name…' }], key: 'token-balances', exportUrl: function () { return reportUrl('usage'); },
+      sort: sort, filters: [{ key: 'q', label: 'Organization name…' }], key: 'token-balances', exportUrl: function () { return reportUrl('usage'); },
       columns: [
         { label: 'Organization', render: orgCell },
         { label: 'Allocated', sort: 'allocated', cls: 'num', render: function (b) { return fmtN(b.allocated); } },
@@ -1930,13 +2188,15 @@
         var m = (await api('/api/super-admin/ai/overview?range=' + range)).metrics;
         var series = m.requests_over_time || [];
         el.innerHTML = '<div class="sa-chips">' + ['24h', '7d', '30d', '90d'].map(function (r) { return '<a class="sa-chip' + (r === range ? ' active' : '') + '" href="#/ai?range=' + r + '">' + r + '</a>'; }).join('') + '</div>' +
-          '<div class="sa-grid sa-kpis">' + kpi('Requests', fmtN(m.total_requests), fmtN(m.requests_today) + ' today') + kpi('Failed', fmtN(m.failed_requests), fmtN(m.fallback_requests) + ' rule fallbacks', { tone: m.failed_requests ? 'warn' : '' }) +
-          kpi('Avg latency', fmtN(m.avg_latency_ms) + ' ms') + kpi('Tokens', fmtN(m.total_tokens), fmtN(m.avg_tokens) + ' avg / call') + kpi('Est. cost', '$' + Number(m.estimated_cost_usd || 0).toFixed(4)) +
-          kpi('Leads by AI', fmtN(m.ai_leads_generated), fmtN(m.ai_comments_analyzed) + ' comments analysed') + '</div>' +
+          '<div class="sa-grid sa-kpis">' + kpi('Requests', fmtN(m.total_requests), fmtN(m.requests_today) + ' today', { href: '#/analytics?range=' + (['7d', '30d', '90d'].indexOf(range) >= 0 ? range : '7d') }) +
+          kpi('Failed', fmtN(m.failed_requests), fmtN(m.fallback_requests) + ' rule fallbacks', { href: '#/integrations', tone: m.failed_requests ? 'warn' : '' }) +
+          kpi('Avg latency', fmtN(m.avg_latency_ms) + ' ms', 'runtime settings & live test', { href: '/admin#/ai' }) + kpi('Tokens', fmtN(m.total_tokens), fmtN(m.avg_tokens) + ' avg / call', { href: '#/ai?tab=models' }) +
+          kpi('Est. cost', '$' + Number(m.estimated_cost_usd || 0).toFixed(4), 'by organization', { href: '#/ai?range=' + range + '&section=ai-cost' }) +
+          kpi('Leads by AI', fmtN(m.ai_leads_generated), fmtN(m.ai_comments_analyzed) + ' comments analysed', { href: '#/ops/leads' }) + '</div>' +
           '<div class="sa-grid sa-2 sa-section"><div class="sa-card"><h3>Requests over time</h3>' + (series.length ? lineChart(series.map(function (x) { return pick(x, ['requests', 'count', 'total']); }), series.map(function (x) { return x.date || x._id || ''; }), { title: 'AI requests' }) : emptyState('No AI calls in this range')) + '</div>' +
           '<div class="sa-card"><h3>Usage by model</h3>' + barList((m.usage_by_model || []).map(function (x) { return { label: x.model || x._id || 'unknown', value: pick(x, ['requests', 'count']) }; }), { emptyTitle: 'No model usage' }) + '</div>' +
           '<div class="sa-card"><h3>Usage by organization</h3>' + barList((m.usage_by_org || []).map(function (x) { return { label: x.organization_name || x.organization_id, value: x.requests || 0 }; }), { emptyTitle: 'No organization usage' }) + '</div>' +
-          '<div class="sa-card"><h3>Cost by organization (USD)</h3>' + barList((m.usage_by_org || []).map(function (x) { return { label: x.organization_name || x.organization_id, value: x.cost || 0 }; }), { emptyTitle: 'No cost recorded', money: true, currency: 'USD' }) + '</div></div>';
+          '<div class="sa-card" data-section="ai-cost"><h3>Cost by organization (USD)</h3>' + barList((m.usage_by_org || []).map(function (x) { return { label: x.organization_name || x.organization_id, value: x.cost || 0 }; }), { emptyTitle: 'No cost recorded', money: true, currency: 'USD' }) + '</div></div>';
         bindCharts(el);
       } else if (key === 'prompts') {
         var groups = (await api('/api/super-admin/ai/prompts')).groups || {};
@@ -2034,7 +2294,7 @@
       '<label class="sa-small sa-muted" for="anFrom">From</label><input class="form-input" type="date" id="anFrom" name="from" value="' + esc(q.from || '') + '"><label class="sa-small sa-muted" for="anTo">To</label><input class="form-input" type="date" id="anTo" name="to" value="' + esc(q.to || '') + '">' +
       '<label class="sr-only" for="anOrg">Organization ID</label><input class="form-input" id="anOrg" name="org" placeholder="Organization ID (optional)" value="' + esc(q.org || '') + '"><button class="btn btn-secondary btn-sm" type="submit">Apply</button></form>' +
       '<div class="sa-grid sa-kpis">' + kpi('Active customers', fmtN(snap.active_customers), '', { href: '#/organizations?status=active' }) + kpi('Demo accounts', fmtN(snap.demo_accounts), '', { href: '#/organizations?status=demo' }) + kpi('Total users', fmtN(snap.total_users), '', { href: '#/users' }) +
-      kpi('Demo → paid', fmtN(b.demo_conversions.total), b.demo_requests.total ? Math.round(b.demo_conversions.total * 100 / b.demo_requests.total) + '% of requests in range' : '') + kpi('Churned', fmtN(b.churn.total), 'cancelled / expired in range', { tone: b.churn.total ? 'warn' : '' }) + '</div>' +
+      kpi('Demo → paid', fmtN(b.demo_conversions.total), b.demo_requests.total ? Math.round(b.demo_conversions.total * 100 / b.demo_requests.total) + '% of requests in range' : '', { href: '#/demo?status=converted' }) + kpi('Churned', fmtN(b.churn.total), 'cancelled / expired in range', { href: '#/subscriptions?status=cancelled', tone: b.churn.total ? 'warn' : '' }) + '</div>' +
       '<h3 class="sa-section" style="font-size:15px">Business</h3><div class="sa-grid sa-3">' +
       chart('Registrations (organizations)', b.registrations, '#/organizations') + chart('Demo requests', b.demo_requests, '#/demo') + chart('Demo conversions', b.demo_conversions, '#/demo?status=converted') +
       chart('Subscriptions activated', b.subscriptions_activated, '#/subscriptions?status=active') + chart('Churn', b.churn, '#/subscriptions?status=cancelled') + revenueCharts(b.revenue, '#/payments?status=succeeded') +
@@ -2610,19 +2870,21 @@
     });
   }
   async function viewSecurity(root, q) {
-    var ov = await api('/api/super-admin/security/overview');
-    var o = ov.overview, g = ov.groups;
+    var both = await Promise.all([api('/api/super-admin/security/overview'), api('/api/super-admin/security-events?limit=1').catch(function () { return {}; })]);
+    var ov = both[0], o = ov.overview, g = ov.groups, evCounts = both[1].counts || {};
+    // a group box (rate limits, permission, cross-tenant) opens the event list on that group's most frequent type
+    var evType = function (types) { var t = (types || []).slice().sort(function (a, b) { return (evCounts[b] || 0) - (evCounts[a] || 0); })[0]; return t ? '#/security?type=' + encodeURIComponent(t) : '#/security'; };
     root.innerHTML = header('Security center', 'Logins, lockouts, security events, sessions, permission violations and cross-tenant attempts.', adminLink('security', 'Security configuration')) +
-      '<div class="sa-grid sa-kpis">' + kpi('Failed logins (24h)', fmtN(o.failed_logins_24h), fmtN(o.failed_logins_7d) + ' in 7 days', { tone: o.failed_logins_24h > 20 ? 'bad' : o.failed_logins_24h ? 'warn' : '' }) +
-      kpi('Active lockouts', fmtN(o.active_lockouts), '', { tone: o.active_lockouts ? 'warn' : '' }) + kpi('Rate-limit events (7d)', fmtN(o.rate_limit_events_7d)) +
-      kpi('Permission violations (7d)', fmtN(o.permission_violations_7d), '', { tone: o.permission_violations_7d ? 'warn' : '' }) + kpi('Cross-tenant attempts (7d)', fmtN(o.cross_tenant_attempts_7d), '', { tone: o.cross_tenant_attempts_7d ? 'bad' : '' }) +
-      kpi('High severity (7d)', fmtN(o.high_severity_7d), '', { tone: o.high_severity_7d ? 'bad' : '' }) + kpi('Active sessions', fmtN(o.active_sessions)) + kpi('Logins (24h)', fmtN(o.successful_logins_24h)) + '</div><div class="sa-section" id="seTabs"></div>';
+      '<div class="sa-grid sa-kpis">' + kpi('Failed logins (24h)', fmtN(o.failed_logins_24h), fmtN(o.failed_logins_7d) + ' in 7 days', { href: '#/security?type=login_failed', tone: o.failed_logins_24h > 20 ? 'bad' : o.failed_logins_24h ? 'warn' : '' }) +
+      kpi('Active lockouts', fmtN(o.active_lockouts), '', { href: '#/security?tab=lockouts&active_only=true', tone: o.active_lockouts ? 'warn' : '' }) + kpi('Rate-limit events (7d)', fmtN(o.rate_limit_events_7d), '', { href: evType(g.rate_limit) }) +
+      kpi('Permission violations (7d)', fmtN(o.permission_violations_7d), '', { href: evType(g.permission), tone: o.permission_violations_7d ? 'warn' : '' }) + kpi('Cross-tenant attempts (7d)', fmtN(o.cross_tenant_attempts_7d), '', { href: evType(g.cross_tenant), tone: o.cross_tenant_attempts_7d ? 'bad' : '' }) +
+      kpi('High severity (7d)', fmtN(o.high_severity_7d), '', { href: '#/security?severity=high', tone: o.high_severity_7d ? 'bad' : '' }) + kpi('Active sessions', fmtN(o.active_sessions), '', { href: '#/security?tab=sessions' }) + kpi('Logins (24h)', fmtN(o.successful_logins_24h), '', { href: '#/security?tab=logins&success=true' }) + '</div><div class="sa-section" id="seTabs"></div>';
     tabs($('#seTabs', root), [['events', 'Security events'], ['logins', 'Login activity'], ['lockouts', 'Lockouts'], ['sessions', 'Active sessions'], ['config', 'Configuration']], q.tab || 'events', function (key, el) {
       if (key === 'events') {
         var typeOpts = [['', 'All types'], ['login_failed', 'Failed login'], ['account_locked', 'Account locked']].concat(g.rate_limit.map(function (t) { return [t, titleCase(t)]; }), g.permission.map(function (t) { return [t, titleCase(t)]; }), g.cross_tenant.map(function (t) { return [t, titleCase(t)]; }), [['invalid_webhook_signature', 'Invalid webhook signature']]);
         listView(el, {
           url: function (p) { return '/api/super-admin/security-events' + qs({ page: p.page, limit: p.limit, type: p.type, severity: p.severity, q: p.q }); },
-          limit: 50, initial: { type: q.type || '' },
+          limit: 50, initial: { type: q.type || '', severity: q.severity || '' },
           filters: [{ key: 'q', label: 'Actor email, IP or path…' }, { key: 'type', type: 'select', label: 'Type', options: typeOpts }, { key: 'severity', type: 'select', label: 'Severity', options: [['', 'Any severity'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['critical', 'Critical']] }],
           columns: [
             { label: 'When', render: function (e) { return esc(fmtDT(e.at)); } },
@@ -2637,7 +2899,7 @@
       } else if (key === 'logins') {
         listView(el, {
           url: function (p) { return '/api/super-admin/security/logins' + qs({ page: p.page, limit: p.limit, q: p.q, success: p.success }); },
-          limit: 50,
+          limit: 50, initial: { q: q.q || '', success: q.success === 'true' || q.success === 'false' ? q.success : '' },
           filters: [{ key: 'q', label: 'Email or IP…' }, { key: 'success', type: 'select', label: 'Result', options: [['', 'All attempts'], ['true', 'Successful'], ['false', 'Failed']] }],
           columns: [
             { label: 'When', render: function (a) { return esc(fmtDT(a.at)); } },
@@ -2651,6 +2913,7 @@
       } else if (key === 'lockouts') {
         listView(el, {
           url: function (p) { return '/api/super-admin/security/lockouts' + qs({ page: p.page, limit: p.limit, active_only: p.active_only }); },
+          initial: { active_only: q.active_only === 'true' ? 'true' : '' },
           filters: [{ key: 'active_only', type: 'select', label: 'Show', options: [['', 'All tracked accounts'], ['true', 'Currently locked']] }],
           columns: [
             { label: 'Account', render: function (l) { return esc(l.email); } },
@@ -2746,12 +3009,16 @@
     } catch (e) { /* the status cards above still render */ }
   }
 
+  // health component -> the module that owns it
+  var HEALTH_GO = { api: '/admin#/health', database: '/admin#/database', apify: '#/ops/jobs', ai: '#/ai?range=24h', payments: '#/payments',
+    email: '#/notifications?tab=outbox', jobs: '#/ops/searches?status=running', failed_jobs: '#/ops/searches?status=failed', errors: '/admin#/logs' };
   async function viewHealth(root) {
     var h = (await api('/api/super-admin/health')).health;
     setHealthPill(h.overall);
     root.innerHTML = header('System health', 'Checked ' + ago(h.checked_at) + ' · refreshes every 30 seconds.', '<button type="button" class="btn btn-secondary btn-sm" id="hRef">↻ Refresh</button>' + adminLink('health', 'Platform console health') + adminLink('logs', 'Logs')) +
       '<div class="sa-grid sa-kpis">' + h.components.map(function (c) {
-        return '<div class="sa-kpi ' + (c.status === 'warn' ? 'warn' : c.status === 'ok' ? '' : 'bad') + '"><div class="k">' + esc(c.label) + '</div><div class="v" style="font-size:16px"><span class="sa-dot ' + esc(c.status) + '" aria-hidden="true"></span> ' + esc(c.status === 'ok' ? 'Healthy' : c.status === 'warn' ? 'Attention' : 'Unhealthy') + '</div><div class="s">' + esc(c.detail) + '</div></div>';
+        return kpi(c.label, '', esc(c.detail), { href: HEALTH_GO[c.key] || '#/integrations', tone: c.status === 'warn' ? 'warn' : c.status === 'ok' ? '' : 'bad',
+          valueHtml: '<span class="sa-dot ' + esc(c.status) + '" aria-hidden="true"></span> ' + esc(c.status === 'ok' ? 'Healthy' : c.status === 'warn' ? 'Attention' : 'Unhealthy') });
       }).join('') + '</div>' +
       '<div class="sa-grid sa-2 sa-section"><div class="sa-card"><h3>Recent server errors (5xx)</h3>' + ((h.recent_errors || []).length ? '<ul class="sa-feed">' + h.recent_errors.map(function (e) { return '<li><div><b>' + esc(e.title) + '</b><div class="sa-small sa-muted">' + esc(e.message) + '</div></div><span class="when">' + esc(ago(e.created_at)) + '</span></li>'; }).join('') + '</ul>' : emptyState('No server errors in 7 days')) + '</div>' +
       '<div class="sa-card"><h3>Collections</h3>' + barList(Object.keys(h.collection_counts || {}).map(function (k) { return { label: k, value: h.collection_counts[k] }; })) + '</div></div>';
@@ -3034,6 +3301,7 @@
       await (r.param ? def[2](target, r.query, r.param) : def[0](target, r.query));
       if (silent) { view.innerHTML = ''; view.appendChild(target); }
       bindGo(view); bindCharts(view);
+      if (!silent) revealSection(r.query.section);
     } catch (err) {
       if (!silent) box.innerHTML = errorState(err, function () { route(); });
       else toast(err.message, 'error');
@@ -3172,7 +3440,7 @@
     listView: listView, lineChart: lineChart, barList: barList, bindCharts: bindCharts, openModal: openModal, confirmDialog: confirmDialog, openDrawer: openDrawer,
     toast: toast, busy: busy, emptyState: emptyState, errorState: errorState, skeleton: skeleton,
     setPasswordDialog: setPasswordDialog, changeEmailDialog: changeEmailDialog,
-    go: go, route: route, setCount: setCount, $: $, $$: $$, STATUS_TONE: STATUS_TONE, PILL_LABEL: PILL_LABEL,
+    go: go, bindGo: bindGo, route: route, setCount: setCount, $: $, $$: $$, STATUS_TONE: STATUS_TONE, PILL_LABEL: PILL_LABEL,
     me: function () { return S.me; },
     /** register(groupName, afterGroup, items:[[route,label,icon,countKey]], routes:{key:[view,title,detailView]}, countFn) */
     register: function (group, after, items, routes, countFn) {

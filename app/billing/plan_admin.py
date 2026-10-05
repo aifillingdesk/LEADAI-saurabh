@@ -88,6 +88,24 @@ async def _find(db, plan_id: str) -> Dict[str, Any]:
     return plan
 
 
+def normalize_api_addons(value: Any, price_monthly: float, price_yearly: float) -> Dict[str, Dict[str, float]]:
+    """{"apify": {"monthly", "yearly"}, "gemini": {...}}: what comes off the plan
+    price when the customer brings that API's key. Together they can't exceed the price."""
+    from app.billing.plans import API_PROVIDERS
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=422, detail="api_addons must be an object")
+    out: Dict[str, Dict[str, float]] = {}
+    for api in API_PROVIDERS:
+        row = value.get(api) or {}
+        if not isinstance(row, dict):
+            raise HTTPException(status_code=422, detail=f"api_addons.{api} must be an object")
+        out[api] = {c: _money(row.get(c, 0), f"api_addons.{api}.{c}") for c in ("monthly", "yearly")}
+    for cycle, full in (("monthly", price_monthly), ("yearly", price_yearly)):
+        if sum(out[a][cycle] for a in API_PROVIDERS) > full + 1e-9:
+            raise HTTPException(status_code=422, detail=f"The {cycle} API amounts add up to more than the {cycle} price")
+    return out
+
+
 async def create_plan(db, body: Dict[str, Any], *, actor: Dict[str, Any]) -> Dict[str, Any]:
     from app.admin.audit import aaudit
     name = str(body.get("name") or "").strip()
@@ -117,8 +135,11 @@ async def create_plan(db, body: Dict[str, Any], *, actor: Dict[str, Any]) -> Dic
         "is_public": bool(body.get("is_public", True)),
         "is_default": bool(body.get("is_default", False)),
         "is_trial": bool(body.get("is_trial", False)),
+        "allows_byok": bool(body.get("allows_own_keys", body.get("allows_byok", False))),
         "created_at": now, "updated_at": now,
     }
+    if body.get("api_addons") is not None:
+        doc["api_addons"] = normalize_api_addons(body["api_addons"], doc["price_monthly"], doc["price_yearly"])
     doc["_id"] = (await db.plans.insert_one(doc)).inserted_id
     invalidate_plan_cache()
     await aaudit("plan.created", "plans", user=actor, resource_type="plan", resource_id=slug,
@@ -162,6 +183,15 @@ async def update_plan(db, plan_id: str, body: Dict[str, Any], *,
     for key in ("is_public", "is_default", "is_trial"):
         if body.get(key) is not None:
             updates[key] = bool(body[key])
+    allows = body.get("allows_own_keys", body.get("allows_byok"))
+    if allows is not None:
+        updates["allows_byok"] = bool(allows)
+    if body.get("api_addons") is not None or any(k in updates for k in ("price_monthly", "price_yearly")):
+        from app.billing.plans import plan_api_pricing
+        merged = {**plan, **{k: v for k, v in updates.items() if "." not in k}}
+        source = body.get("api_addons") if body.get("api_addons") is not None else plan_api_pricing(merged)["addons"]
+        updates["api_addons"] = normalize_api_addons(source, float(merged.get("price_monthly") or 0),
+                                                     float(merged.get("price_yearly") or 0))
     # explicit removal of limits (an unset limit means "not limited")
     from app.billing.plans import PLAN_LIMIT_KEYS
     unset = {f"limits.{k}": "" for k in (body.get("limits_unset") or [])
@@ -204,4 +234,5 @@ async def archive_plan(db, plan_id: str, *, actor: Dict[str, Any]) -> None:
 
 def plan_schema() -> Dict[str, Any]:
     """What an editor needs to render every field of a plan."""
-    return {"limit_keys": list(PLAN_LIMIT_KEYS), "features": FEATURE_LABELS}
+    from app.billing.plans import API_LABELS
+    return {"limit_keys": list(PLAN_LIMIT_KEYS), "features": FEATURE_LABELS, "api_providers": API_LABELS}

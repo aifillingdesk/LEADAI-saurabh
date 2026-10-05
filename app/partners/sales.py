@@ -69,7 +69,22 @@ def catalog(db, partner: Dict[str, Any]) -> Dict[str, Any]:
                                                                      else customer_price)
                                            if rule and rule.get("recurring") else 0.0),
             }
+        # every API-coverage choice (customer brings own Apify / Gemini keys = lower price)
+        from app.billing.plans import coverage_options
+        cov_opts = []
+        for opt in coverage_options(p):
+            row = {"key": opt["key"], "label": opt["label"], "coverage": opt["coverage"]}
+            for cycle in ("monthly", "yearly"):
+                base_price = float(opt[f"price_{cycle}"] or 0)
+                if base_price <= 0:
+                    continue
+                pp = best_partner_pricing(db, partner, plan_slug=p["slug"], price=base_price, currency=cur)
+                cust = pp["final_amount"] if pp else money(base_price)
+                row[cycle] = {"list_price": money(base_price), "customer_price": cust,
+                              "commission_first_payment": compute_commission_amount(rule, cust) if rule else 0.0}
+            cov_opts.append(row)
         plans.append({"slug": p["slug"], "name": p.get("name"), "description": p.get("description"),
+                      "coverage_options": cov_opts,
                       "currency": cur, "free": False, "is_default": bool(p.get("is_default")),
                       "highlights": plan_highlights(p), "trial_days": p.get("trial_days") or 0,
                       "cycles": cycles, "share_url": _plan_link(partner, p["slug"]),

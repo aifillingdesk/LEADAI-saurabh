@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Marketing center with private file uploads, categories, per-partner visibility, email templates and download tracking.
   - Coupon and fraud notifications.
   - Partner API: an index endpoint, notifications readable with an API key, and key usage tracking.
+- **LeadAI-provided or your own API keys, chosen per API** (`docs/API_COVERAGE.md`):
+  - For Apify and Gemini separately, an organization uses LeadAI's (included in the price) or brings its own key (cheaper). Starter: $49 all included, $37 own Apify, $41 own Gemini, $29 both. Prices come from `price_for(plan, coverage, cycle)`, and the Super Admin sets each plan's per-API amounts.
+  - Where it's chosen: the pricing page toggles, checkout (`api_coverage`), Org Admin → **API keys & plan**, and the Super Admin organization page (including a forced switch with a reason and removing compromised keys).
+  - Other screens: a coverage filter, column and dashboard counts in the Super Admin subscriptions, and per-option prices and commissions in the partner sales kit.
+  - Switching to your own key applies at once, and the lower price starts at renewal. Moving back to LeadAI-provided goes through checkout, unless the Super Admin grants it as a courtesy for the rest of the paid period. The renewal and the "next price" shown in the portals use the same calculation.
+  - Keys are encrypted at rest (`API_KEY_ENCRYPTION_KEY`, new dependency `cryptography`), write-only and verified on save. No organization response in any portal carries a stored key, only a masked hint.
+  - An own key that is missing or rejected never falls back to LeadAI's key: Apify searches stop with a clear message, Gemini uses rules, and admins are notified.
+  - One organization's Gemini rate limit no longer pauses AI for everyone.
+  - Platform tokens count only LeadAI-paid usage.
+  - Replaces the uncommitted all-or-nothing BYOK draft. That draft returned customers' raw keys in an API response and stored them in plaintext; its data is migrated on startup.
 - **New look: cream + light mint green** (every portal: website, sign-in, user dashboard, Org Admin, Super Admin, Partner Portal, staff console):
   - Light cream + mint is now the default; dark mode is deep forest with mint glows and cream text. The light/dark toggle and a person's saved choice still apply.
   - Colours come from `app/static/design/tokens.css`. The staff console's own palette, the dashboard's brand colours and the remaining hard-coded violets were moved to it.

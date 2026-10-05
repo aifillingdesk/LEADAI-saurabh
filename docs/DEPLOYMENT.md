@@ -43,6 +43,9 @@ BASE_URL=https://leadai.yourdomain.com
 SECRET_KEY=generate_with_openssl_rand_hex_32
 SUPERADMIN_EMAIL=admin@yourdomain.com
 SUPERADMIN_PASSWORD=$2b$12$...bcrypt_hash...
+# Encrypts customers' own Apify / Gemini keys at rest. Set once and keep it:
+# changing it makes saved customer keys unreadable (they must be re-entered).
+API_KEY_ENCRYPTION_KEY=generate_with_cryptography_Fernet.generate_key
 
 # Databases & Caching
 MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/leadai_prod?retryWrites=true&w=majority&maxPoolSize=50

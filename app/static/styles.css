@@ -3154,6 +3154,23 @@ button.user-chip:hover { border-color: var(--border-strong); }
 .kpi-token { border-color: var(--primary-border); background: linear-gradient(160deg, var(--amber-soft), var(--surface) 60%); }
 .kpi-accent { border-color: var(--primary-border); background: linear-gradient(160deg, var(--violet-soft), var(--surface) 60%); }
 
+/* stat boxes that open the related view (KPI cards, session stat tiles, billing meter tiles) */
+a.box-link { color: inherit; text-decoration: none; cursor: pointer; }
+a.kpi-card.box-link, a.quota-tile.box-link { transition: border-color .15s, box-shadow .15s, transform .15s; }
+a.kpi-card.box-link:hover, a.quota-tile.box-link:hover { border-color: var(--primary-border); box-shadow: var(--shadow); transform: translateY(-1px); }
+a.box-link:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; box-shadow: var(--focus-ring); }
+a.stat-tile.box-link:focus-visible { outline-offset: -2px; }
+a.stat-tile.box-link { display: block; }
+a.quota-tile { display: block; color: inherit; text-decoration: none; }
+a.stat-tile.box-link:hover .stat-tile-label, a.stat-tile.box-link:focus-visible .stat-tile-label { color: var(--text-dim); }
+.kpi-card.box-link .kpi-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.box-go { font: 700 .85rem var(--font-ui); letter-spacing: 0; color: var(--violet-text); opacity: .7; transition: transform .15s, opacity .15s; display: inline-block; }
+.quota-tile:not(.box-link) .box-go, .stat-tile:not(.box-link) .box-go { display: none; }
+a.box-link:hover .box-go, a.box-link:focus-visible .box-go { opacity: 1; transform: translateX(3px); }
+@media (prefers-reduced-motion: reduce) {
+  a.kpi-card.box-link:hover, a.quota-tile.box-link:hover, a.box-link:hover .box-go, a.box-link:focus-visible .box-go { transform: none; }
+}
+
 /* panels */
 .dash-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
 .panel { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius); box-shadow: var(--shadow-sm); margin-bottom: 16px; overflow: clip; }
@@ -3378,6 +3395,48 @@ a.btn-ghost { display: inline-flex; align-items: center; text-decoration: none; 
 .billing-footer-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 .billing-footer-actions:empty { display: none; }
 .plan-card .saas-btn:disabled { opacity: .75; cursor: not-allowed; }
+
+/* API coverage: who provides Apify / Gemini (LeadAI or the customer's own key) */
+.billing-selectors { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; margin-bottom: 8px; }
+.cov-choices { display: flex; flex-wrap: wrap; gap: 10px 20px; min-width: 0; }
+.cov-choice { display: flex; flex-direction: column; gap: 5px; min-width: 0; max-width: 100%; }
+.cov-choice-label { font-size: .74rem; font-weight: 700; color: var(--text-dim); }
+.billing-selectors .seg-tabs { max-width: 100%; margin-bottom: 0; flex-wrap: nowrap; }
+.billing-selectors .seg-tab { white-space: nowrap; }
+.cycle-save { font-size: .68rem; font-weight: 700; color: var(--green-text); }
+.cov-note { font-size: .78rem; color: var(--text-faint); margin: 0 0 14px; }
+.cov-key-note { margin-bottom: 16px; }
+.plan-card[data-select-plan] { cursor: pointer; }
+/* the shared design-system .plan-card adds a decorative circle + overflow clip: not on the billing cards */
+.plans-grid .plan-card { overflow: visible; }
+.plans-grid .plan-card:not(.current)::before { content: none; }
+.plans-grid .plan-card.current::before { width: auto; height: auto; }
+.plan-card.selected { border-color: var(--primary-border, var(--violet)); box-shadow: var(--shadow-sm); }
+.plan-card-price { margin-bottom: 6px; }
+.plan-card-cov { font-size: .74rem; font-weight: 600; color: var(--text-dim); margin-bottom: 12px; }
+.plan-card-cov.is-own { color: var(--green-text); }
+.cov-breakdown { border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--surface); padding: 8px 10px; margin: -4px 0 14px; display: flex; flex-direction: column; gap: 3px; }
+.cov-line { display: flex; justify-content: space-between; gap: 10px; font-size: .74rem; color: var(--text-dim); }
+.cov-line span:last-child { font-family: var(--font-mono); white-space: nowrap; }
+.cov-line.cov-minus span:last-child { color: var(--green-text); }
+.cov-line.cov-total { border-top: 1px solid var(--border-soft); padding-top: 4px; margin-top: 2px; font-weight: 700; color: var(--text); }
+.cov-pill { display: inline-block; vertical-align: middle; font-size: .68rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; color: var(--green-text); background: var(--green-soft); border: 1px solid var(--success-border); }
+
+/* search failed because of the organization's own API key */
+.toast-action { display: block; margin-top: 6px; font-family: var(--font-ui); font-weight: 600; color: var(--violet-text); }
+a.toast-action { text-decoration: underline; text-underline-offset: 2px; }
+div.toast-action { color: var(--text-dim); font-weight: 500; }
+.own-key-alert { width: 100%; margin: 0 0 6px; }
+.own-key-msg { color: var(--text-dim); overflow-wrap: anywhere; }
+.own-key-row { display: block; margin-top: 4px; }
+.own-key-row .own-key-action { padding: 3px 10px; }
+.own-key-hint { font-size: .74rem; font-style: italic; color: var(--text-dim); }
+@media (max-width: 600px) {
+  .billing-selectors { flex-direction: column; align-items: stretch; }
+  .cov-choices { flex-direction: column; }
+  .billing-selectors .seg-tabs { align-self: flex-start; }
+  .billing-selectors .seg-tab { padding: 7px 11px; }
+}
 
 /* settings */
 .form-panel { max-width: 860px; }

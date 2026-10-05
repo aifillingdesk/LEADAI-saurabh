@@ -45,7 +45,8 @@ def _clean(d: Any) -> Any:
         return str(d)
     if isinstance(d, dict):
         return {k: _clean(v) for k, v in d.items()
-                if k not in ("password_hash", "token_hash", "session_id")}
+                if k not in ("password_hash", "token_hash", "session_id", "ciphertext", "totp_secret",
+                          "custom_api_keys")}
     if isinstance(d, list):
         return [_clean(i) for i in d]
     return d
@@ -229,9 +230,18 @@ async def super_admin_dashboard(
         pass
 
     awaiting = await _c(db.subscriptions, {"status": "pending_admin_confirmation"})
+    # who provides Apify / Gemini across organizations
+    own_a = {"api_coverage.apify": "own"}
+    own_g = {"api_coverage.gemini": "own"}
+    both = await _c(db.organizations, {**own_a, **own_g})
+    only_a = await _c(db.organizations, {**own_a, "api_coverage.gemini": {"$ne": "own"}})
+    only_g = await _c(db.organizations, {**own_g, "api_coverage.apify": {"$ne": "own"}})
+    api_coverage = {"own_both": both, "own_apify": only_a, "own_gemini": only_g,
+                    "all_included": max(0, total_orgs - both - only_a - only_g)}
     return {
         "success": True,
         "dashboard": {
+            "api_coverage": api_coverage,
             "organizations": {
                 "total": total_orgs,
                 "active": org_stats.get("active", 0),
@@ -726,6 +736,7 @@ async def list_all_subscriptions(
     organization_id: str | None = Query(None),
     plan: str | None = Query(None),
     q: str | None = Query(None, description="Organization name"),
+    coverage: str | None = Query(None, description="all_included | own_apify | own_gemini | own_both"),
     sort: str = "-created_at",
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -744,6 +755,12 @@ async def list_all_subscriptions(
         query["organization_id"] = organization_id
     if plan:
         query["plan_id"] = plan
+    # who provides Apify / Gemini (snapshot the subscription was paid for)
+    cov_q = {"all_included": ("leadai", "leadai"), "own_apify": ("own", "leadai"),
+             "own_gemini": ("leadai", "own"), "own_both": ("own", "own")}.get(coverage or "")
+    if cov_q:
+        for api, val in zip(("apify", "gemini"), cov_q):
+            query[f"api_coverage.{api}"] = "own" if val == "own" else {"$ne": "own"}
     rx = _rx(q)
     if rx:
         ids = [str(o["_id"]) async for o in db.organizations.find({"name": rx}, {"_id": 1}).limit(500)]
@@ -763,6 +780,8 @@ async def list_all_subscriptions(
         org = await db.organizations.find_one({"_id": _oid(sub.get("organization_id"))}, {"name": 1}) \
             if _oid(sub.get("organization_id")) else None
         sub_doc["organization_name"] = org.get("name") if org else "Unknown"
+        from app.billing.plans import coverage_label
+        sub_doc["api_coverage_label"] = coverage_label(sub.get("api_coverage"))
         subs.append(sub_doc)
 
     return {
@@ -780,12 +799,16 @@ async def list_plans(
     ctx: TenantContext = Depends(require_platform_role("super_admin")),
 ):
     """List all available plans."""
+    from app.billing.plans import coverage_options, plan_api_pricing
     db = _db()
     cursor = db.plans.find({}).sort("display_order", 1)
     plans = []
     async for plan in cursor:
         p = _clean(plan)
         p["id"] = p.get("_id")
+        # computed by the server so the plan list never re-derives prices
+        p["api_pricing"] = plan_api_pricing(plan)
+        p["coverage_options"] = coverage_options(plan)
         p["live_subscriptions"] = await _c(db.subscriptions, {
             "plan_id": {"$in": [plan.get("slug"), str(plan["_id"])]},
             "status": {"$in": ["active", "trialing", "suspended", "pending_payment",

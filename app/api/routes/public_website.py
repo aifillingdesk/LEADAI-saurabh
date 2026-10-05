@@ -131,7 +131,7 @@ async def public_industries():
 async def public_pricing():
     """Active, public plans from the billing plan catalog (app.billing)."""
     try:
-        from app.billing.plans import PLAN_LIMIT_KEYS, get_all_plans, plan_highlights
+        from app.billing.plans import PLAN_LIMIT_KEYS, coverage_options, get_all_plans, plan_highlights, plan_api_pricing
         plans = await get_all_plans(active_only=True)
     except Exception as e:
         logger.warning("public_pricing failed: %s", e)
@@ -151,6 +151,10 @@ async def public_pricing():
             "highlights": plan_highlights(p),
             "popular": bool(p.get("popular", p.get("is_default", False))),
             "display_order": p.get("display_order", 0),
+            # who provides Apify / Gemini, and each choice's price
+            "allows_own_keys": plan_api_pricing(p)["allows_own"],
+            "api_addons": plan_api_pricing(p)["addons"],
+            "coverage_options": coverage_options(p),
         })
     out.sort(key=lambda x: (x.get("display_order") or 0, x.get("price_monthly") or 0))
     return {"plans": out}

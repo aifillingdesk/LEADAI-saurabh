@@ -148,6 +148,13 @@ async def _run_startup_tasks():
         if adb is not None:
             from app.billing.plans import ensure_default_plans
             await ensure_default_plans(adb)
+            # older all-or-nothing BYOK data -> per-API coverage + encrypted keys (idempotent)
+            try:
+                from app.db.mongo import get_sync_db as _sdb
+                from app.services.tenant_api_keys import migrate_tenant_api_keys
+                await asyncio.to_thread(migrate_tenant_api_keys, _sdb())
+            except Exception as e:
+                logger.warning("API key migration skipped: %s", e)
             from app.cms.models import ensure_cms_indexes, seed_cms_defaults
             await ensure_cms_indexes(adb)
             await seed_cms_defaults(adb)

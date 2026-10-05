@@ -18,7 +18,7 @@ No endpoint here can make a subscription ACTIVE: payment verification moves
 it to PENDING_ADMIN_CONFIRMATION and only a Super Admin confirms.
 """
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -53,6 +53,9 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 class CheckoutRequest(BaseModel):
     plan_slug: str
     billing_cycle: str = "monthly"
+    # who provides each external API: {"apify": "leadai"|"own", "gemini": "leadai"|"own"}
+    api_coverage: Optional[Dict[str, str]] = None
+    api_mode: Optional[str] = None          # older all-or-nothing switch ("byok" = own for both)
     coupon_code: Optional[str] = None      # partner coupon (discount + attribution)
 
 
@@ -74,8 +77,14 @@ async def _log_foreign_checkout_probe(db, request: Request, ctx: TenantContext, 
 async def list_public_plans():
     """Public plans (the same documents the website, billing and usage use)."""
     db = get_async_db()
-    plans = await get_all_plans(active_only=True, db=db)
-    return {"success": True, "plans": [p for p in plans if p.get("is_public", True)]}
+    from app.billing.plans import coverage_options, plan_api_pricing
+    plans = [p for p in await get_all_plans(active_only=True, db=db) if p.get("is_public", True)]
+    for p in plans:  # each plan's price for every choice of who provides Apify / Gemini
+        pricing = plan_api_pricing(p)
+        p["allows_own_keys"] = pricing["allows_own"]
+        p["api_addons"] = pricing["addons"]
+        p["coverage_options"] = coverage_options(p)
+    return {"success": True, "plans": plans}
 
 
 @router.get("/subscription")
@@ -102,7 +111,8 @@ async def create_checkout(body: CheckoutRequest, request: Request,
     checkout. Nothing is activated here."""
     db = get_async_db()
     started = await start_checkout(ctx.tenant_id, body.plan_slug, body.billing_cycle,
-                                   actor=ctx.audit_user(), db=db, coupon_code=body.coupon_code)
+                                   actor=ctx.audit_user(), db=db, coupon_code=body.coupon_code,
+                                   api_coverage=body.api_coverage, api_mode=body.api_mode)
     sub = started["subscription"]
     provider = get_billing_provider()
     session = await provider.create_checkout_session(
@@ -112,8 +122,8 @@ async def create_checkout(body: CheckoutRequest, request: Request,
     return {"success": True, "checkout": {
         **session, "subscription_id": str(sub["_id"]), "status": "pending_payment",
         "plan_name": started["plan"]["name"], "plan_slug": started["plan"]["slug"],
-        "billing_cycle": body.billing_cycle, "amount": sub["amount"],
-        "currency": sub.get("currency"),
+        "billing_cycle": body.billing_cycle, "api_coverage": sub.get("api_coverage"),
+        "amount": sub["amount"], "currency": sub.get("currency"),
         "coupon": customer_view(sub).get("coupon"),
         "message": "Complete the payment. Your plan activates after our team confirms it.",
     }}

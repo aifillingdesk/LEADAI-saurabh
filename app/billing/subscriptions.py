@@ -102,10 +102,15 @@ async def _payment_event(db, sub: Dict[str, Any], event: str, **data) -> None:
 
 async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: str,
                          *, actor: Dict[str, Any], db=None,
-                         coupon_code: Optional[str] = None) -> Dict[str, Any]:
+                         coupon_code: Optional[str] = None,
+                         api_coverage: Optional[Dict[str, str]] = None,
+                         api_mode: Optional[str] = None) -> Dict[str, Any]:
     """Customer picked a plan: create a PENDING_PAYMENT subscription + pending
     payment. Never activates anything. A partner ``coupon_code`` discounts the
-    amount the provider charges (validated here, redeemed on confirmation)."""
+    amount the provider charges (validated here, redeemed on confirmation).
+    ``api_coverage`` says who provides each external API ({"apify": "leadai"|"own",
+    "gemini": ...}); the price is ``price_for(plan, coverage, cycle)``. The older
+    ``api_mode="byok"`` means "own" for both."""
     if db is None:
         db = get_async_db()
     if db is None:
@@ -115,7 +120,13 @@ async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: st
     plan = await get_plan_by_slug_or_id(plan_slug, db=db)
     if not plan or plan.get("status") != "active" or not plan.get("is_public", True):
         raise HTTPException(status_code=404, detail="Requested plan not found")
-    price = float(plan.get("price_yearly" if billing_cycle == "yearly" else "price_monthly") or 0)
+
+    from app.billing.plans import normalize_coverage, plan_api_pricing, price_for
+    coverage = normalize_coverage(api_coverage, api_mode=api_mode)
+    if "own" in coverage.values() and not plan_api_pricing(plan)["allows_own"]:
+        raise HTTPException(status_code=422, detail="This plan can't be used with your own API keys")
+    price = price_for(plan, coverage, billing_cycle)
+
     if price <= 0:
         raise HTTPException(status_code=422, detail="This plan cannot be purchased")
     s_org_id = str(organization_id)
@@ -147,7 +158,8 @@ async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: st
         "organization_id": s_org_id, "plan_id": plan["slug"], "status": PENDING_PAYMENT,
         "provider": None, "provider_customer_id": None, "provider_subscription_id": None,
         "checkout_session_id": None,
-        "billing_cycle": billing_cycle, "currency": plan.get("currency"), "amount": price,
+        "billing_cycle": billing_cycle, "api_coverage": coverage,
+        "currency": plan.get("currency"), "amount": price,
         "requested_by": actor.get("user_id"), "requested_by_email": actor.get("email"),
         "started_at": None, "current_period_start": None, "current_period_end": None,
         "cancel_at_period_end": False, "cancelled_at": None, "coupon": coupon,
@@ -168,7 +180,8 @@ async def start_checkout(organization_id: str, plan_slug: str, billing_cycle: st
     from app.admin.audit import aaudit
     await aaudit("plan.selected", "billing", user=actor, organization_id=s_org_id,
                  resource_type="subscription", resource_id=str(sub["_id"]),
-                 details={"plan": plan["slug"], "cycle": billing_cycle, "amount": price,
+                 details={"plan": plan["slug"], "cycle": billing_cycle, "api_coverage": coverage,
+                          "amount": price,
                           "coupon": (coupon or {}).get("code"),
                           "partner_pricing": (partner_pricing or {}).get("name")})
     from app.partners.referrals import on_checkout_started
@@ -283,9 +296,13 @@ async def confirm_subscription(subscription_id: str, *, actor: Dict[str, Any],
         await db.subscriptions.update_one({"_id": old["_id"]}, {"$set": {
             "status": CANCELLED, "cancel_reason": "superseded", "cancelled_at": now,
             "updated_at": now}})
+    # the API coverage the customer paid for becomes the organization's
+    from app.billing.plans import normalize_coverage
+    coverage = normalize_coverage(sub.get("api_coverage"), api_mode=sub.get("api_mode"))
     await db.organizations.update_one({"_id": ObjectId(s_org_id)}, {"$set": {
         "status": "active", "plan_id": plan["slug"], "subscription_id": sub_id,
-        "admin_portal_enabled": True, "activated_at": now, "updated_at": now}})
+        "api_coverage": coverage,
+        "admin_portal_enabled": True, "activated_at": now, "updated_at": now}, "$unset": {"api_mode": ""}})
     member_user_ids = [m["user_id"] async for m in db.organization_members.find({"organization_id": s_org_id})]
     if member_user_ids:
         user_oids = [ObjectId(uid) for uid in member_user_ids if ObjectId.is_valid(uid)]

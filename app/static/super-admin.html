@@ -307,8 +307,12 @@
   .sa-kpi .k{display:flex;align-items:center;gap:6px}
   .sa-kpi .k .sa-ico{width:14px;height:14px;color:var(--text-link)}
   .sa-kpi.warn .k .sa-ico{color:var(--warning-text)}.sa-kpi.bad .k .sa-ico{color:var(--danger-text)}
-  .sa-kpi .go{position:absolute;right:10px;top:10px;opacity:0;color:var(--sa-muted);transition:opacity .15s;font-size:12px}
-  button.sa-kpi:hover .go,button.sa-kpi:focus-visible .go{opacity:1}
+  .sa-kpi .go{position:absolute;right:10px;top:10px;opacity:.55;color:var(--sa-muted);transition:opacity .15s,color .15s,transform .15s;font-size:12px;line-height:1}
+  button.sa-kpi .k{padding-right:14px}
+  button.sa-kpi:hover .go,button.sa-kpi:focus-visible .go{opacity:1;color:var(--text-link);transform:translateX(2px)}
+  button.sa-kpi:hover .k{color:var(--text-link)}
+  .sa-kpi .v.v-status{font-size:16px;display:flex;align-items:center;gap:6px}
+  @media (prefers-reduced-motion: reduce){button.sa-kpi:hover,button.sa-kpi:hover .go{transform:none}}
   .sa-attn{list-style:none;margin:0;padding:0;display:grid;gap:6px}
   .sa-attn a{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text-primary);text-decoration:none;font-size:13px}
   .sa-attn a:hover{border-color:var(--border-hover);background:var(--surface-hover)}
@@ -318,6 +322,12 @@
   .sa-ok-line{display:flex;align-items:center;gap:8px;color:var(--success-text);font-size:13px;padding:8px 0}
   a.sa-chip{text-decoration:none}
   .sa-span2{grid-column:span 2}
+  /* API coverage price grid (all included / own Apify / own Gemini / both) */
+  .sa-pgrid tbody th{text-transform:none;letter-spacing:0;font-size:13px;font-weight:600;color:var(--text-primary);background:none;border-bottom:1px solid var(--border-subtle);white-space:normal}
+  .sa-pgrid tbody tr:last-child th{border-bottom:0}
+  .sa-pgrid tr.sa-cov-cur th,.sa-pgrid tr.sa-cov-cur td{background:var(--primary-light)}
+  .sa-card[data-section]:focus{outline:none}
+  .sa-card[data-section]:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
   .sa-chip:focus-visible,.sa-tab:focus-visible,.sa-item:focus-visible,.sa-group-btn:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
   .sa-back{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;margin-bottom:6px}
   .sa-content > div{animation:sa-in .18s ease}
@@ -406,8 +416,8 @@
 </div>
 <div id="saLayer"></div>
 <div id="toast-container" aria-live="polite"></div>
-<script src="/static/super-admin.js" defer></script>
-<script src="/static/super-admin-partners.js" defer></script>
+<script src="/static/super-admin.js?v=apicov1" defer></script>
+<script src="/static/super-admin-partners.js?v=apicov1" defer></script>
 <script src="/static/super-admin-access.js" defer></script>
 </body>
 </html>

@@ -18,7 +18,7 @@
   <link rel="stylesheet" href="/static/design/tokens.css?v=step3">
   <!-- shared components in a cascade layer: the portal's own (unlayered) rules always win -->
   <style id="dsLayer">@layer ds, ds-reset; @import url("/static/design/components.css?v=step4") layer(ds);</style>
-  <link rel="stylesheet" href="/static/styles.css?v=step4">
+  <link rel="stylesheet" href="/static/styles.css?v=step7">
   <link rel="stylesheet" href="/static/design/domain-keywords.css?v=1">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✦</text></svg>">
 </head>
@@ -243,26 +243,27 @@
             <div id="dashError" class="hidden"></div>
 
             <div class="kpi-grid" id="dashKpis">
-              <div class="kpi-card kpi-token" id="kpiTokens">
+              <!-- every KPI box is a link to the related view (app.js kpi() keeps href/data-nav in sync) -->
+              <a class="kpi-card kpi-token box-link" id="kpiTokens" href="#usage" data-nav="usage">
                 <div class="kpi-label">Tokens</div>
                 <div class="kpi-value"><span class="skeleton skeleton-line w-60"></span></div>
                 <div class="kpi-foot"><span class="skeleton skeleton-line w-80"></span></div>
-              </div>
-              <div class="kpi-card" id="kpiSearches">
+              </a>
+              <a class="kpi-card box-link" id="kpiSearches" href="#history" data-nav="history" data-history-status="">
                 <div class="kpi-label">Searches</div>
                 <div class="kpi-value"><span class="skeleton skeleton-line w-40"></span></div>
                 <div class="kpi-foot"><span class="skeleton skeleton-line w-70"></span></div>
-              </div>
-              <div class="kpi-card" id="kpiLeads">
+              </a>
+              <a class="kpi-card box-link" id="kpiLeads" href="#leads?view=all" data-nav="leads" data-nav-query="view=all" data-leads-view-link="all">
                 <div class="kpi-label">Leads</div>
                 <div class="kpi-value"><span class="skeleton skeleton-line w-40"></span></div>
                 <div class="kpi-foot"><span class="skeleton skeleton-line w-70"></span></div>
-              </div>
-              <div class="kpi-card" id="kpiAssigned">
+              </a>
+              <a class="kpi-card box-link" id="kpiAssigned" href="#leads?view=assigned" data-nav="leads" data-nav-query="view=assigned" data-leads-view-link="assigned">
                 <div class="kpi-label">Assigned to me</div>
                 <div class="kpi-value"><span class="skeleton skeleton-line w-40"></span></div>
                 <div class="kpi-foot"><span class="skeleton skeleton-line w-70"></span></div>
-              </div>
+              </a>
             </div>
 
             <div class="dash-grid">
@@ -654,18 +655,18 @@
 
             <!-- ── Session stats (aggregated from the real search history) ── -->
             <div id="sessionStats" class="stats-strip hidden" aria-label="Session summary">
-              <div class="stat-tile">
+              <a class="stat-tile box-link" href="#history" data-nav="history" data-history-status="">
                 <div class="stat-tile-value" id="statSearches">0</div>
-                <div class="stat-tile-label">Searches</div>
-              </div>
-              <div class="stat-tile">
+                <div class="stat-tile-label">Searches <span class="box-go" aria-hidden="true">→</span></div>
+              </a>
+              <a class="stat-tile box-link" href="#history?status=completed" data-nav="history" data-nav-query="status=completed" data-history-status="completed">
                 <div class="stat-tile-value" id="statCompleted">0</div>
-                <div class="stat-tile-label">Completed</div>
-              </div>
-              <div class="stat-tile">
+                <div class="stat-tile-label">Completed <span class="box-go" aria-hidden="true">→</span></div>
+              </a>
+              <a class="stat-tile box-link" href="#history" data-nav="history" data-history-status="">
                 <div class="stat-tile-value" id="statPosts">0</div>
-                <div class="stat-tile-label">Pages collected</div>
-              </div>
+                <div class="stat-tile-label">Pages collected <span class="box-go" aria-hidden="true">→</span></div>
+              </a>
             </div>
 
             <!-- ── Recent searches ── -->
@@ -1012,33 +1013,59 @@
             </div>
 
             <!-- Token meter (demo / plan tokens: allocated · used · remaining) -->
-            <div class="quota-tile panel hidden" id="tokenMeter">
+            <a class="quota-tile panel hidden box-link" id="tokenMeter" href="#usage" data-nav="usage">
               <div class="quota-tile-head">
-                <span>Tokens</span>
+                <span>Tokens <span class="box-go" aria-hidden="true">→</span></span>
                 <span id="tokenMeterVal">—</span>
               </div>
               <div class="quota-bar" role="progressbar" aria-label="Tokens used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="quota-fill" id="tokenMeterFill" style="width: 0%;"></div></div>
               <div id="tokenMeterNote" class="quota-note"></div>
-            </div>
+            </a>
 
             <h2 class="section-title section-gap">Monthly usage</h2>
             <div class="quota-meter-grid" id="quotaMeterGrid">
-              <div class="quota-tile panel">
-                <div class="quota-tile-head"><span>Searches</span><span id="meterSearchesVal">—</span></div>
+              <!-- meter tiles open the related view; app.js (loadBillingData) unlinks those the role can't open -->
+              <a class="quota-tile panel box-link" id="meterSearchesTile" href="#history" data-nav="history" data-history-status="">
+                <div class="quota-tile-head"><span>Searches <span class="box-go" aria-hidden="true">→</span></span><span id="meterSearchesVal">—</span></div>
                 <div class="quota-bar" role="progressbar" aria-label="Searches used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="quota-fill" id="meterSearchesFill" style="width: 0%;"></div></div>
-              </div>
-              <div class="quota-tile panel">
-                <div class="quota-tile-head"><span>AI lead analyses</span><span id="meterAiVal">—</span></div>
+              </a>
+              <a class="quota-tile panel box-link" id="meterAiTile" href="#leads?view=all" data-nav="leads" data-nav-query="view=all" data-leads-view-link="all">
+                <div class="quota-tile-head"><span>AI lead analyses <span class="box-go" aria-hidden="true">→</span></span><span id="meterAiVal">—</span></div>
                 <div class="quota-bar" role="progressbar" aria-label="AI lead analyses used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="quota-fill" id="meterAiFill" style="width: 0%;"></div></div>
-              </div>
-              <div class="quota-tile panel">
-                <div class="quota-tile-head"><span>Team members</span><span id="meterTeamVal">—</span></div>
+              </a>
+              <a class="quota-tile panel" id="meterTeamTile">
+                <div class="quota-tile-head"><span>Team members <span class="box-go" aria-hidden="true">→</span></span><span id="meterTeamVal">—</span></div>
                 <div class="quota-bar" role="progressbar" aria-label="Team members used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="quota-fill" id="meterTeamFill" style="width: 0%;"></div></div>
-              </div>
+              </a>
             </div>
 
             <h2 class="section-title section-gap">Choose your plan</h2>
             <div id="billingPlanNotice"></div>
+            <!-- who provides each external API (prices per choice come from /api/public/pricing; app.js renders them) -->
+            <div class="billing-selectors">
+              <div class="cov-choices" id="billingCoverageChoices">
+                <div class="cov-choice">
+                  <span class="cov-choice-label" id="covApifyLabel">Apify (scraping)</span>
+                  <div class="seg-tabs" role="group" aria-labelledby="covApifyLabel">
+                    <button type="button" class="seg-tab active" data-cov-api="apify" data-cov-val="leadai" aria-pressed="true">LeadAI provides</button>
+                    <button type="button" class="seg-tab" data-cov-api="apify" data-cov-val="own" aria-pressed="false">I'll use my own key</button>
+                  </div>
+                </div>
+                <div class="cov-choice">
+                  <span class="cov-choice-label" id="covGeminiLabel">Google Gemini (AI)</span>
+                  <div class="seg-tabs" role="group" aria-labelledby="covGeminiLabel">
+                    <button type="button" class="seg-tab active" data-cov-api="gemini" data-cov-val="leadai" aria-pressed="true">LeadAI provides</button>
+                    <button type="button" class="seg-tab" data-cov-api="gemini" data-cov-val="own" aria-pressed="false">I'll use my own key</button>
+                  </div>
+                </div>
+              </div>
+              <div class="seg-tabs" id="billingCycleSegment" role="group" aria-label="Billing cycle">
+                <button type="button" class="seg-tab active" data-cycle-mode="monthly" aria-pressed="true">Monthly</button>
+                <button type="button" class="seg-tab" data-cycle-mode="yearly" aria-pressed="false">Yearly <span class="cycle-save hidden" id="billingYearlySave"></span></button>
+              </div>
+            </div>
+            <p class="cov-note" id="billingCoverageNote">Bring your own key = lower price; you pay Apify / Google directly.</p>
+            <div id="billingOwnKeyNote" class="hidden" role="status"></div>
             <div class="plans-grid" id="plansCatalogGrid"></div>
 
             <h2 class="section-title section-gap">Invoices &amp; payment history</h2>
@@ -1329,6 +1356,6 @@
   <script src="/static/config.js" defer></script>
   <script src="/static/design/theme.js" defer></script>
   <script src="/static/design/ui.js?v=step4" defer></script>
-  <script src="/static/app.js?v=step4" defer></script>
+  <script src="/static/app.js?v=step7" defer></script>
 </body>
 </html>

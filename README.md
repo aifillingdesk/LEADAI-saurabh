@@ -56,6 +56,7 @@
 - **Developer API**: Scoped Public REST API v1 (`/api/v1/leads`, `/api/v1/search`) with SHA-256 hashed API keys and rate limiting.
 - **Billing**: Razorpay (UPI, NetBanking, Cards), Stripe, or a mock provider for development. Payments are verified by signed webhooks, and a subscription becomes active only after Super Admin confirmation. Plan tokens, renewals, and full or partial refunds and chargebacks are recorded on invoices.
 - **Unit Economics Engine**: Live token costs, scraping compute metrics, and margin tracking per tier.
+- **LeadAI-provided or your own API keys**: For Apify and for Gemini separately, a customer either uses LeadAI's (included in the price) or brings its own key (cheaper; it pays Apify / Google directly). Any mix; the price follows the choice. Keys are encrypted and never shown again. A customer's failing key never falls back to LeadAI's. See [API coverage](docs/API_COVERAGE.md).
 - **Partner / Reseller / Affiliate Program**: Public application with Super Admin review, and a dedicated Partner Portal (`/partner`).
   - Referral and campaign links with first- or last-touch attribution.
   - Reseller customer onboarding (direct or through onboarding links).
@@ -230,6 +231,7 @@ Comprehensive documentation is organized in the [`docs/`](docs/) directory:
 - [Compliance & Data Privacy](docs/COMPLIANCE.md) - PII retention, data subject deletion, and blocklists.
 - [Partner Program](docs/PARTNERS.md) - Partner applications, attribution, commissions, payouts and security model.
 - [Unit Economics](docs/UNIT_ECONOMICS.md) - Token costs, compute expenses, and pricing margins.
+- [API Coverage](docs/API_COVERAGE.md) - LeadAI-provided vs own Apify / Gemini keys, pricing, switching rules and key security.
 - [Disaster Recovery](docs/DISASTER_RECOVERY.md) - MongoDB backup, restore runbook, and failover steps.
 - [Performance Report](docs/PERFORMANCE_REPORT.md) - Load time benchmarks and caching optimizations.
 - [Performance Baseline](docs/PERFORMANCE_BASELINE.md) - Pre-optimization measurements.

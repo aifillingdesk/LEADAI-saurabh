@@ -131,6 +131,11 @@ class Organization(BaseModel):
     subscription_id: Optional[str] = None
     timezone: str = "UTC"
     currency: str = "USD"
+    # who provides each paid API: "leadai" (included) or "own" (the customer's key);
+    # see docs/API_COVERAGE.md
+    api_coverage: Dict[str, str] = Field(default_factory=lambda: {"apify": "leadai", "gemini": "leadai"})
+    # {"apify"|"gemini": {ciphertext, hint, verified, ...}} - encrypted, never returned
+    custom_api_keys: Dict[str, Any] = Field(default_factory=dict)
 
     trial_started_at: Optional[datetime] = None
     trial_ends_at: Optional[datetime] = None
@@ -209,6 +214,10 @@ class Plan(BaseModel):
 
     price_monthly: float = 0.0
     price_yearly: float = 0.0
+    # amount taken off the price when the customer brings that API's own key:
+    # {"apify": {"monthly": x, "yearly": y}, "gemini": {...}}
+    api_addons: Optional[Dict[str, Dict[str, float]]] = None
+    allows_byok: bool = True
     currency: str = "USD"
     trial_days: int = 14
 
@@ -239,6 +248,8 @@ class Subscription(BaseModel):
     provider_subscription_id: Optional[str] = None
 
     billing_cycle: BillingCycle = BillingCycle.MONTHLY
+    # the API coverage this subscription was paid for (snapshot)
+    api_coverage: Dict[str, str] = Field(default_factory=lambda: {"apify": "leadai", "gemini": "leadai"})
     currency: str = "USD"
     amount: float = 0.0
 

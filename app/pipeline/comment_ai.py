@@ -742,15 +742,36 @@ def _get_gemini_client() -> httpx.Client:
 
 
 def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1,
-                 model: Optional[str] = None, retries: int = 1) -> tuple[dict, dict]:
+                 model: Optional[str] = None, retries: int = 1,
+                 organization_id: Optional[str] = None,
+                 gemini_api_key: Optional[str] = None) -> tuple[dict, dict]:
     """Gemini API call with 429 backoff + circuit breaker and latency/token extraction.
     Raises when it finally fails — callers fall back to rule-based analysis."""
     global _GEMINI_DISABLED_UNTIL, _GEMINI_FAILURES_COUNT, _GEMINI_LAST_FAILURE
-    if time.time() < _GEMINI_DISABLED_UNTIL:
-        raise RuntimeError("Gemini rate-limited — circuit open, using rules")
     model = model or settings.gemini_model or "gemini-2.5-flash"
-    from app.admin.envvars import get_envvar_str
-    gemini_key = get_envvar_str("GEMINI_API_KEY", settings.gemini_api_key)
+
+    key_source = "platform"
+    if gemini_api_key:
+        gemini_key = gemini_api_key
+        key_source = "custom"
+    else:
+        from app.services.tenant_api_keys import get_tenant_gemini_key_sync
+        gemini_key, key_source = get_tenant_gemini_key_sync(organization_id)
+    own_key = key_source in ("organization", "custom", "organization_missing")
+    # LeadAI's shared circuit breaker guards LeadAI's key only: one organization's
+    # own key being rate-limited or rejected must never pause AI for everyone
+    if not own_key and time.time() < _GEMINI_DISABLED_UNTIL:
+        raise RuntimeError("Gemini rate-limited — circuit open, using rules")
+    if key_source == "organization_missing":
+        # the organization brings its own Gemini key and has none: never use LeadAI's
+        from app.services.tenant_api_keys import own_key_problem, record_key_failure
+        problem = own_key_problem(organization_id, "gemini") or {}
+        record_key_failure(organization_id, "gemini", problem.get("code", "OWN_GEMINI_KEY_MISSING"),
+                           problem.get("message", "Your Gemini key is missing."))
+        raise RuntimeError(problem.get("message") or "Your organization's own Gemini key is missing")
+    if own_key and organization_id and time.time() < _ORG_GEMINI_COOLDOWN.get(str(organization_id), 0):
+        raise RuntimeError("Your Gemini key is rate-limited — using rules for a minute")
+
     # Use x-goog-api-key header instead of URL query parameter for security
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -768,6 +789,9 @@ def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1
     for attempt in range(retries + 1):
         try:
             resp = client.post(url, json=payload, headers=headers)
+            if own_key and resp.status_code in (400, 401, 403, 429):
+                _own_gemini_failure(organization_id, resp.status_code)
+                raise RuntimeError(f"Your organization's Gemini key returned HTTP {resp.status_code}")
             if resp.status_code == 429:
                 # open the circuit for 30s to allow per-minute quota to recover
                 _GEMINI_DISABLED_UNTIL = time.time() + 30
@@ -806,9 +830,12 @@ def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "model": model,
+                "key_source": key_source,
             }
             return parsed_json, meta
         except httpx.HTTPStatusError as e:
+            if own_key:
+                raise
             _GEMINI_FAILURES_COUNT += 1
             _GEMINI_LAST_FAILURE = str(e)
             if e.response.status_code == 429:
@@ -822,10 +849,31 @@ def _call_gemini(system_prompt: str, user_content: str, temperature: float = 0.1
                     continue
             raise
         except Exception as e:
-            _GEMINI_FAILURES_COUNT += 1
-            _GEMINI_LAST_FAILURE = str(e)
+            if not own_key:
+                _GEMINI_FAILURES_COUNT += 1
+                _GEMINI_LAST_FAILURE = str(e)
             raise
     raise RuntimeError("Gemini API failed after all retries")
+
+
+# organization -> unix time until which its OWN Gemini key is not called again
+_ORG_GEMINI_COOLDOWN: Dict[str, float] = {}
+
+
+def _own_gemini_failure(organization_id: Optional[str], status: int) -> None:
+    """An organization's own Gemini key failed: pause it (that org only) and tell its admins."""
+    from app.services.tenant_api_keys import record_key_failure
+    if organization_id:
+        _ORG_GEMINI_COOLDOWN[str(organization_id)] = time.time() + 60
+    if status == 429:
+        code, msg = ("OWN_GEMINI_QUOTA_EXCEEDED",
+                     "Your Google Gemini key is out of quota or rate-limited. Comments are analysed with rules "
+                     "until Google accepts requests again. Check your quota in Google AI Studio.")
+    else:
+        code, msg = ("OWN_GEMINI_KEY_REJECTED",
+                     "Google rejected your Gemini key. Comments are analysed with rules until you update the key "
+                     "in Admin portal → API keys & plan.")
+    record_key_failure(organization_id, "gemini", code, msg)
 
 
 def _clean_str(value: Any) -> Optional[str]:
@@ -929,7 +977,21 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
     if not ai_enabled or not allow_ai:
         return {**rule, "analyzed_by": "rules",
                 "reason": rule["reason"] + " (AI disabled — rule-based pass)"}
-    if not get_envvar_str("GEMINI_API_KEY", settings.gemini_api_key):
+    if organization_id:
+        from app.services.tenant_api_keys import get_tenant_gemini_key_sync, own_key_problem, record_key_failure
+        key, source = get_tenant_gemini_key_sync(organization_id)
+        if source == "organization_missing":
+            # never fall back to LeadAI's key for an organization that brings its own
+            problem = own_key_problem(organization_id, "gemini") or {}
+            record_key_failure(organization_id, "gemini", problem.get("code", "OWN_GEMINI_KEY_MISSING"),
+                               problem.get("message", "Your Gemini key is missing."))
+            return {**rule, "analyzed_by": "rules",
+                    "reason": rule["reason"] + " (your own Gemini key is missing — rule-based pass)"}
+        gemini_key_avail = bool(key)
+    else:
+        gemini_key_avail = bool(get_envvar_str("GEMINI_API_KEY", settings.gemini_api_key))
+
+    if not gemini_key_avail:
         return {**rule, "analyzed_by": "rules",
                 "reason": rule["reason"] + " (no AI key — rule-based pass)"}
 
@@ -986,7 +1048,8 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
 
     try:
         raw, meta = _call_gemini(system_prompt, user_content,
-                                 temperature=temperature, model=model)
+                                 temperature=temperature, model=model,
+                                 organization_id=organization_id)
         parsed = _parse_gemini_result(raw)
         log_ai_request(
             organization_id=organization_id,
@@ -1004,6 +1067,7 @@ def analyze_comment_ai(comment_text: Optional[str], author_name: str = "",
         return {
             **parsed,
             "analyzed_by": "gemini",
+            "key_source": meta.get("key_source", "platform"),
             "prompt_version": prompt_version,
             "prompt_key": prompt_key,
             "model": model,
@@ -1397,7 +1461,8 @@ def analyze_comments_for_post(post_ref: str, max_comments: int = 500,
         if analysis.get("analyzed_by") == "gemini":
             ai_calls_used += 1
             time.sleep(0.5)  # pace calls to respect Gemini per-minute free quota
-            if org_id and ai_token_cost:
+            is_byok_key = analysis.get("key_source") == "organization"
+            if org_id and ai_token_cost and not is_byok_key:
                 from app.billing.tokens import TokensExhaustedException, consume
                 try:
                     consume(str(org_id), ai_token_cost,

@@ -665,7 +665,8 @@ class LinkedInScraper(SocialMediaScraper):
             return None
 
 
-def get_scraper(platform: str) -> SocialMediaScraper:
+def get_scraper(platform: str, connector: Optional[ApifyConnector] = None,
+                organization_id: Optional[str] = None) -> SocialMediaScraper:
     cls = {
         "facebook": FacebookScraper,
         "instagram": InstagramScraper,
@@ -674,4 +675,6 @@ def get_scraper(platform: str) -> SocialMediaScraper:
     }.get(platform)
     if cls is None:
         raise ValueError(f"Unsupported platform: {platform}")
-    return cls()
+    if connector is None and organization_id:
+        connector = ApifyConnector(organization_id=organization_id)
+    return cls(connector=connector)

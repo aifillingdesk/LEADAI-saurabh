@@ -133,17 +133,48 @@ function fmt(n) {
   return String(num);
 }
 
-function toast(msg, type = "info") {
+function toast(msg, type = "info", action = null) {
   const box = $("toastContainer");
   if (!box) return;
   const el = document.createElement("div");
   el.className = "toast toast-" + type;
   el.setAttribute("role", type === "error" ? "alert" : "status");
   el.textContent = msg;
+  if (action && action.label) {   // optional next step: a link, or a plain hint
+    const a = document.createElement(action.href ? "a" : "div");
+    a.className = "toast-action";
+    a.textContent = action.label;
+    if (action.href) a.href = action.href;
+    el.appendChild(a);
+  }
   box.appendChild(el);
   setTimeout(() => el.classList.add("show"), 10);
-  setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 400); }, type === "error" ? 6000 : 4200);
+  setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 400); }, action ? 12000 : type === "error" ? 6000 : 4200);
 }
+
+// ── Failures caused by the organization's OWN API keys (Apify / Gemini) ──
+// The backend's messages start like "Your organization uses its own Apify key,
+// but no working key is saved…", "Apify rejected your organization's token…",
+// "Your Apify account is out of credit…", "Google rejected your Gemini key…".
+const OWN_KEY_ERROR_RE = /your organization's|your organisation's|organization uses its own|your own|your apify account|your google gemini|google rejected your gemini/i;
+function isOwnKeyError(msg) { return Boolean(msg) && OWN_KEY_ERROR_RE.test(String(msg)); }
+/** Owners/admins fix the key themselves; everyone else asks them. */
+function ownKeyAction(msg) {
+  if (!isOwnKeyError(msg)) return null;
+  const r = portal.user && portal.user.org_role;
+  return (r === "owner" || r === "admin")
+    ? { label: "Open API keys & plan", href: "/org-admin#integrations" }
+    : { label: "Ask your organization admin to fix the API key" };
+}
+function ownKeyActionHtml(msg) {
+  const a = ownKeyAction(msg);
+  if (!a) return "";
+  return a.href
+    ? `<a class="btn-ghost btn-sm own-key-action" href="${esc(a.href)}">${esc(a.label)}</a>`
+    : `<span class="own-key-hint">${esc(a.label)}</span>`;
+}
+/** Error toast that adds the API-key action when the organization's own key caused it. */
+function toastError(msg) { toast(msg, "error", ownKeyAction(msg)); }
 
 // ── Status badge (top-right) ─────────────────────────────────────────────
 function setBadge(text, cls) {
@@ -591,7 +622,7 @@ async function pollSearchRun(runId, onCancelRequested) {
     renderPipelineMeta(res.data);
 
     if (run.status !== "running") {
-      if (run.status === "error") toast(run.error || "Search failed", "error");
+      if (run.status === "error") toastError(run.error || "Search failed");
       return run;
     }
     if (cancelled) {
@@ -773,7 +804,9 @@ async function reopenSearch(runId) {
   if (!res.ok) { toast(res.status === 404 ? "That search no longer exists" : "Could not open that search", "error"); return; }
   if (memory.runId !== runId) { saveMemory("pageId", ""); saveMemory("postId", ""); }
   saveMemory("runId", runId);
-  toast("Opened search: " + ((res.data.search || {}).query || runId), "info");
+  const opened = res.data.search || {};
+  if (opened.status === "error" && isOwnKeyError(opened.error)) toastError(opened.error);
+  else toast("Opened search: " + (opened.query || runId), "info");
   navigateToView("pages", { userInitiated: true });  // renderPagesScreen auto-fires collection if needed
 }
 
@@ -1017,7 +1050,7 @@ async function handleUrlSearch(event) {
     cancelBtn.classList.add("hidden");
     chip.classList.add("hidden");
     $("urlSearchSpinner").classList.add("hidden");
-    renderDoneActions(runId, run.status);
+    renderDoneActions(runId, run.status, run.error);
 
     if (run.status === "cancelled") {
       setBadge("Cancelled", "status-warn");
@@ -1030,13 +1063,14 @@ async function handleUrlSearch(event) {
     $("urlSearchProgressLabel").textContent = run.message || run.error || "Completed";
 
     if (run.status === "error") {
-      toast(run.error || "URL search failed — is the URL correct?", "error");
+      // pollSearchRun already showed the error (with the API-key action when it applies)
+      if (!run.error) toast("URL search failed — is the URL correct?", "error");
     } else {
       toast("Search complete — results are ready", "success");
       if (currentView === "search") navigateToView("pages");
     }
   } catch (err) {
-    toast(err.message || "URL search failed", "error");
+    toastError(err.message || "URL search failed");
     setBadge("Idle", "status-idle");
     $("urlPlatformChip").classList.add("hidden");
     if (!runId) prog.classList.add("hidden");
@@ -1053,14 +1087,15 @@ async function handleUrlSearch(event) {
   }
 }
 
-function renderDoneActions(runId, status) {
+function renderDoneActions(runId, status, error) {
   const box = $("urlSearchDoneActions");
   if (!box) return;
   const report = `/static/url_report.html?run_id=${encodeURIComponent(runId)}`;
   box.innerHTML = status === "completed"
     ? `<button type="button" class="btn-primary btn-sm" data-open-run="${esc(runId)}">View results →</button> <a class="btn-ghost btn-sm" href="${esc(report)}" target="_blank" rel="noopener">Open report ↗</a>`
     : status === "error"
-      ? `<button type="button" class="btn-secondary btn-sm" data-action="retry-search">↻ Try again</button> <button type="button" class="btn-ghost btn-sm" data-nav="history">Search history</button>`
+      ? (isOwnKeyError(error) ? `<div class="own-key-alert inline-alert alert-danger"><div><strong>Your organization's API key stopped this search.</strong> <span class="own-key-msg">${esc(error)}</span></div>${ownKeyActionHtml(error)}</div>` : "")
+        + `<button type="button" class="btn-secondary btn-sm" data-action="retry-search">↻ Try again</button> <button type="button" class="btn-ghost btn-sm" data-nav="history">Search history</button>`
       : `<button type="button" class="btn-ghost btn-sm" data-nav="history">Search history</button>`;
   box.classList.remove("hidden");
 }
@@ -1097,7 +1132,7 @@ async function resumeRunningSearch() {
       };
     });
     $("urlSearchSpinner").classList.add("hidden");
-    renderDoneActions(run.run_id, result.status);
+    renderDoneActions(run.run_id, result.status, result.error);
     setBadge(result.status === "completed" ? "Completed" : result.status === "cancelled" ? "Cancelled" : "Error",
              result.status === "completed" ? "status-success" : result.status === "cancelled" ? "status-warn" : "status-error");
   } finally {
@@ -1926,7 +1961,7 @@ async function openPage(pageId, event) {
   const postRes = await api(`/api/pages/${encodeURIComponent(pageId)}/posts?max_posts=${maxPosts}`, { method: "POST" });
   if (!postRes.ok) {
     if (handleEntitlementError(postRes.status, postRes.data)) return;
-    toast(errText(postRes.data, "Collection failed"), "error");
+    toastError(errText(postRes.data, "Collection failed"));
     return;
   }
   refreshSummary();
@@ -2102,7 +2137,7 @@ async function openPost(postId, event) {
   const postRes = await api(`/api/posts/${encodeURIComponent(postId)}/comments?max_comments=${maxComments}`, { method: "POST" });
   if (!postRes.ok) {
     if (handleEntitlementError(postRes.status, postRes.data)) return;
-    toast(errText(postRes.data, "Collection failed"), "error");
+    toastError(errText(postRes.data, "Collection failed"));
     return;
   }
   refreshSummary();
@@ -3048,8 +3083,17 @@ function setMeter(valId, fillId, m) {
 
 async function ensurePlans() {
   if (portal.plans.length) return portal.plans;
-  const res = await api("/api/billing/plans");
-  if (res.ok) portal.plans = res.data.plans || [];
+  // the API-coverage prices (coverage_options) are published with the public pricing
+  const [res, pub] = await Promise.all([api("/api/billing/plans"), api("/api/public/pricing")]);
+  if (res.ok) {
+    const bySlug = {};
+    ((pub.ok && pub.data && pub.data.plans) || []).forEach((p) => { if (p && p.slug) bySlug[p.slug] = p; });
+    portal.plans = (res.data.plans || []).map((p) => {
+      const q = bySlug[p.slug];
+      return q ? { ...p, allows_own_keys: q.allows_own_keys === true, api_addons: q.api_addons || p.api_addons,
+        coverage_options: q.coverage_options || [], popular: Boolean(q.popular) } : p;
+    });
+  }
   return portal.plans;
 }
 
@@ -3060,6 +3104,7 @@ async function loadBillingData() {
   try {
     const canView = can("org_billing.view");
     const canManage = canManageBilling();
+    if (!currentTenantOrg) await loadWorkspaceData();   // API coverage + saved-key status
     const [usageRes, subRes, invRes] = await Promise.all([
       api("/api/billing/usage"),
       canView ? api("/api/billing/subscription") : Promise.resolve(null),
@@ -3089,7 +3134,11 @@ async function loadBillingData() {
     const cycle = sub && sub.billing_cycle === "yearly" ? "year" : "month";
     const amount = sub && sub.amount != null ? sub.amount : plan.price_monthly;
     const price = plan.is_demo ? "Free demo" : (amount ? formatMoney(amount, (sub && sub.currency) || plan.currency) : "Free");
-    $("billingPlanPrice").innerHTML = `${esc(price)} <span class="price-period">${amount && !plan.is_demo ? "/ " + cycle : ""}</span>`;
+    // who provides Apify / Gemini for this organization right now
+    const orgCov = (currentTenantOrg && currentTenantOrg.api_keys && currentTenantOrg.api_keys.coverage) || (sub && sub.api_coverage) || null;
+    const ownNow = ownApis(normCoverage(orgCov));
+    const covPill = ownNow.length ? ` <span class="cov-pill" title="Your organization uses its own API key${ownNow.length > 1 ? "s" : ""}">Own ${esc(ownNow.map((a) => a.name).join(" + "))} key${ownNow.length > 1 ? "s" : ""}</span>` : "";
+    $("billingPlanPrice").innerHTML = `${esc(price)} <span class="price-period">${amount && !plan.is_demo ? "/ " + cycle : ""}</span>${covPill}`;
 
     let details = "";
     if (sub) {
@@ -3124,6 +3173,8 @@ async function loadBillingData() {
     setMeter("meterSearchesVal", "meterSearchesFill", q.monthly_searches);
     setMeter("meterAiVal", "meterAiFill", q.monthly_ai_analyses);
     setMeter("meterTeamVal", "meterTeamFill", q.team_members);
+    setBoxLink($("meterAiTile"), canOpenLeads() ? LEADS_ALL : null);
+    setBoxLink($("meterTeamTile"), can("members.view") ? { action: "open-team" } : null);
     renderTokenMeter(usage);
 
     // Plans grid
@@ -3133,47 +3184,16 @@ async function loadBillingData() {
       notice.innerHTML = canManage ? "" : "<div><strong>Want more?</strong><div>Only your workspace owner or billing admin can change the plan. Ask your admin to upgrade.</div></div>";
     }
     const activeSlug = isActive ? (plan.slug || (sub && sub.plan_id) || "") : "";
-    const plansGrid = $("plansCatalogGrid");
-    if (plansGrid) {
-      if (!plans.length) {
-        plansGrid.innerHTML = emptyState({ icon: "card", title: "No plans available", sub: "Plans will appear here once they are published." });
-      } else {
-        plansGrid.innerHTML = plans.map((p) => {
-          const isCurrent = activeSlug && p.slug === activeSlug;
-          const isPending = pendingPlanId && (p.slug === pendingPlanId || p.id === pendingPlanId);
-          const lim = p.limits || {};
-          const has = (f) => Array.isArray(p.features) && p.features.includes(f);
-          const features = [
-            { name: `${fmt(lim.monthly_tokens || 0)} tokens / mo`, active: Boolean(lim.monthly_tokens) },
-            { name: `${fmt(lim.monthly_searches || 0)} searches / mo`, active: Boolean(lim.monthly_searches) },
-            { name: `${fmt(lim.posts_per_search || 0)} posts per search`, active: Boolean(lim.posts_per_search) },
-            { name: `${fmt(lim.comments_per_post || 0)} comments per post`, active: Boolean(lim.comments_per_post) },
-            { name: `${fmt(lim.monthly_ai_analyses || 0)} AI analyses`, active: has("ai_analysis") },
-            { name: `Up to ${fmt(lim.team_members || 0)} team members`, active: Boolean(lim.team_members) },
-            { name: "CSV & report exports", active: has("csv_export") },
-          ];
-          let action;
-          if (isCurrent) action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled>Current plan</button>`;
-          else if (isPending) action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled>Pending confirmation</button>`;
-          else if (canManage && !pending) action = `<button type="button" class="saas-btn saas-btn-primary btn-block" data-checkout="${esc(p.slug)}">Choose ${esc(p.name)} →</button>`;
-          else if (canManage) action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled title="Finish the pending checkout first">Checkout pending</button>`;
-          else action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled>Ask your admin to upgrade</button>`;
-          return `
-            <div class="plan-card ${isCurrent ? "current" : ""}">
-              <div class="plan-card-name">${esc(p.name)}</div>
-              <div class="plan-card-desc">${esc(p.description || "")}</div>
-              <div class="plan-card-price">
-                <span class="amount">${esc(formatMoney(p.price_monthly, p.currency))}</span>
-                <span class="period">/ month</span>
-              </div>
-              <ul class="plan-card-features">
-                ${features.map((f) => `<li class="${f.active ? "included" : "excluded"}">${esc(f.name)}</li>`).join("")}
-              </ul>
-              ${action}
-            </div>`;
-        }).join("");
-      }
+    if (_billingCoverage === null) {
+      // first visit: the pricing page's choice (?apify=…&gemini=…), else what the organization uses now
+      const fromUrl = billingUrlChoice();
+      _billingCoverage = normCoverage(fromUrl.coverage || orgCov);
+      if (fromUrl.cycle) _billingCycleMode = fromUrl.cycle;
+      else if (sub && sub.billing_cycle === "yearly") _billingCycleMode = "yearly";
+      if (fromUrl.plan && plans.some((p) => p.slug === fromUrl.plan)) _billingSelectedPlan = fromUrl.plan;
     }
+    _cachedBillingContext = { activeSlug, pendingPlanId, pending, canManage };
+    renderPlansCatalogGrid();
 
     // Invoices
     const invList = $("invoicesList");
@@ -3238,11 +3258,226 @@ function renderTokenMeter(usage) {
   }
 }
 
+// ── Plan checkout with API coverage ───────────────────────────────────────
+// Per external API (Apify scraping, Google Gemini AI) the customer either lets
+// LeadAI provide it (included in the price) or brings its own key (cheaper;
+// they pay Apify / Google directly). Every price shown comes from the API's
+// coverage_options (GET /api/public/pricing); nothing is computed here.
+const COVERAGE_APIS = [
+  { key: "apify", label: "Apify (scraping)", name: "Apify" },
+  { key: "gemini", label: "Google Gemini (AI)", name: "Gemini" },
+];
+const ALL_LEADAI = Object.freeze({ apify: "leadai", gemini: "leadai" });
+const ORG_KEYS_URL = "/org-admin#integrations";
+let _billingCycleMode = "monthly";
+let _billingCoverage = null;        // {apify, gemini}: the customer's choice (null until first billing load)
+let _billingSelectedPlan = "";      // plan whose price breakdown is shown
+let _cachedBillingContext = null;
+
+function normCoverage(c) {
+  const out = { apify: "leadai", gemini: "leadai" };
+  if (c && typeof c === "object") COVERAGE_APIS.forEach((a) => { if (c[a.key] === "own") out[a.key] = "own"; });
+  return out;
+}
+/** ?plan=…&cycle=…&apify=own&gemini=leadai from the pricing page (query string or #billing?…). */
+function billingUrlChoice() {
+  const out = { plan: "", cycle: "", coverage: null };
+  const read = (qs) => {
+    if (!qs) return;
+    if (qs.get("plan")) out.plan = String(qs.get("plan")).replace(/[^a-z0-9_-]/gi, "").slice(0, 40);
+    if (qs.get("cycle") === "yearly" || qs.get("cycle") === "monthly") out.cycle = qs.get("cycle");
+    const hasCov = COVERAGE_APIS.some((a) => qs.has(a.key));
+    if (hasCov) out.coverage = normCoverage({ apify: qs.get("apify"), gemini: qs.get("gemini") });
+  };
+  try { read(new URLSearchParams(location.search)); } catch (_) { /* ignore */ }
+  try { const hq = location.hash.split("?")[1]; if (hq) read(new URLSearchParams(hq)); } catch (_) { /* ignore */ }
+  return out;
+}
+function planAllowsOwn(p) { return Boolean(p && p.allows_own_keys === true); }
+/** Coverage a plan is sold with: plans without own keys are always LeadAI-provided. */
+function planCoverage(p) { return planAllowsOwn(p) ? normCoverage(_billingCoverage) : { ...ALL_LEADAI }; }
+/** The API's price entry for this plan + coverage (all-included entry as the fallback). */
+function planCoverageOption(p, cov) {
+  const want = cov || planCoverage(p);
+  const opts = Array.isArray(p.coverage_options) ? p.coverage_options : [];
+  return opts.find((o) => o && o.coverage && o.coverage.apify === want.apify && o.coverage.gemini === want.gemini)
+    || opts.find((o) => o && o.key === "all_included")
+    || { key: "all_included", label: "All included", coverage: { ...ALL_LEADAI }, price_monthly: p.price_monthly, price_yearly: p.price_yearly };
+}
+function planCyclePrice(opt, yearly) { return Number((yearly ? opt.price_yearly : opt.price_monthly) || 0); }
+function ownApis(cov) { return COVERAGE_APIS.filter((a) => cov && cov[a.key] === "own"); }
+function coverageText(cov) {
+  const own = ownApis(cov).map((a) => a.name);
+  return own.length ? `your own ${own.join(" + ")} key${own.length > 1 ? "s" : ""}` : "Apify + Gemini included";
+}
+function isOrgAdmin() { const r = portal.user && portal.user.org_role; return r === "owner" || r === "admin"; }
+
+function setBillingCoverage(api, val) {
+  if (!COVERAGE_APIS.some((a) => a.key === api)) return;
+  _billingCoverage = normCoverage({ ...normCoverage(_billingCoverage), [api]: val === "own" ? "own" : "leadai" });
+  renderPlansCatalogGrid();
+}
+function setBillingCycleMode(cycle) {
+  _billingCycleMode = cycle === "yearly" ? "yearly" : "monthly";
+  renderPlansCatalogGrid();
+}
+function selectBillingPlan(slug) {
+  if (!slug || slug === _billingSelectedPlan) return;
+  _billingSelectedPlan = slug;
+  renderPlansCatalogGrid();
+}
+
+/** Breakdown for the selected plan: all-included price, minus each API the customer brings. */
+function planBreakdownHtml(p, yearly) {
+  const cov = planCoverage(p);
+  const all = planCyclePrice(planCoverageOption(p, ALL_LEADAI), yearly);
+  const opt = planCoverageOption(p, cov);
+  const total = planCyclePrice(opt, yearly);
+  if (!all) return "";
+  const cycleKey = yearly ? "yearly" : "monthly";
+  const addons = p.api_addons || {};
+  const lines = [`<div class="cov-line"><span>All included</span><span>${esc(formatMoney(all, p.currency))}</span></div>`];
+  ownApis(cov).forEach((a) => {
+    const off = addons[a.key] && addons[a.key][cycleKey];
+    if (off != null) lines.push(`<div class="cov-line cov-minus"><span>Own ${esc(a.name)} key</span><span>−${esc(formatMoney(off, p.currency))}</span></div>`);
+  });
+  lines.push(`<div class="cov-line cov-total"><span>You pay</span><span>${esc(formatMoney(total, p.currency))} / ${yearly ? "year" : "month"}</span></div>`);
+  return `<div class="cov-breakdown" aria-label="Price breakdown for ${esc(p.name)}">${lines.join("")}</div>`;
+}
+
+function renderBillingCoverageControls(plans) {
+  const anyOwn = plans.some(planAllowsOwn);
+  const box = $("billingCoverageChoices");
+  const note = $("billingCoverageNote");
+  if (box) box.classList.toggle("hidden", !anyOwn);
+  if (note) note.classList.toggle("hidden", !anyOwn);
+  const cov = normCoverage(_billingCoverage);
+  document.querySelectorAll("[data-cov-api]").forEach((b) => {
+    const on = cov[b.dataset.covApi] === b.dataset.covVal;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  document.querySelectorAll("#billingCycleSegment button").forEach((b) => {
+    const on = b.dataset.cycleMode === _billingCycleMode;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  // yearly saving for the chosen coverage (from the API's monthly / yearly prices)
+  let bestSave = 0;
+  plans.forEach((p) => {
+    const o = planCoverageOption(p); const m = planCyclePrice(o, false), y = planCyclePrice(o, true);
+    if (m > 0 && y > 0 && y < m * 12) bestSave = Math.max(bestSave, Math.round((1 - y / (m * 12)) * 100));
+  });
+  const save = $("billingYearlySave");
+  if (save) { save.textContent = bestSave ? `Save ${bestSave}%` : ""; save.classList.toggle("hidden", !bestSave); }
+
+  // who adds the key, when the customer brings one
+  const keyNote = $("billingOwnKeyNote");
+  if (!keyNote) return;
+  const own = anyOwn ? ownApis(cov) : [];
+  let html = "";
+  if (own.length) {
+    const keys = (currentTenantOrg && currentTenantOrg.api_keys && currentTenantOrg.api_keys.keys) || {};
+    const ready = own.every((a) => keys[a.key] && keys[a.key].configured && keys[a.key].verified);
+    const names = esc(own.map((a) => a.name).join(" and "));
+    const many = own.length > 1;
+    const payee = many ? "Apify and Google" : (own[0].key === "apify" ? "Apify" : "Google");
+    if (ready) {
+      html = `<div><strong>Your saved ${names} key${many ? "s are" : " is"} verified.</strong> You pay ${payee} directly for ${many ? "their" : "its"} usage.</div>`;
+    } else if (isOrgAdmin()) {
+      html = `<div><strong>Add your ${names} key${many ? "s" : ""} in Admin portal → API keys &amp; plan after checkout.</strong> You pay ${payee} directly; searches that need ${many ? "these keys" : "the key"} stop until a working key is saved.</div><a class="btn-ghost btn-sm" href="${ORG_KEYS_URL}">Open API keys &amp; plan</a>`;
+    } else {
+      html = `<div><strong>Your organization admin adds the ${names} key${many ? "s" : ""}</strong> in Admin portal → API keys &amp; plan after checkout. You pay ${payee} directly.</div>`;
+    }
+  }
+  if (keyNote.dataset.html === html) return;   // unchanged: don't re-announce the status region
+  keyNote.dataset.html = html;
+  keyNote.className = html ? "inline-alert alert-info cov-key-note" : "hidden";
+  keyNote.innerHTML = html;
+}
+
+function renderPlansCatalogGrid() {
+  const plansGrid = $("plansCatalogGrid");
+  if (!plansGrid || !_cachedBillingContext) return;
+  const { activeSlug, pendingPlanId, pending, canManage } = _cachedBillingContext;
+  const plans = portal.plans || [];
+  renderBillingCoverageControls(plans);
+  if (!plans.length) {
+    plansGrid.innerHTML = emptyState({ icon: "card", title: "No plans available", sub: "Plans will appear here once they are published." });
+    return;
+  }
+  const isYearly = _billingCycleMode === "yearly";
+  if (!plans.some((p) => p.slug === _billingSelectedPlan)) {
+    const pick = plans.find((p) => p.slug === activeSlug) || plans.find((p) => p.popular || p.is_default) || plans.find((p) => Number(p.price_monthly) > 0) || plans[0];
+    _billingSelectedPlan = pick ? pick.slug : "";
+  }
+  plansGrid.innerHTML = plans.map((p) => {
+    const isCurrent = activeSlug && p.slug === activeSlug;
+    const isPending = pendingPlanId && (p.slug === pendingPlanId || p.id === pendingPlanId);
+    const isSelected = p.slug === _billingSelectedPlan;
+    const lim = p.limits || {};
+    const has = (f) => Array.isArray(p.features) && p.features.includes(f);
+    const features = [
+      { name: `${fmt(lim.monthly_tokens || 0)} tokens / mo`, active: Boolean(lim.monthly_tokens) },
+      { name: `${fmt(lim.monthly_searches || 0)} searches / mo`, active: Boolean(lim.monthly_searches) },
+      { name: `${fmt(lim.posts_per_search || 0)} posts per search`, active: Boolean(lim.posts_per_search) },
+      { name: `${fmt(lim.comments_per_post || 0)} comments per post`, active: Boolean(lim.comments_per_post) },
+      { name: `${fmt(lim.monthly_ai_analyses || 0)} AI analyses`, active: has("ai_analysis") },
+      { name: `Up to ${fmt(lim.team_members || 0)} team members`, active: Boolean(lim.team_members) },
+      { name: "CSV & report exports", active: has("csv_export") },
+    ];
+    let action;
+    if (isCurrent) action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled>Current plan</button>`;
+    else if (isPending) action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled>Pending confirmation</button>`;
+    else if (canManage && !pending) action = `<button type="button" class="saas-btn saas-btn-primary btn-block" data-checkout="${esc(p.slug)}">Choose ${esc(p.name)} →</button>`;
+    else if (canManage) action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled title="Finish the pending checkout first">Checkout pending</button>`;
+    else action = `<button type="button" class="saas-btn saas-btn-secondary btn-block" disabled>Ask your admin to upgrade</button>`;
+
+    const opt = planCoverageOption(p);
+    const price = planCyclePrice(opt, isYearly);
+    const free = !price;
+    const covNote = !planAllowsOwn(p)
+      ? `<div class="plan-card-cov">LeadAI-provided only</div>`
+      : `<div class="plan-card-cov${ownApis(opt.coverage).length ? " is-own" : ""}">${esc(coverageText(opt.coverage).replace(/^your/, "Your"))}</div>`;
+    return `
+      <div class="plan-card ${isCurrent ? "current" : ""} ${isSelected ? "selected" : ""}" data-select-plan="${esc(p.slug)}" data-plan-card="${esc(p.slug)}">
+        <div class="plan-card-name">${esc(p.name)}</div>
+        <div class="plan-card-desc">${esc(p.description || "")}</div>
+        <div class="plan-card-price">
+          <span class="amount" data-plan-price="${esc(p.slug)}">${esc(free ? "Free" : formatMoney(price, p.currency))}</span>
+          <span class="period">${free ? "" : `/ ${isYearly ? "year" : "month"}`}</span>
+        </div>
+        ${covNote}
+        ${isSelected && !free && planAllowsOwn(p) ? planBreakdownHtml(p, isYearly) : ""}
+        <ul class="plan-card-features">
+          ${features.map((f) => `<li class="${f.active ? "included" : "excluded"}">${esc(f.name)}</li>`).join("")}
+        </ul>
+        ${action}
+      </div>`;
+  }).join("");
+}
+
 async function handlePlanCheckout(planSlug) {
   if (!canManageBilling()) { toast("Only your workspace owner or billing admin can change the plan.", "error"); return; }
-  const plan = portal.plans.find((p) => p.slug === planSlug) || { name: planSlug };
-  if (!(await confirmAction({ title: `Continue to payment for ${plan.name}?`, message: "The plan activates after the payment is confirmed by our team. Your current plan stays in effect until then.", confirmLabel: "Continue to payment" }))) return;
-  const res = await api("/api/billing/checkout", { method: "POST", body: { plan_slug: planSlug, billing_cycle: "monthly" } });
+  const plan = portal.plans.find((p) => p.slug === planSlug) || { name: planSlug, slug: planSlug };
+  if (_billingSelectedPlan !== planSlug) { _billingSelectedPlan = planSlug; renderPlansCatalogGrid(); }
+  const billingCycle = _billingCycleMode === "yearly" ? "yearly" : "monthly";
+  const coverage = planCoverage(plan);
+  const shown = planCyclePrice(planCoverageOption(plan, coverage), billingCycle === "yearly");
+  const own = ownApis(coverage);
+  const keyLine = !own.length ? ""
+    : isOrgAdmin() ? ` After checkout, add your ${own.map((a) => a.name).join(" and ")} key${own.length > 1 ? "s" : ""} in Admin portal → API keys & plan.`
+      : ` Your organization admin adds the ${own.map((a) => a.name).join(" and ")} key${own.length > 1 ? "s" : ""} in Admin portal → API keys & plan.`;
+  if (!(await confirmAction({
+    title: `Continue to payment for ${plan.name} (${billingCycle})?`,
+    message: `${formatMoney(shown, plan.currency)} / ${billingCycle === "yearly" ? "year" : "month"} with ${coverageText(coverage)}. `
+      + "The plan activates after the payment is confirmed by our team. Your current plan stays in effect until then." + keyLine,
+    confirmLabel: "Continue to payment"
+  }))) return;
+  const res = await api("/api/billing/checkout", {
+    method: "POST",
+    body: { plan_slug: planSlug, billing_cycle: billingCycle, api_coverage: coverage }
+  });
   if (!res.ok) {
     if (handleEntitlementError(res.status, res.data)) return;
     toast(errText(res.data, "Checkout failed"), "error");
@@ -3251,6 +3486,9 @@ async function handlePlanCheckout(planSlug) {
   // Checkout never activates anything: the plan becomes active only after
   // the payment is verified AND our team confirms it.
   const co = res.data.checkout || {};
+  if (co.amount != null && Number(co.amount) !== shown) {
+    toast(`Amount due: ${formatMoney(co.amount, co.currency || plan.currency)}${co.coupon ? " (discount applied)" : ""}`, "info");
+  }
   let target = "";
   try {
     const u = co.redirect_url ? new URL(String(co.redirect_url), location.href) : null;
@@ -3429,11 +3667,34 @@ function greeting() {
   return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
-function kpi(id, label, value, foot, extraCls) {
+/** Point a stat box (an <a>) at a portal view, or make it a plain, non-clickable box when `link` is null.
+    link = { nav, query?, leadsView?, historyStatus?, action? } — reuses the data-nav navigation. */
+function setBoxLink(el, link) {
+  if (!el) return;
+  ["nav", "navQuery", "leadsViewLink", "historyStatus", "boxAction"].forEach((k) => { delete el.dataset[k]; });
+  el.classList.toggle("box-link", Boolean(link));
+  if (!link) { el.removeAttribute("href"); return; }
+  if (link.action) {
+    el.dataset.boxAction = link.action;
+    el.setAttribute("href", "#" + (currentView || "dashboard"));
+    return;
+  }
+  el.setAttribute("href", "#" + link.nav + (link.query ? "?" + link.query : ""));
+  el.dataset.nav = link.nav;
+  if (link.query) el.dataset.navQuery = link.query;
+  if (link.leadsView) el.dataset.leadsViewLink = link.leadsView;
+  if (link.historyStatus != null) el.dataset.historyStatus = link.historyStatus;
+}
+/** Leads open for everyone except portal users whose role lacks leads.view (loadLeads shows "no access"). */
+function canOpenLeads() { return !portal.user || can("leads.view"); }
+const LEADS_ALL = { nav: "leads", query: "view=all", leadsView: "all" };
+
+function kpi(id, label, value, foot, extraCls, link) {
   const el = $(id);
   if (!el) return;
   el.className = "kpi-card" + (extraCls ? " " + extraCls : "");
-  el.innerHTML = `<div class="kpi-label">${esc(label)}</div><div class="kpi-value">${value}</div><div class="kpi-foot">${foot}</div>`;
+  setBoxLink(el, link || null);
+  el.innerHTML = `<div class="kpi-label">${esc(label)}${link ? '<span class="box-go" aria-hidden="true">→</span>' : ""}</div><div class="kpi-value">${value}</div><div class="kpi-foot">${foot}</div>`;
 }
 
 function renderDashboard(s) {
@@ -3461,18 +3722,19 @@ function renderDashboard(s) {
     kpi("kpiTokens", "Tokens left", `${esc(fmt(t.remaining))}<span class="kpi-of"> / ${esc(fmt(t.allocated))}</span>`,
       `${meterBar(pct, "Workspace tokens used", `${t.used} of ${t.allocated} tokens used`)}
        <div class="kpi-sub">${demo ? (demo.expired ? "Demo ended" : `Demo ends in <b data-countdown="${esc(demo.expires_at)}">${esc(countdownText(demo.expires_at))}</b>`) : t.expires_at ? "Resets " + esc(new Date(t.expires_at).toLocaleDateString()) : esc(fmt(c.tokens_consumed || 0)) + " used by you"}</div>`,
-      "kpi-token");
+      "kpi-token", { nav: "usage" });
   } else {
-    kpi("kpiTokens", "Plan", esc((usage.plan || {}).name || "—"), `<div class="kpi-sub">Not token-metered</div>`, "kpi-token");
+    kpi("kpiTokens", "Plan", esc((usage.plan || {}).name || "—"), `<div class="kpi-sub">Not token-metered</div>`, "kpi-token", { nav: "billing" });
   }
   const ms = (usage.metrics || {}).monthly_searches || {};
   kpi("kpiSearches", "Searches this period", esc(fmt(c.searches_period != null ? c.searches_period : c.searches)),
-    `<div class="kpi-sub">${esc(fmt(c.searches))} total · ${c.searches_running ? `<b>${esc(c.searches_running)} running</b> · ` : ""}${esc(c.searches_failed || 0)} failed${ms.limit ? ` · workspace ${esc(fmt(ms.used))}/${esc(fmt(ms.limit))}` : ""}</div>`);
+    `<div class="kpi-sub">${esc(fmt(c.searches))} total · ${c.searches_running ? `<b>${esc(c.searches_running)} running</b> · ` : ""}${esc(c.searches_failed || 0)} failed${ms.limit ? ` · workspace ${esc(fmt(ms.used))}/${esc(fmt(ms.limit))}` : ""}</div>`,
+    "", { nav: "history", historyStatus: "" });
   kpi("kpiLeads", "My leads", esc(fmt(c.leads)),
-    `<div class="kpi-sub">${esc(fmt(c.hot_leads || 0))} hot · ${esc(fmt(c.new_leads || 0))} new</div>`);
+    `<div class="kpi-sub">${esc(fmt(c.hot_leads || 0))} hot · ${esc(fmt(c.new_leads || 0))} new</div>`, "", canOpenLeads() ? LEADS_ALL : null);
   kpi("kpiAssigned", "Assigned to me", esc(fmt(c.assigned_to_me || 0)),
-    `<button type="button" class="link-btn" data-nav="leads" data-leads-view-link="assigned">Open assigned leads →</button>`,
-    c.assigned_to_me ? "kpi-accent" : "");
+    canOpenLeads() ? `<div class="kpi-sub">Open assigned leads</div>` : `<div class="kpi-sub">Leads shared with you by your team</div>`,
+    c.assigned_to_me ? "kpi-accent" : "", canOpenLeads() ? { nav: "leads", query: "view=assigned", leadsView: "assigned" } : null);
 
   // recent searches
   const rs = s.recent_searches || [];
@@ -3690,7 +3952,7 @@ async function loadHistory() {
           const [label, icon] = URL_LABELS[s.platform] || [s.platform || "URL", ico("link")];
           return `<span class="dt-main"><span class="mini-icon" aria-hidden="true">${icon}</span>
             <span class="mini-main"><span class="mini-title cell-url">${esc(s.query)}</span>
-            <span class="mini-sub">${esc(label)}${s.limit ? ` · ${esc(s.limit)} posts` : ""}${s.max_comments_per_post ? ` · ${esc(s.max_comments_per_post)} comments/post` : ""}${s.error ? ` · <span class="text-danger">${esc(String(s.error).slice(0, 80))}</span>` : ""}</span></span></span>`;
+            <span class="mini-sub">${esc(label)}${s.limit ? ` · ${esc(s.limit)} posts` : ""}${s.max_comments_per_post ? ` · ${esc(s.max_comments_per_post)} comments/post` : ""}${s.error ? ` · <span class="text-danger"${String(s.error).length > 80 ? ` title="${esc(s.error)}"` : ""}>${esc(String(s.error).slice(0, 80))}${String(s.error).length > 80 ? "…" : ""}</span>` : ""}</span>${isOwnKeyError(s.error) ? `<span class="own-key-row">${ownKeyActionHtml(s.error)}</span>` : ""}</span></span>`;
         } },
       { id: "platform", label: "Platform", cls: "col-tag", text: (s) => PLATFORMS[s.platform] || s.platform || "",
         html: (s) => PLATFORMS[s.platform] ? `<span class="platform-badge ${esc(s.platform)}">${esc(PLATFORMS[s.platform])}</span>` : `<span class="muted">—</span>` },
@@ -3783,6 +4045,7 @@ PAGERS.exports = (p) => { exportsState.page = p; loadExports(); };
 // USAGE
 // ═════════════════════════════════════════════════════════════════════════
 const ledgerState = { page: 1 };
+const BOX_GO = '<span class="box-go" aria-hidden="true">→</span>';
 const REASON_LABELS = { search: "URL search", collect: "Collect posts / comments", ai_call: "AI analysis", export: "CSV export" };
 
 async function loadUsage() {
@@ -3809,10 +4072,12 @@ async function loadUsage() {
   body.innerHTML = `
     <h2 class="section-title">You, this period</h2>
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-label">Searches</div><div class="kpi-value">${esc(fmt(me.searches_period))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.searches))} all time</div></div></div>
-      <div class="kpi-card"><div class="kpi-label">Leads</div><div class="kpi-value">${esc(fmt(me.leads))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.assigned_to_me || 0))} assigned to you</div></div></div>
-      <div class="kpi-card"><div class="kpi-label">Exports</div><div class="kpi-value">${esc(fmt(me.exports_period != null ? me.exports_period : me.exports))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.exports))} all time</div></div></div>
-      <div class="kpi-card kpi-token"><div class="kpi-label">Tokens you used</div><div class="kpi-value">${esc(fmt(me.tokens_consumed_period))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.tokens_consumed))} all time</div></div></div>
+      <a class="kpi-card box-link" href="#history" data-nav="history" data-history-status=""><div class="kpi-label">Searches${BOX_GO}</div><div class="kpi-value">${esc(fmt(me.searches_period))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.searches))} all time</div></div></a>
+      ${canOpenLeads()
+        ? `<a class="kpi-card box-link" href="#leads?view=all" data-nav="leads" data-nav-query="view=all" data-leads-view-link="all"><div class="kpi-label">Leads${BOX_GO}</div>`
+        : `<div class="kpi-card"><div class="kpi-label">Leads</div>`}<div class="kpi-value">${esc(fmt(me.leads))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.assigned_to_me || 0))} assigned to you</div></div>${canOpenLeads() ? "</a>" : "</div>"}
+      <a class="kpi-card box-link" href="#exports" data-nav="exports"><div class="kpi-label">Exports${BOX_GO}</div><div class="kpi-value">${esc(fmt(me.exports_period != null ? me.exports_period : me.exports))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.exports))} all time</div></div></a>
+      <a class="kpi-card kpi-token box-link" href="#usage" data-jump="ledgerTitle"><div class="kpi-label">Tokens you used${BOX_GO}</div><div class="kpi-value">${esc(fmt(me.tokens_consumed_period))}</div><div class="kpi-foot"><div class="kpi-sub">${esc(fmt(me.tokens_consumed))} all time · see token activity</div></div></a>
     </div>
     <div class="dash-grid">
       <section class="panel">
@@ -4207,12 +4472,32 @@ function onDocumentClick(e) {
   const pager = t.closest("[data-page-key]");
   if (pager) { const fn = PAGERS[pager.dataset.pageKey]; if (fn && !pager.disabled) fn(parseInt(pager.dataset.page, 10) || 1); return; }
 
+  const boxAct = t.closest("a[data-box-action]");
+  if (boxAct) {
+    e.preventDefault();
+    if (boxAct.dataset.boxAction === "open-team") openTeamModal();
+    return;
+  }
+  const jump = t.closest("[data-jump]");
+  if (jump) {
+    e.preventDefault();
+    const target = $(jump.dataset.jump);
+    if (target) {
+      (target.closest("section") || target).scrollIntoView({ block: "start" });
+      if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+    }
+    return;
+  }
   const nav = t.closest("[data-nav]");
   if (nav) {
+    // stat boxes are real links: let ctrl/cmd/shift-click open them in a new tab or window
+    if (nav.tagName === "A" && nav.hasAttribute("href") && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
     e.preventDefault();
     const view = nav.dataset.nav;
     if (nav.dataset.leadsViewLink) setLeadsView(nav.dataset.leadsViewLink, false);
-    navigateToView(view, { tab: nav.dataset.tab, userInitiated: true });
+    if (nav.dataset.historyStatus != null && $("historyStatus")) { $("historyStatus").value = nav.dataset.historyStatus; historyState.page = 1; }
+    navigateToView(view, { tab: nav.dataset.tab, userInitiated: true, query: nav.dataset.navQuery });
     return;
   }
   const act = t.closest("[data-action]");
@@ -4250,6 +4535,12 @@ function onDocumentClick(e) {
   if (fu) { updateFollowUpStatus(fu.dataset.fuUpdate, parseInt(fu.dataset.index, 10), fu.dataset.status); return; }
   const co = t.closest("[data-checkout]");
   if (co) { handlePlanCheckout(co.dataset.checkout); return; }
+  const cv = t.closest("[data-cov-api]");
+  if (cv) { setBillingCoverage(cv.dataset.covApi, cv.dataset.covVal); return; }
+  const cm = t.closest("[data-cycle-mode]");
+  if (cm) { setBillingCycleMode(cm.dataset.cycleMode); return; }
+  const sp = t.closest("[data-select-plan]");
+  if (sp && !t.closest("a, button")) { selectBillingPlan(sp.dataset.selectPlan); return; }
   const rx = t.closest("[data-reexport]");
   if (rx) {
     confirmAction({ title: "Export this data again?", message: "A new export uses your plan's export allowance.", confirmLabel: "Export again" })
@@ -4504,9 +4795,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const { view, params } = parseHash();
   const leadsView = view === "leads" ? params.get("view") : null;
   if (leadsView) setLeadsView(leadsView, false);
+  if (view === "history" && params.get("status") && $("historyStatus")) $("historyStatus").value = params.get("status");
   navigateToView(view || "dashboard", { leadsView, tab: params.get("tab") || undefined, focus: false });
   window.addEventListener("popstate", () => {
     const h = parseHash();
+    // back/forward to a stat box's filtered link (#leads?view=… / #history?status=…) restores that filter
+    if (h.view === "leads" && h.params.get("view")) setLeadsView(h.params.get("view"), false);
+    if (h.view === "history" && h.params.has("status") && $("historyStatus")) $("historyStatus").value = h.params.get("status");
     navigateToView(h.view || "dashboard", { focus: false, tab: h.params.get("tab") || undefined });
   });
 

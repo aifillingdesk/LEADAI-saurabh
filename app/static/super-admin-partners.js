@@ -55,10 +55,10 @@
     var totals = ov.commission_totals || {}, cur = Object.keys(totals)[0] || 'USD', t = totals[cur] || {};
     root.innerHTML = K.header('Partners & resellers', 'Applications, partners, commissions and payouts. Customers they bring are ordinary organizations; commissions come from confirmed subscription payments.') +
       '<div class="sa-grid sa-kpis">' +
-      K.kpi('Applications to review', K.fmtN(ov.applications_pending), K.fmtN(ov.applications_changes) + ' awaiting changes', { icon: 'list', tone: ov.applications_pending ? 'warn' : '' }) +
-      K.kpi('Active partners', K.fmtN(ov.partners_active), K.fmtN(ov.affiliates) + ' affiliates · ' + K.fmtN(ov.resellers) + ' resellers', { icon: 'handshake' }) +
-      K.kpi('Referred customers', K.fmtN(ov.customers), K.fmtN(ov.referrals) + ' referrals in total', { icon: 'users' }) +
-      K.kpi('Commission (' + cur + ')', money((t.pending || 0) + (t.qualified || 0) + (t.approved || 0) + (t.payable || 0) + (t.processing || 0), cur), 'unpaid · ' + money(t.paid, cur) + ' paid · ' + K.fmtN(ov.payouts_open) + ' payouts open', { icon: 'coin' }) +
+      K.kpi('Applications to review', K.fmtN(ov.applications_pending), K.fmtN(ov.applications_changes) + ' awaiting changes', { href: '#/partners?tab=applications&status=pending', icon: 'list', tone: ov.applications_pending ? 'warn' : '' }) +
+      K.kpi('Active partners', K.fmtN(ov.partners_active), K.fmtN(ov.affiliates) + ' affiliates · ' + K.fmtN(ov.resellers) + ' resellers', { href: '#/partners?tab=partners&status=active', icon: 'handshake' }) +
+      K.kpi('Referred customers', K.fmtN(ov.customers), K.fmtN(ov.referrals) + ' referrals in total', { href: '#/partners?tab=referrals&stage=customer', icon: 'users' }) +
+      K.kpi('Commission (' + cur + ')', money((t.pending || 0) + (t.qualified || 0) + (t.approved || 0) + (t.payable || 0) + (t.processing || 0), cur), 'unpaid · ' + money(t.paid, cur) + ' paid · ' + K.fmtN(ov.payouts_open) + ' payouts open', { href: '#/partners?tab=commissions', icon: 'coin' }) +
       '</div><div id="ptTabs" style="margin-top:14px"></div>';
     K.tabs($('#ptTabs', root), [['applications', 'Applications'], ['analytics', 'Analytics'], ['activity', 'Activity log'], ['partners', 'Partners'], ['tasks', 'Tasks'], ['deals', 'Deals'], ['referrals', 'Customers & referrals'],
       ['commissions', 'Commissions'], ['reversals', 'Refunds & reversals'], ['wallets', 'Wallets'], ['payouts', 'Payouts'],
@@ -87,6 +87,11 @@
     { key: 'success', type: 'select', label: 'Result', options: [['', 'Any result'], ['false', 'Failed / denied'], ['true', 'Succeeded']] },
     { key: 'via_api_key', type: 'select', label: 'Channel', options: [['', 'Portal & API'], ['true', 'API key only'], ['false', 'Portal only']] },
     { key: 'from', type: 'date', label: 'From' }, { key: 'to', type: 'date', label: 'To' }];
+  function actInitial(q) {
+    q = q || {};
+    return { kind: ['auth', 'request', 'action'].indexOf(q.kind) >= 0 ? q.kind : '', success: q.success === 'true' || q.success === 'false' ? q.success : '',
+      from: /^\d{4}-\d{2}-\d{2}$/.test(q.from || '') ? q.from : '' };
+  }
   function actParams(p, extra) { return qs(Object.assign({ page: p.page, limit: p.limit, q: p.q, email: p.email, kind: p.kind, success: p.success, via_api_key: p.via_api_key, from: p.from, to: p.to }, extra || {})); }
 
   TABS.activity = function (el, q, m) {
@@ -94,10 +99,11 @@
       '<div class="sa-card" style="margin-top:14px"><h3>Live partner sessions</h3><p class="sa-small sa-muted">Signed-in Partner Portal sessions. Ending one signs that device out immediately.</p><div id="acSess"></div></div>';
     var lv = K.listView($('#acList', el), {
       url: function (p) { $('#acCsv', el).href = B + '/activity.csv' + actParams(p, { page: null, limit: null }); return B + '/activity' + actParams(p); },
-      limit: 50, filters: ACT_FILTERS, key: 'partner_activity',
-      onData: function (d) { var s = d.summary_24h || {};
-        $('#acKpi', el).innerHTML = '<div class="sa-grid sa-kpis">' + K.kpi('Active partners · 24h', K.fmtN(s.active_partners), 'with any activity') + K.kpi('Sign-ins · 24h', K.fmtN(s.auth), K.fmtN(s.failed_logins) + ' failed', { tone: s.failed_logins ? 'warn' : '' }) +
-          K.kpi('Requests · 24h', K.fmtN(s.request), K.fmtN(s.denied) + ' denied', { tone: s.denied ? 'warn' : '' }) + K.kpi('Actions · 24h', K.fmtN(s.action), 'audited events') + '</div>'; },
+      limit: 50, filters: ACT_FILTERS, key: 'partner_activity', initial: actInitial(q),
+      onData: function (d) { var s = d.summary_24h || {}, day = '#/partners?tab=activity&from=' + isoDay(new Date(Date.now() - 864e5));
+        $('#acKpi', el).innerHTML = '<div class="sa-grid sa-kpis">' + K.kpi('Active partners · 24h', K.fmtN(s.active_partners), 'with any activity', { href: day }) + K.kpi('Sign-ins · 24h', K.fmtN(s.auth), K.fmtN(s.failed_logins) + ' failed', { href: day + '&kind=auth', tone: s.failed_logins ? 'warn' : '' }) +
+          K.kpi('Requests · 24h', K.fmtN(s.request), K.fmtN(s.denied) + ' denied', { href: day + '&kind=request', tone: s.denied ? 'warn' : '' }) + K.kpi('Actions · 24h', K.fmtN(s.action), 'audited events', { href: day + '&kind=action' }) + '</div>';
+        K.bindGo($('#acKpi', el)); },
       columns: activityColumns(true), empty: { title: 'No partner activity', desc: 'Sign-ins, portal and API requests and every partner action appear here.' } });
     sessionsList($('#acSess', el), null, m);
     return lv;
@@ -305,17 +311,18 @@
     var t = a.totals, cur = Object.keys(a.revenue_by_currency)[0] || Object.keys(a.commission_by_status)[0] || 'USD';
     var chart = function (key, title, money_) { return '<div class="sa-card"><h3>' + esc(title) + '</h3>' + K.lineChart(a.series[key], a.labels, { title: title, unit: a.unit, money: money_, currency: cur }) + '</div>'; };
     var sb = a.commission_by_status[cur] || {};
-    body.innerHTML = '<div class="sa-grid sa-kpis">' + K.kpi('Clicks', K.fmtN(t.clicks), K.fmtN(t.visitors) + ' unique visitors') + K.kpi('Signups', K.fmtN(t.referrals), K.fmtN(t.demos) + ' demos · ' + t.conversion_rate + '% conversion') +
-      K.kpi('Customers', K.fmtN(t.customers), K.fmtN(t.active_subscriptions) + ' active subscriptions') + K.kpi('Revenue', money(t.revenue, cur), 'paid invoices, net of refunds') + '</div>' +
-      '<div class="sa-grid sa-kpis">' + K.kpi('Commission earned', money(t.commission, cur), 'in period, excluding reversed') + K.kpi('Pending / approved', money((sb.pending || 0) + (sb.qualified || 0) + (sb.approved || 0), cur), money(sb.payable || 0, cur) + ' payable') +
-      K.kpi('Paid commission', money(sb.paid || 0, cur), money(sb.reversed || 0, cur) + ' reversed') + K.kpi('Payouts', K.fmtN(a.payouts.count), money(t.payouts, cur) + ' paid') + '</div>' +
+    var to = function (tab, extra) { return (st.partner_id ? '#/partners/' + encodeURIComponent(st.partner_id) + '?tab=' : '#/partners?tab=') + tab + (extra ? '&' + extra : ''); };
+    body.innerHTML = '<div class="sa-grid sa-kpis">' + K.kpi('Clicks', K.fmtN(t.clicks), K.fmtN(t.visitors) + ' unique visitors', { href: st.partner_id ? to('clicks') : '#/partners?tab=analytics&section=pt-leaderboard' }) + K.kpi('Signups', K.fmtN(t.referrals), K.fmtN(t.demos) + ' demos · ' + t.conversion_rate + '% conversion', { href: to('referrals') }) +
+      K.kpi('Customers', K.fmtN(t.customers), K.fmtN(t.active_subscriptions) + ' active subscriptions', { href: to('referrals', 'stage=customer') }) + K.kpi('Revenue', money(t.revenue, cur), 'paid invoices, net of refunds', { href: to('referrals', 'stage=customer') }) + '</div>' +
+      '<div class="sa-grid sa-kpis">' + K.kpi('Commission earned', money(t.commission, cur), 'in period, excluding reversed', { href: to('commissions') }) + K.kpi('Pending / approved', money((sb.pending || 0) + (sb.qualified || 0) + (sb.approved || 0), cur), money(sb.payable || 0, cur) + ' payable', { href: to('commissions', 'status=approved') }) +
+      K.kpi('Paid commission', money(sb.paid || 0, cur), money(sb.reversed || 0, cur) + ' reversed', { href: to('commissions', 'status=paid') }) + K.kpi('Payouts', K.fmtN(a.payouts.count), money(t.payouts, cur) + ' paid', { href: to('payouts') }) + '</div>' +
       '<div class="sa-grid sa-2" style="margin-top:14px">' + chart('clicks', 'Clicks') + chart('referrals', 'Signups') + chart('customers', 'Customers') + chart('revenue', 'Revenue', true) + chart('commission', 'Commission earned', true) + chart('payouts', 'Payouts paid', true) + '</div>' +
       '<div class="sa-card" style="margin-top:14px"><h3>Funnel</h3>' + K.barList(a.funnel.map(function (f) { return { label: K.titleCase(f.stage), value: f.count }; })) + '</div>' +
       '<div class="sa-card" style="margin-top:14px"><h3>Campaign performance</h3>' + (a.campaigns.length ? '<div class="sa-table-wrap"><table class="sa-table"><thead><tr><th>Campaign</th><th>Partner</th><th class="num">Clicks</th><th class="num">Visitors</th><th class="num">Signups</th><th class="num">Demos</th><th class="num">Customers</th><th class="num">Revenue</th><th class="num">Conv.</th></tr></thead><tbody>' +
         a.campaigns.map(function (c) { return '<tr><td><b>' + esc(c.name) + '</b> ' + pill(c.status) + '</td><td class="sa-small"><a class="sa-link" href="#/partners/' + esc(c.partner_id) + '">' + esc(K.short(c.partner_id)) + '</a></td><td class="num">' + K.fmtN(c.clicks) + '</td><td class="num">' + K.fmtN(c.visitors) + '</td><td class="num">' + K.fmtN(c.referrals) + '</td><td class="num">' + K.fmtN(c.demos) + '</td><td class="num">' + K.fmtN(c.customers) + '</td><td class="num">' + esc(money(c.revenue, cur)) + '</td><td class="num">' + esc(c.conversion_rate) + '%</td></tr>'; }).join('') + '</tbody></table></div>' : K.emptyState('No campaigns in this scope')) + '</div>' +
-      '<div class="sa-card" style="margin-top:14px"><h3>Partner leaderboard</h3><div id="anLb"></div></div>' +
+      '<div class="sa-card" style="margin-top:14px" data-section="pt-leaderboard"><h3>Partner leaderboard</h3><div id="anLb"></div></div>' +
       '<div class="sa-card" style="margin-top:14px"><div class="sa-row" style="justify-content:space-between"><h3 style="margin:0">Reconciliation with billing</h3><button type="button" class="btn btn-secondary btn-sm" id="anRec">Run check</button></div><div id="anRecOut" class="sa-small sa-muted" style="margin-top:8px">Cross-checks commissions, payouts, wallets and referral revenue against invoices and payments. Read-only.</div></div>';
-    K.bindCharts(body);
+    K.bindCharts(body); K.bindGo(body);
     K.listView($('#anLb', el), { url: function (x) { return B + '/leaderboard' + qs({ page: x.page, limit: x.limit, from: st.from, to: st.to }); },
       columns: [{ label: 'Partner', render: function (r) { return '<a class="sa-link" href="#/partners/' + esc(r.partner_id) + '">' + esc(r.name) + '</a> ' + pill(r.partner_type); } },
         { label: 'Clicks', cls: 'num', render: function (r) { return K.fmtN(r.clicks); } }, { label: 'Signups', cls: 'num', render: function (r) { return K.fmtN(r.referrals); } },
@@ -484,7 +491,7 @@
     el.innerHTML = '<div id="cmList"></div>';
     var lv = K.listView($('#cmList', el), {
       url: function (p) { return B + '/commissions' + qs({ page: p.page, limit: p.limit, sort: p.sort, status: p.status, manual: p.manual }); },
-      sort: '-created_at', initial: { status: q.status || '' }, key: 'partner_commissions',
+      sort: '-created_at', initial: { status: q.status || '', manual: q.manual === 'true' ? 'true' : '' }, key: 'partner_commissions',
       filters: [{ key: 'status', type: 'select', label: 'Status', options: COMMISSION_FILTER },
         { key: 'manual', type: 'select', label: 'Review', options: [['', 'All'], ['true', 'Needs manual review']] }],
       toolbar: '<button type="button" class="btn btn-secondary btn-sm" id="runLc">Run qualification now</button>',
@@ -563,6 +570,7 @@
       filters: [{ key: 'q', label: 'Search company, email…' }, { key: 'stage', type: 'select', label: 'Stage', options: STAGE_FILTER },
         { key: 'status', type: 'select', label: 'Status', options: [['', 'All'], ['active', 'Active'], ['invalid', 'Invalidated']] },
         { key: 'suspicious', type: 'select', label: 'Flag', options: [['', 'All'], ['true', 'Flagged']] }],
+      initial: { stage: STAGE_FILTER.some(function (x) { return x[0] && x[0] === q.stage; }) ? q.stage : '', suspicious: q.suspicious === 'true' ? 'true' : '' },
       onData: function (d) { var c = d.counts || {}; $('#rfChips', el).innerHTML = STAGE_FILTER.slice(1).map(function (s) { return '<span class="sa-chip">' + esc(s[1]) + '<b>' + K.fmtN(c[s[0]] || 0) + '</b></span>'; }).join(''); },
       columns: [
         { label: 'Customer', render: function (r) { return '<a class="sa-link" href="#/organizations/' + esc(r.organization_id) + '">' + esc(r.company || r.organization_id) + '</a><div class="sa-small sa-muted">' + esc(r.email || '') + '</div>'; } },
@@ -597,14 +605,15 @@
   TABS.fraud = async function (el, q, m) {
     var d = await api(B + '/fraud');
     var tbl = function (head, rows) { return rows.length ? '<div class="sa-table-wrap"><table class="sa-table"><thead><tr>' + head.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>' : K.emptyState('Nothing to review'); };
-    el.innerHTML = '<div class="sa-grid sa-kpis">' + K.kpi('Open fraud flags', K.fmtN(d.open_flags), 'awaiting review — financial records are held, not changed', { tone: d.open_flags ? 'warn' : '' }) + K.kpi('Flagged referrals', K.fmtN(d.flagged_referrals.length), 'same network, duplicates, conflicts', { tone: d.flagged_referrals.length ? 'warn' : '' }) +
-      K.kpi('Commissions held', K.fmtN(d.held_commissions.length), 'need manual approval') + K.kpi('Chargebacks', K.fmtN(d.chargebacks), 'on partner commissions') + K.kpi('Click floods', K.fmtN(d.click_floods.length), 'partners with rate-limited clicks') + '</div>' +
-      '<div class="sa-card" style="margin-top:14px"><h3>Review queue</h3><div id="ffList"></div></div>' +
+    el.innerHTML = '<div class="sa-grid sa-kpis">' + K.kpi('Open fraud flags', K.fmtN(d.open_flags), 'awaiting review — financial records are held, not changed', { href: '#/partners?tab=fraud&section=pt-fraud-queue', tone: d.open_flags ? 'warn' : '' }) + K.kpi('Flagged referrals', K.fmtN(d.flagged_referrals.length), 'same network, duplicates, conflicts', { href: '#/partners?tab=referrals&suspicious=true', tone: d.flagged_referrals.length ? 'warn' : '' }) +
+      K.kpi('Commissions held', K.fmtN(d.held_commissions.length), 'need manual approval', { href: '#/partners?tab=commissions&manual=true' }) + K.kpi('Chargebacks', K.fmtN(d.chargebacks), 'on partner commissions', { href: '#/partners?tab=reversals' }) + K.kpi('Click floods', K.fmtN(d.click_floods.length), 'partners with rate-limited clicks', { href: '#/partners?tab=fraud&section=pt-click-floods' }) + '</div>' +
+      '<div class="sa-card" style="margin-top:14px" data-section="pt-fraud-queue"><h3>Review queue</h3><div id="ffList"></div></div>' +
       '<div class="sa-card" style="margin-top:14px"><h3>Flagged referrals</h3>' + tbl(['Customer', 'Partner', 'Stage', 'Signal', ''], d.flagged_referrals.map(function (r, i) { return '<tr><td>' + esc(r.company || '—') + '</td><td><a class="sa-link" href="#/partners/' + esc(r.partner_id) + '">' + esc(r.partner_name || '') + '</a></td><td>' + pill(r.stage) + '</td><td>' + esc(K.titleCase(r.self_referral_flag || 'shared IP with partner')) + '</td><td class="num">' + (m.can_manage ? '<button type="button" class="btn btn-secondary btn-xs" data-f="clear" data-i="' + i + '">Clear</button><button type="button" class="btn btn-danger btn-xs" data-f="invalidate" data-i="' + i + '">Invalidate</button>' : '') + '</td></tr>'; })) + '</div>' +
       '<div class="sa-card" style="margin-top:14px"><h3>Commissions held for review</h3>' + tbl(['Partner', 'Customer', 'Amount', 'Status'], d.held_commissions.map(function (c) { return '<tr><td><a class="sa-link" href="#/partners/' + esc(c.partner_id) + '">' + esc(c.partner_name || '') + '</a></td><td>' + esc(c.company || '') + '</td><td>' + esc(money(c.amount, c.currency)) + '</td><td>' + pill(c.status) + '</td></tr>'; })) + '<p class="sa-small sa-muted">Approve them in the Commissions tab after reviewing the referral.</p></div>' +
-      '<div class="sa-card" style="margin-top:14px"><h3>Click floods</h3>' + tbl(['Partner', 'Rate-limited clicks', 'Last'], d.click_floods.map(function (f) { return '<tr><td><a class="sa-link" href="#/partners/' + esc(f.partner_id) + '?tab=clicks">' + esc(f.partner_name || '') + '</a></td><td>' + K.fmtN(f.clicks) + '</td><td>' + esc(K.fmtDT(f.last)) + '</td></tr>'; })) + '</div>' +
+      '<div class="sa-card" style="margin-top:14px" data-section="pt-click-floods"><h3>Click floods</h3>' + tbl(['Partner', 'Rate-limited clicks', 'Last'], d.click_floods.map(function (f) { return '<tr><td><a class="sa-link" href="#/partners/' + esc(f.partner_id) + '?tab=clicks">' + esc(f.partner_name || '') + '</a></td><td>' + K.fmtN(f.clicks) + '</td><td>' + esc(K.fmtDT(f.last)) + '</td></tr>'; })) + '</div>' +
       '<div class="sa-card" style="margin-top:14px"><h3>Blocked self-referrals & cross-partner probes</h3>' + tbl(['When', 'Actor', 'Details'], d.security_events.map(function (e) { return '<tr><td>' + esc(K.fmtDT(e.at || e.created_at)) + '</td><td>' + esc(e.actor_email || '—') + '</td><td class="sa-small sa-mono">' + esc(K.short(JSON.stringify(e.details || {}), 140)) + '</td></tr>'; })) + '</div>';
     $$('[data-f]', el).forEach(function (b) { b.onclick = function () { referralAction(d.flagged_referrals[+b.getAttribute('data-i')], b.getAttribute('data-f')).then(function (ok) { if (ok) TABS.fraud(el, q, m); }); }; });
+    K.bindGo(el);
     var types = {};
     K.listView($('#ffList', el), {
       url: function (p) { return B + '/fraud-flags' + qs({ page: p.page, limit: p.limit, status: p.status, type: p.type, severity: p.severity }); },
@@ -858,6 +867,7 @@
     var m = await meta();
     var p = (await api(B + '/' + encodeURIComponent(id))).partner;
     var st = p.stats || {};
+    var pdTab = function (tab, extra) { return '#/partners/' + encodeURIComponent(id) + '?tab=' + tab + (extra ? '&' + extra : ''); };
     var actions = m.can_manage ? (p.status === 'active' ? '<button type="button" class="btn btn-primary btn-sm" id="pdTask">Assign task</button>' : '') + '<button type="button" class="btn btn-secondary btn-sm" id="pdEdit">Edit</button>' +
       '<button type="button" class="btn btn-secondary btn-sm" id="pdEmail">Change email</button>' +
       '<button type="button" class="btn btn-secondary btn-sm" id="pdPw">Set password</button>' +
@@ -865,10 +875,10 @@
       '<button type="button" class="btn btn-secondary btn-sm" id="pdSignout">Force sign-out' + (p.active_sessions ? ' (' + p.active_sessions + ')' : '') + '</button>' +
       (p.status === 'active' ? '<button type="button" class="btn btn-danger btn-sm" id="pdSuspend">Suspend</button>' : '<button type="button" class="btn btn-primary btn-sm" id="pdReactivate">Reactivate</button>') : '';
     root.innerHTML = '<p><a class="sa-link" href="#/partners?tab=partners">← Partners</a></p>' + K.header(p.company || p.name, p.name + ' · ' + p.email + ' · partner since ' + K.fmtDate(p.approved_at), actions) +
-      '<div class="sa-grid sa-kpis">' + K.kpi('Clicks', K.fmtN(st.clicks), '', { icon: 'bolt' }) + K.kpi('Referrals', K.fmtN(st.referrals), K.fmtN(st.customers) + ' customers', { icon: 'users' }) +
-      K.kpi('Revenue generated', money(st.revenue), '', { icon: 'chart' }) + K.kpi('Commission', money(st.commission), 'excluding reversed', { icon: 'coin' }) + '</div>' +
+      '<div class="sa-grid sa-kpis">' + K.kpi('Clicks', K.fmtN(st.clicks), '', { href: pdTab('clicks'), icon: 'bolt' }) + K.kpi('Referrals', K.fmtN(st.referrals), K.fmtN(st.customers) + ' customers', { href: pdTab('referrals'), icon: 'users' }) +
+      K.kpi('Revenue generated', money(st.revenue), 'from referred customers', { href: pdTab('referrals', 'stage=customer'), icon: 'chart' }) + K.kpi('Commission', money(st.commission), 'excluding reversed', { href: pdTab('commissions'), icon: 'coin' }) + '</div>' +
       (function () { var a = p.activity || {}; return '<div class="sa-grid sa-kpis" style="margin-top:10px">' + K.kpi('Last sign-in', a.last_login_at ? K.ago(a.last_login_at) : 'Never', a.last_activity_at ? 'last active ' + K.ago(a.last_activity_at) : '', { href: '#/partners/' + id + '?tab=activity' }) +
-        K.kpi('Requests · 30d', K.fmtN(a.requests_30d), K.fmtN(a.api_calls_30d) + ' via API key') + K.kpi('Failed sign-ins · 30d', K.fmtN(a.failed_logins_30d), K.fmtN(a.denied_30d) + ' denied requests', { tone: (a.failed_logins_30d || a.denied_30d) ? 'warn' : '' }) +
+        K.kpi('Requests · 30d', K.fmtN(a.requests_30d), K.fmtN(a.api_calls_30d) + ' via API key', { href: pdTab('activity', 'kind=request') }) + K.kpi('Failed sign-ins · 30d', K.fmtN(a.failed_logins_30d), K.fmtN(a.denied_30d) + ' denied requests', { href: pdTab('activity', 'success=false'), tone: (a.failed_logins_30d || a.denied_30d) ? 'warn' : '' }) +
         K.kpi('Deals', K.fmtN((p.deals || {}).registered || 0) + ' to review', K.fmtN((p.deals || {}).approved || 0) + ' approved · ' + K.fmtN((p.deals || {}).won || 0) + ' won', { href: '#/partners/' + id + '?tab=deals' }) + '</div>'; })() +
       (function () { var t = p.tasks || {}; return '<div class="sa-grid sa-kpis" style="margin-top:10px">' + K.kpi('Tasks to review', K.fmtN(t.submitted || 0), 'submitted by the partner', { href: '#/partners/' + id + '?tab=tasks&status=submitted', tone: t.submitted ? 'warn' : '' }) +
         K.kpi('Open tasks', K.fmtN((t.open || 0) + (t.in_progress || 0)), K.fmtN(t.in_progress || 0) + ' in progress', { href: '#/partners/' + id + '?tab=tasks' }) + K.kpi('Tasks done', K.fmtN(t.done || 0), 'approved by LeadAI', { href: '#/partners/' + id + '?tab=tasks&status=done' }) + '</div>'; })() +
@@ -878,7 +888,7 @@
       if (key === 'activity') {
         el.innerHTML = '<div class="sa-row" style="justify-content:flex-end"><a class="btn btn-secondary btn-sm" id="pdCsv" download>⤓ Export CSV</a></div><div id="pdAct"></div>';
         return K.listView($('#pdAct', el), { url: function (x) { $('#pdCsv', el).href = B + '/activity.csv' + actParams(x, { page: null, limit: null, partner_id: id }); return B + '/activity' + actParams(x, { partner_id: id }); },
-          limit: 50, filters: ACT_FILTERS, columns: activityColumns(false), empty: { title: 'No activity yet' } });
+          limit: 50, filters: ACT_FILTERS, initial: actInitial(q), columns: activityColumns(false), empty: { title: 'No activity yet' } });
       }
       if (key === 'sessions') return sessionsList(el, id, m);
       if (key === 'tasks') return taskList(el, m, { id: id, name: p.company || p.name }, q.status);
@@ -923,6 +933,7 @@
         K.listView(el, {
           url: function (x) { return B + '/' + id + '/referrals' + qs({ page: x.page, limit: x.limit, stage: x.stage }); },
           filters: [{ key: 'stage', type: 'select', label: 'Stage', options: STAGE_FILTER }],
+          initial: { stage: STAGE_FILTER.some(function (x) { return x[0] && x[0] === q.stage; }) ? q.stage : '' },
           columns: [
             { label: 'Organization', render: function (r) { return '<a class="sa-link" href="#/organizations/' + esc(r.organization_id) + '">' + esc(r.company || r.organization_id) + '</a><div class="sa-small sa-muted">' + esc(r.email || '') + '</div>'; } },
             { label: 'Source', render: function (r) { return esc(K.titleCase(r.source)) + (r.managed ? ' ' + K.badge('Managed', 'info') : '') + (r.suspicious ? ' ' + K.badge('Suspicious', 'warning') : ''); } },
@@ -934,7 +945,7 @@
           ], empty: { title: 'No referrals yet' } });
       } else if (key === 'commissions') {
         K.listView(el, { url: function (x) { return B + '/' + id + '/commissions' + qs({ page: x.page, limit: x.limit, status: x.status }); },
-          filters: [{ key: 'status', type: 'select', label: 'Status', options: COMMISSION_FILTER }],
+          filters: [{ key: 'status', type: 'select', label: 'Status', options: COMMISSION_FILTER }], initial: { status: COMMISSION_FILTER.some(function (x) { return x[0] && x[0] === q.status; }) ? q.status : '' },
           columns: commissionColumns(false), bindRow: bindCommission, empty: { title: 'No commissions yet' } });
       } else if (key === 'payouts') {
         K.listView(el, { url: function (x) { return B + '/' + id + '/payouts' + qs({ page: x.page, limit: x.limit }); }, columns: payoutColumns(false), bindRow: bindPayout, empty: { title: 'No payouts yet' } });

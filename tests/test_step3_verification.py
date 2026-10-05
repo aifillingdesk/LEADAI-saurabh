@@ -282,7 +282,9 @@ def _tenant_routes():
 _TOKEN_ROUTES = {"/api/invitations/{token}", "/api/invitations/{token}/accept",
                  "/api/invitations/{token}/register"}
 # Path params that are enumerations, not ids — covered by the list sweeps.
-_KIND_ROUTES = {"/api/org-admin/data/{kind}", "/api/org-admin/exports/{kind}.csv"}
+_KIND_ROUTES = {"/api/org-admin/data/{kind}", "/api/org-admin/exports/{kind}.csv",
+                "/api/org-admin/integrations/api-keys/{provider}",
+                "/api/org-admin/integrations/api-keys/{provider}/test"}
 
 _BODIES = {
     ("PATCH", "/api/leads/{lead_id}"): {"lead_status": "contacted"},
