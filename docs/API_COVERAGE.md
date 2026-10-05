@@ -60,6 +60,20 @@ Default add-ons per month, with yearly = ×10:
 - **Write-only:** no API response, log, audit entry or email ever contains a key. Responses carry only a masked hint (`apif…7890`) and status.
 - **Verification:** keys are tested with the provider when saved. A key that fails the test is saved but marked unverified.
 
+## Super Admin → API keys
+
+One page (`/super-admin#/provider-keys`) for both kinds of keys.
+
+**Keys LeadAI provides.** Every organization on LeadAI-provided Apify or Gemini runs on these.
+
+- **Replace:** the new key is tested with the provider first; a key that fails is refused unless the Super Admin ticks "Save anyway". A reason is required and audited.
+- **Storage:** a key saved here overrides the server environment (`APIFY_API_TOKEN` / `GEMINI_API_KEY`) and is stored encrypted. If it can no longer be decrypted (the encryption key changed), the environment value is used and an error is logged.
+- **Use the server key:** removes the saved key so the environment's applies again. Refused when the environment has none, because every customer on LeadAI-provided would stop.
+- **Gemini:** replacing or successfully testing the key closes LeadAI's shared Gemini circuit breaker, so AI resumes at once.
+- The page shows where each key comes from, its last test and how many organizations run on it.
+
+**Customers' own keys.** A list of organizations using their own keys, with a "Needs attention" filter (an API on "own" without a working key). Per API the Super Admin can set or replace the key (for example one the customer sent to support), test it, remove it, or switch the API between LeadAI and the customer's own key. Setting a key notifies the organization's admins; the key is encrypted and never shown again.
+
 ## At run time
 
 - **One resolver:** `resolve_api_key(org_id, "apify" | "gemini")` (`app/services/tenant_api_keys.py`) is used by the scraper, URL search, background jobs and the AI step.
@@ -79,6 +93,7 @@ Default add-ons per month, with yearly = ×10:
 | `GET /api/org-admin/integrations/api-keys` | org owner/admin (members read-only) |
 | `PUT /api/org-admin/integrations/api-keys/{apify\|gemini}` `{key}` · `POST …/{provider}/test` · `DELETE …/{provider}` | org owner/admin |
 | `PUT /api/org-admin/integrations/api-coverage` `{apify?, gemini?}` | org owner/admin |
-| `GET` / `PUT /api/super-admin/organizations/{id}/api-coverage` · `DELETE …/api-keys/{provider}` | Super Admin |
+| `GET` / `PUT /api/super-admin/organizations/{id}/api-coverage` · `PUT` / `DELETE …/api-keys/{provider}` · `POST …/api-keys/{provider}/test` | Super Admin |
+| `GET /api/super-admin/provider-keys?show=own\|problems\|all&q=` · `PUT` / `DELETE /api/super-admin/provider-keys/platform/{provider}` · `POST …/platform/{provider}/test` | Super Admin |
 | `GET /api/super-admin/subscriptions?coverage=…` · `dashboard.api_coverage` | Super Admin |
 | `GET /api/partner/v1/sales`: `coverage_options` with customer price and commission | partner |

@@ -748,7 +748,7 @@
     if (cov) {
       var covTotal = COVERAGE_OPTS.reduce(function (a, x) { return a + (cov[x[0]] || 0); }, 0);
       var covSub = { all_included: 'LeadAI provides Apify and Gemini', own_apify: 'own Apify · LeadAI Gemini', own_gemini: 'LeadAI Apify · own Gemini', own_both: 'own Apify and Gemini keys' };
-      html += '<div class="sa-card sa-section" data-section="api-coverage"><h3><span>Who provides the APIs <span class="sa-small sa-muted">organizations · Apify (scraping) &amp; Gemini (AI)</span></span><a class="sa-link" href="#/subscriptions?tab=all">Subscriptions →</a></h3>' +
+      html += '<div class="sa-card sa-section" data-section="api-coverage"><h3><span>Who provides the APIs <span class="sa-small sa-muted">organizations · Apify (scraping) &amp; Gemini (AI)</span></span><span class="sa-row"><a class="sa-link" href="#/provider-keys">Manage API keys →</a><a class="sa-link" href="#/subscriptions?tab=all">Subscriptions →</a></span></h3>' +
         '<div class="sa-grid sa-kpis">' + COVERAGE_OPTS.map(function (x) {
           var n = cov[x[0]] || 0;
           return kpi(x[1], fmtN(n), esc(covSub[x[0]]) + (covTotal ? ' · ' + Math.round(n * 100 / covTotal) + '%' : ''), { href: '#/subscriptions?coverage=' + x[0], icon: x[0] === 'all_included' ? 'layers' : 'key' });
@@ -933,8 +933,132 @@
     if (k.last_error) return ['failed', k.verified ? 'Verified · last call failed' : 'Not working'];
     return k.verified ? ['active', 'Verified'] : ['pending', 'Not verified'];
   }
+  /* API key dialogs shared by the "API keys" page and an organization's "API keys & plan" tab.
+     A key is typed into a password field that is never prefilled and leaves the page with its
+     dialog; every response carries masked hints only (e.g. apif…7890). */
+  function orgBase(orgId) { return '/api/super-admin/organizations/' + encodeURIComponent(orgId); }
+  function keyField(id, label) {
+    return '<div class="sa-field"><label for="' + id + '">' + esc(label || 'New key') + ' *</label><div class="sa-keyin">' +
+      '<input class="form-input sa-mono" type="password" id="' + id + '" name="key" autocomplete="new-password" spellcheck="false" autocapitalize="off" autocorrect="off" maxlength="500" required>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-reveal="' + id + '" aria-pressed="false" aria-label="Show the key while typing">Show</button></div>' +
+      '<span class="hint">Stored encrypted and never shown again — only a masked hint such as apif…7890.</span></div>';
+  }
+  function reasonField(id, hint) {
+    return '<div class="sa-field"><label for="' + id + '">Reason *</label><textarea class="form-textarea" id="' + id + '" name="reason" rows="2" maxlength="300" required style="min-height:64px"></textarea>' +
+      '<span class="hint">' + esc(hint || 'Recorded in the audit log.') + '</span></div>';
+  }
+  function bindReveal(form) {
+    $$('[data-reveal]', form).forEach(function (b) {
+      b.onclick = function () {
+        var inp = $('#' + b.getAttribute('data-reveal'), form), show = inp.type === 'password';
+        inp.type = show ? 'text' : 'password';
+        b.textContent = show ? 'Hide' : 'Show'; b.setAttribute('aria-pressed', String(show));
+      };
+    });
+  }
+  function needReason(fd) {
+    var reason = String(fd.get('reason') || '').trim();
+    if (reason.length < 3) throw new Error('Enter a reason of at least 3 characters.');
+    return reason;
+  }
+  function needKey(fd, name) {
+    var key = String(fd.get('key') || '').trim();
+    if (!key) throw new Error('Paste the new ' + name + ' key.');
+    return key;
+  }
+  function testToast(name, t) {
+    t = t || {};
+    if (t.valid) toast(name + ' accepted the key — it works' + (t.username ? ' (account ' + t.username + ')' : ''));
+    else toast(name + ' rejected the key: ' + (t.detail || t.message || 'the test failed'), 'error');
+  }
+  /** Set or replace an organization's own key (tested, encrypted; its admins are notified). -> response|null */
+  async function orgKeyDialog(orgId, orgName, a, k, own) {
+    var name = API_SHORT[a], has = !!(k && k.configured), who = orgName || 'the organization';
+    var res = await openModal({ title: (has ? 'Replace ' : 'Set ') + name + ' key · ' + (orgName || 'organization'), submitLabel: has ? 'Replace key' : 'Save key', body:
+      '<p style="margin:0;color:var(--text-secondary)">' + esc('Saves ' + who + '\'s own ' + API_LABEL[a] + ' key for them' + (has ? ', replacing ' + (k.hint || 'the saved key') : '') +
+        ' — for example a key they sent to support. ' + name + ' tests it first; it is saved even when the test fails, and the status shows the result.' +
+        (own ? '' : ' Saving a key does not change who provides ' + name + ' — LeadAI keeps providing it until you switch to the own key.')) + '</p>' +
+      '<div class="alert alert-info"><div class="alert-body">The organization\'s admins are notified (in the app and by email), including your reason.</div></div>' +
+      keyField('okKey', 'New ' + name + ' key') + reasonField('okReason', 'Recorded in the audit log and included in the notice to the organization\'s admins.'),
+      onOpen: bindReveal,
+      onSubmit: function (f, fd) {
+        var key = needKey(fd, name), reason = needReason(fd);
+        return api(orgBase(orgId) + '/api-keys/' + encodeURIComponent(a), { method: 'PUT', body: { key: key, reason: reason } });
+      } });
+    if (!res) return null;
+    var t = res.test || {};
+    toast(t.valid ? name + ' key saved and verified — the organization\'s admins were notified'
+      : name + ' key saved, but ' + name + ' rejected it: ' + (t.detail || 'the test failed') + '. The admins were notified.', t.valid ? 'success' : 'warning');
+    return res;
+  }
+  /** Test an organization's saved key again. -> response */
+  async function orgKeyTest(orgId, a, btn) {
+    var res = await busy(btn, function () { return api(orgBase(orgId) + '/api-keys/' + encodeURIComponent(a) + '/test', { method: 'POST' }); });
+    testToast(API_SHORT[a], res.test);
+    return res;
+  }
+  /** Remove an organization's own key (e.g. reported compromised); its admins are notified. -> response|null */
+  async function orgKeyRemove(orgId, orgName, a, k, own) {
+    var name = API_SHORT[a];
+    var r = await openModal({ title: 'Remove ' + name + ' key', submitLabel: 'Remove key', danger: true, body:
+      '<p style="margin:0;color:var(--text-secondary)">' + esc('Deletes the saved ' + API_LABEL[a] + ' key (' + ((k && k.hint) || 'masked') + ') of ' + (orgName || 'this organization') + ' — for example when it was reported compromised. The organization\'s admins are notified.' +
+        (own ? ' ' + name + ' work stops until they save a new key or switch to LeadAI-provided.' : '')) + '</p>' +
+      reasonField('rkReason', 'Recorded in the audit log and included in the notice to the organization\'s admins.'),
+      onSubmit: function (f, fd) {
+        return api(orgBase(orgId) + '/api-keys/' + encodeURIComponent(a), { method: 'DELETE', body: { reason: needReason(fd) } });
+      } });
+    if (!r) return null;
+    toast(name + ' key removed — the organization\'s admins were notified');
+    return r;
+  }
+  /** Switch who provides one API. `it` = the organization's coverage summary (GET …/api-coverage). -> response|null */
+  async function switchCoverageDialog(orgId, orgName, it, a, to) {
+    var keys = it.keys || {}, plan = it.plan || {}, sub = it.subscription, cur = plan.currency || 'USD', addons = plan.addons || {};
+    var name = API_SHORT[a], k = keys[a] || {}, toOwn = to === 'own';
+    var cycleTxt = function (c) { return c === 'yearly' ? 'year' : 'month'; };
+    var noKey = toOwn && !(k.configured && k.verified);
+    var res = await openModal({ title: toOwn ? 'Switch ' + name + ' to the customer\'s own key' : 'Switch ' + name + ' to LeadAI-provided', submitLabel: 'Switch', danger: noKey, body:
+      '<p style="margin:0;color:var(--text-secondary)">' + esc(toOwn
+        ? (orgName || 'The organization') + ' will use its own ' + API_LABEL[a] + ' key and LeadAI stops providing it. Their price drops by ' + fmtMoney((addons[a] || {})[sub ? sub.billing_cycle || 'monthly' : 'monthly'], cur) + ' from the next renewal.'
+        : 'LeadAI provides ' + API_LABEL[a] + ' for ' + (orgName || 'the organization') + ' again (included in the plan price). If their subscription was paid for an own key, the customer normally completes checkout at the higher price first.') + '</p>' +
+      (noKey ? '<div class="alert alert-warning"><div class="alert-body"><div class="alert-title">No verified ' + esc(name) + ' key is saved.</div><div>Without the courtesy option the switch is refused. With it, ' + esc(name) + ' work stops until the customer saves a working key.</div></div></div>' : '') +
+      '<div class="sa-field"><label for="cvReason">Reason *</label><textarea class="form-textarea" id="cvReason" name="reason" rows="3" maxlength="300" required style="min-height:70px"></textarea><span class="hint">Recorded in the audit log.</span></div>' +
+      '<label class="sa-check"><input type="checkbox" name="force"> Apply now without payment (courtesy)</label>' +
+      '<span class="sa-small sa-muted" style="margin-top:-6px">Skips checkout and the customer rules; audited with your reason.</span>' +
+      '<div data-cvres role="status" aria-live="polite"></div>',
+      onSubmit: async function (f, fd) {
+        var body = { reason: needReason(fd), force: !!fd.get('force') }; body[a] = to;
+        var out = await api(orgBase(orgId) + '/api-coverage', { method: 'PUT', body: body });
+        if (out.status === 'checkout_required') {
+          $('[data-cvres]', f).innerHTML = '<div class="alert alert-warning"><div class="alert-body"><div class="alert-title">Checkout required — nothing changed</div><div>' + esc(out.message || 'The customer must pay the new price first.') + '</div>' +
+            (out.new_price != null ? '<div>New price: <b>' + esc(fmtMoney(out.new_price, out.currency || cur)) + '</b> / ' + esc(cycleTxt(out.billing_cycle)) + '</div>' : '') +
+            '<div>Tick “Apply now without payment (courtesy)” to grant it anyway.</div></div></div>';
+          return false;
+        }
+        return out;
+      } });
+    if (!res) return null;
+    toast(res.status === 'unchanged' ? 'Nothing changed — ' + name + ' already works that way' : name + ': ' + (toOwn ? 'own key' : 'LeadAI-provided') + (res.status === 'scheduled' ? ' (price drops at renewal)' : '') + (res.message ? ' — ' + res.message : ''), res.status === 'unchanged' ? 'info' : 'success');
+    return res;
+  }
+  // stat boxes whose href is an in-page "#section" scroll to that [data-section] card (inside `scope`) instead of navigating
+  function bindScrollKpis(el, scope) {
+    $$('[data-go]', el).forEach(function (b) {
+      var target = b.getAttribute('data-go');
+      if (target.charAt(0) !== '#' || target.charAt(1) === '/') return;
+      b._go = true;
+      b.setAttribute('aria-label', b.textContent.replace(/\s+/g, ' ').trim() + ' — show details');
+      b.addEventListener('click', function (e) {
+        e.preventDefault();
+        var card = $$('[data-section]', scope || el).filter(function (x) { return x.getAttribute('data-section') === target.slice(1); })[0];
+        if (!card) return;
+        card.scrollIntoView({ block: 'start', behavior: window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+        card.focus({ preventScroll: true });
+      });
+    });
+  }
   async function orgApiCoverage(el, orgId, orgName, after) {
-    var base = '/api/super-admin/organizations/' + encodeURIComponent(orgId);
+    var base = orgBase(orgId);
     var it = (await api(base + '/api-coverage')).integrations || {};
     var cov = it.coverage || {}, keys = it.keys || {}, plan = it.plan || {}, sub = it.subscription, cur = plan.currency || 'USD';
     var curKey = coverageKey(cov), addons = plan.addons || {};
@@ -959,7 +1083,9 @@
         (k.last_error ? '<dt>Last error</dt><dd style="color:var(--danger-text)">' + esc(k.last_error) + '</dd>' : '') +
         (k.updated_at ? '<dt>Key updated</dt><dd>' + esc(fmtDT(k.updated_at)) + '</dd>' : '') +
         '<dt>Own-key saving</dt><dd>' + (plan.allows_own_keys ? esc(fmtMoney(ad.monthly, cur) + ' / month · ' + fmtMoney(ad.yearly, cur) + ' / year') : '<span class="sa-muted">Own keys not allowed on this plan</span>') + '</dd></dl>' +
-        '<div class="sa-row sa-section"><button type="button" class="btn btn-secondary btn-sm" data-cov="' + a + '" data-to="' + (own ? 'leadai' : 'own') + '">' + (own ? 'Switch to LeadAI-provided' : 'Switch to own key') + '</button>' +
+        '<div class="sa-row sa-section"><button type="button" class="btn btn-primary btn-sm" data-setkey="' + a + '">' + (k.configured ? 'Replace key' : 'Set key') + '</button>' +
+        (k.configured ? '<button type="button" class="btn btn-secondary btn-sm" data-testkey="' + a + '">Test</button>' : '') +
+        '<button type="button" class="btn btn-secondary btn-sm" data-cov="' + a + '" data-to="' + (own ? 'leadai' : 'own') + '">' + (own ? 'Switch to LeadAI-provided' : 'Switch to own key') + '</button>' +
         (k.configured ? '<button type="button" class="btn btn-danger btn-sm" data-rmkey="' + a + '">Remove key</button>' : '') + '</div></div>';
     }).join('') + '</div>';
     var opts = it.options || [];
@@ -977,71 +1103,23 @@
         }).join('') + '</tbody></table></div>' : emptyState('No prices', 'The organization has no plan yet.')) +
       '<p class="sa-small sa-muted" style="margin:8px 0 0">Bringing an own key applies at once and the lower price starts at the next renewal. LeadAI providing an API the customer did not pay for needs checkout — or your courtesy override.</p></div></div></div>';
     el.innerHTML = html;
-    // in-tab stat boxes scroll to their card instead of navigating
-    $$('[data-go]', el).forEach(function (b) {
-      var target = b.getAttribute('data-go');
-      if (target.charAt(0) !== '#' || target.charAt(1) === '/') return;
-      b._go = true;
-      b.setAttribute('aria-label', b.textContent.replace(/\s+/g, ' ').trim() + ' — show details');
-      b.addEventListener('click', function (e) {
-        e.preventDefault();
-        var card = $$('[data-section]', el).filter(function (x) { return x.getAttribute('data-section') === target.slice(1); })[0];
-        if (!card) return;
-        card.scrollIntoView({ block: 'start', behavior: window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-        card.focus({ preventScroll: true });
-      });
+    bindScrollKpis(el);
+    var fail = function (e) { toast(e.message, 'error'); };
+    var done = function (r) { if (r && after) after(); };
+    $$('[data-setkey]', el).forEach(function (b) {
+      var a = b.getAttribute('data-setkey');
+      b.onclick = function () { orgKeyDialog(orgId, orgName, a, keys[a], cov[a] === 'own').then(done, fail); };
+    });
+    $$('[data-testkey]', el).forEach(function (b) {
+      b.onclick = function () { orgKeyTest(orgId, b.getAttribute('data-testkey'), b).then(done, fail); };
     });
     $$('[data-cov]', el).forEach(function (b) {
-      b.onclick = function () { switchCoverage(b.getAttribute('data-cov'), b.getAttribute('data-to')).catch(function (e) { toast(e.message, 'error'); }); };
+      b.onclick = function () { switchCoverageDialog(orgId, orgName, it, b.getAttribute('data-cov'), b.getAttribute('data-to')).then(done, fail); };
     });
     $$('[data-rmkey]', el).forEach(function (b) {
-      b.onclick = function () { removeKey(b.getAttribute('data-rmkey')).catch(function (e) { toast(e.message, 'error'); }); };
+      var a = b.getAttribute('data-rmkey');
+      b.onclick = function () { orgKeyRemove(orgId, orgName, a, keys[a], cov[a] === 'own').then(done, fail); };
     });
-
-    async function switchCoverage(a, to) {
-      var name = API_SHORT[a], k = keys[a] || {}, toOwn = to === 'own';
-      var noKey = toOwn && !(k.configured && k.verified);
-      var res = await openModal({ title: toOwn ? 'Switch ' + name + ' to the customer\'s own key' : 'Switch ' + name + ' to LeadAI-provided', submitLabel: 'Switch', danger: noKey, body:
-        '<p style="margin:0;color:var(--text-secondary)">' + esc(toOwn
-          ? (orgName || 'The organization') + ' will use its own ' + API_LABEL[a] + ' key and LeadAI stops providing it. Their price drops by ' + fmtMoney((addons[a] || {})[sub ? sub.billing_cycle || 'monthly' : 'monthly'], cur) + ' from the next renewal.'
-          : 'LeadAI provides ' + API_LABEL[a] + ' for ' + (orgName || 'the organization') + ' again (included in the plan price). If their subscription was paid for an own key, the customer normally completes checkout at the higher price first.') + '</p>' +
-        (noKey ? '<div class="alert alert-warning"><div class="alert-body"><div class="alert-title">No verified ' + esc(name) + ' key is saved.</div><div>Without the courtesy option the switch is refused. With it, ' + esc(name) + ' work stops until the customer saves a working key.</div></div></div>' : '') +
-        '<div class="sa-field"><label for="cvReason">Reason *</label><textarea class="form-textarea" id="cvReason" name="reason" rows="3" maxlength="300" required style="min-height:70px"></textarea><span class="hint">Recorded in the audit log.</span></div>' +
-        '<label class="sa-check"><input type="checkbox" name="force"> Apply now without payment (courtesy)</label>' +
-        '<span class="sa-small sa-muted" style="margin-top:-6px">Skips checkout and the customer rules; audited with your reason.</span>' +
-        '<div data-cvres role="status" aria-live="polite"></div>',
-        onSubmit: async function (f, fd) {
-          var reason = String(fd.get('reason') || '').trim();
-          if (reason.length < 3) throw new Error('Enter a reason of at least 3 characters.');
-          var body = { reason: reason, force: !!fd.get('force') }; body[a] = to;
-          var out = await api(base + '/api-coverage', { method: 'PUT', body: body });
-          if (out.status === 'checkout_required') {
-            $('[data-cvres]', f).innerHTML = '<div class="alert alert-warning"><div class="alert-body"><div class="alert-title">Checkout required — nothing changed</div><div>' + esc(out.message || 'The customer must pay the new price first.') + '</div>' +
-              (out.new_price != null ? '<div>New price: <b>' + esc(fmtMoney(out.new_price, out.currency || cur)) + '</b> / ' + esc(cycleTxt(out.billing_cycle)) + '</div>' : '') +
-              '<div>Tick “Apply now without payment (courtesy)” to grant it anyway.</div></div></div>';
-            return false;
-          }
-          return out;
-        } });
-      if (!res) return;
-      toast(res.status === 'unchanged' ? 'Nothing changed — ' + name + ' already works that way' : name + ': ' + (to === 'own' ? 'own key' : 'LeadAI-provided') + (res.status === 'scheduled' ? ' (price drops at renewal)' : '') + (res.message ? ' — ' + res.message : ''), res.status === 'unchanged' ? 'info' : 'success');
-      if (after) after();
-    }
-    async function removeKey(a) {
-      var name = API_SHORT[a], k = keys[a] || {};
-      var r = await openModal({ title: 'Remove ' + name + ' key', submitLabel: 'Remove key', danger: true, body:
-        '<p style="margin:0;color:var(--text-secondary)">' + esc('Deletes the saved ' + API_LABEL[a] + ' key (' + (k.hint || 'masked') + ') of ' + (orgName || 'this organization') + ' — for example when it was reported compromised. The organization\'s admins are notified.' +
-          (cov[a] === 'own' ? ' ' + name + ' work stops until they save a new key or switch to LeadAI-provided.' : '')) + '</p>' +
-        '<div class="sa-field"><label for="rkReason">Reason *</label><textarea class="form-textarea" id="rkReason" name="reason" rows="3" maxlength="300" required style="min-height:70px"></textarea><span class="hint">Recorded in the audit log and included in the notice to the organization\'s admins.</span></div>',
-        onSubmit: function (f, fd) {
-          var reason = String(fd.get('reason') || '').trim();
-          if (reason.length < 3) throw new Error('Enter a reason of at least 3 characters.');
-          return api(base + '/api-keys/' + encodeURIComponent(a), { method: 'DELETE', body: { reason: reason } });
-        } });
-      if (!r) return;
-      toast(name + ' key removed — the organization\'s admins were notified');
-      if (after) after();
-    }
   }
 
   async function viewOrganizations(root, q) {
@@ -1812,6 +1890,263 @@
       '<div class="sa-grid sa-3" id="prCards"></div>';
     $$('[data-c]', root).forEach(function (b) { b.onclick = function () { cycle = b.getAttribute('data-c'); $$('[data-c]', root).forEach(function (x) { x.classList.toggle('active', x === b); }); render(); }; });
     render();
+  }
+
+  // ════════════════════════════════════════════════════════
+  //  API KEYS — the Apify / Gemini keys LeadAI provides to customers, and the
+  //  customers' own keys. Keys never reach the browser: masked hints only.
+  // ════════════════════════════════════════════════════════
+  var PK_SHOW = [['own', 'Using own keys'], ['problems', 'Needs attention'], ['all', 'All organizations']];
+  var PK_SOURCE = { saved: ['Saved in LeadAI', 'primary'], environment: ['Server environment', 'info'], not_set: ['Not set', 'danger'] };
+  function pkUrl(a) { return '/api/super-admin/provider-keys/platform/' + encodeURIComponent(a); }
+  // platform key times arrive as naive ISO strings in UTC (no offset): read them as UTC, not local time
+  function pkUtc(v) { return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+$/.test(v) ? v + 'Z' : v; }
+  function pkOrgs(n) { return fmtN(n || 0) + ' organization' + (n === 1 ? '' : 's'); }
+  function pkState(p) { // -> [tone, short status]
+    if (!p || !p.set) return ['bad', 'not set'];
+    if (!p.last_test) return ['warn', 'not tested yet'];
+    return p.last_test.valid ? ['ok', 'working'] : ['bad', 'last test failed'];
+  }
+  /** An organization's own key: Verified / Not verified / Error (last error in the tooltip) / No key. */
+  function orgKeyPill(k, own) {
+    if (!k || !k.configured) return own ? pill('failed', 'No key') : badge('No key', 'neutral');
+    if (k.last_error) return '<span class="sa-pk-err" title="' + esc(k.last_error) + '">' + pill('failed', 'Error') + '<span class="sr-only">: ' + esc(k.last_error) + '</span></span>';
+    return k.verified ? pill('active', 'Verified') : pill('pending', 'Not verified');
+  }
+  function pkCard(a, p) {
+    var name = API_SHORT[a], src = PK_SOURCE[p.source] || PK_SOURCE.not_set, lt = p.last_test, orgs = pkOrgs(p.organizations_using);
+    return '<div class="sa-card sa-pk-card' + (pkState(p)[0] === 'bad' ? ' bad' : '') + '" data-section="pk-' + a + '" tabindex="-1">' +
+      '<h3><span>' + esc(API_LABEL[a]) + '</span>' + badge(src[0], src[1]) + '</h3>' +
+      (!p.set ? '<div class="alert alert-danger"><div class="alert-body"><div class="alert-title">No ' + esc(name) + ' key is set</div><div>' + esc('Every customer on LeadAI-provided ' + name + ' (' + orgs + ') is stopped until you add one.') + '</div></div></div>'
+        : lt && !lt.valid ? '<div class="alert alert-danger"><div class="alert-body"><div class="alert-title">The last test failed</div><div>' + esc('Customers on LeadAI-provided ' + name + ' (' + orgs + ') may be failing. Replace the key, or test again once ' + name + ' is reachable.') + '</div></div></div>' : '') +
+      '<dl class="sa-kv"><dt>Key</dt><dd>' + (p.set ? '<span class="sa-mono" title="Masked — the key itself is never shown">' + esc(p.hint) + '</span>' : '<span class="sa-muted">None</span>') + '</dd>' +
+      '<dt>Comes from</dt><dd>' + (p.source === 'saved' ? 'Saved in LeadAI <span class="sa-small sa-muted">(encrypted)</span>'
+        : p.source === 'environment' ? 'Server environment <span class="sa-mono">(' + esc(p.env_name) + ')</span>'
+        : '<span class="sa-pk-bad"><b>Not set</b> — not saved in LeadAI and no ' + esc(p.env_name) + ' on the server</span>') + '</dd>' +
+      (p.source === 'saved' ? '<dt>Server key</dt><dd>' + (p.environment_set
+        ? '<span class="sa-mono">' + esc(p.environment_hint) + '</span> <span class="sa-small sa-muted">' + esc(p.env_name) + ' · overridden by the saved key</span>'
+        : '<span class="sa-muted">None — ' + esc(p.env_name) + ' is not set on the server</span>') + '</dd>' : '') +
+      (p.source === 'saved' && (p.updated_at || p.updated_by) ? '<dt>Updated</dt><dd>' + esc(fmtDT(pkUtc(p.updated_at))) + (p.updated_by ? ' <span class="sa-small sa-muted">by ' + esc(p.updated_by) + '</span>' : '') + '</dd>' : '') +
+      '<dt>Last test</dt><dd>' + (lt ? pill(lt.valid ? 'active' : 'failed', lt.valid ? 'Working' : 'Failed') + ' <span class="sa-small sa-muted" title="' + esc(fmtDT(pkUtc(lt.tested_at))) + '">' + esc(ago(pkUtc(lt.tested_at))) + '</span>' +
+        (!lt.valid && lt.detail ? '<div class="sa-small sa-pk-bad">' + esc(lt.detail) + '</div>' : '') : '<span class="sa-muted">Not tested yet</span>') + '</dd>' +
+      '<dt>Used by</dt><dd><b>' + esc(orgs) + '</b> run on this key</dd></dl>' +
+      '<div class="sa-row sa-section"><button type="button" class="btn btn-primary btn-sm" data-pk-replace="' + a + '">' + (p.set ? 'Replace key' : 'Set key') + '</button>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-pk-test="' + a + '"' + (p.set ? '' : ' disabled title="No key to test"') + '>Test</button>' +
+      (p.source === 'saved' ? '<button type="button" class="btn btn-secondary btn-sm" data-pk-reset="' + a + '">Use the server key</button>' : '') + '</div></div>';
+  }
+  /** Replace the key LeadAI provides: tested first; a failing key is refused unless "Save anyway" is ticked. */
+  async function pkReplaceDialog(a, p) {
+    var name = API_SHORT[a];
+    var res = await openModal({ title: (p.set ? 'Replace' : 'Set') + ' the ' + name + ' key LeadAI provides', submitLabel: p.set ? 'Test and replace' : 'Test and save', body:
+      '<div class="alert alert-warning"><div class="alert-body"><div class="alert-title">' + esc('Used by every customer on LeadAI-provided ' + name) + '</div><div>' +
+        esc(pkOrgs(p.organizations_using) + ' run on this key right now. ' + name + ' tests the new key before it is saved — if the test fails, nothing changes.') + '</div></div></div>' +
+      (p.set ? '<p class="sa-small sa-muted" style="margin:0">Current key: <span class="sa-mono">' + esc(p.hint) + '</span>' + esc(p.source === 'environment' ? ' from the server environment (' + p.env_name + '). The new key is saved in LeadAI (encrypted) and takes over from it.' : ' saved in LeadAI.') + '</p>' : '') +
+      keyField('pkKey', 'New ' + name + ' key') + reasonField('pkReason') +
+      '<div data-pkres role="alert"></div>' +
+      '<label class="sa-check"><input type="checkbox" name="force"> Save anyway even if the test fails</label>' +
+      '<span class="sa-small sa-muted" style="margin-top:-6px">' + esc('Only when you are sure the key is right (e.g. ' + name + ' is having an outage). A wrong key stops every customer on LeadAI-provided ' + name + '.') + '</span>',
+      onOpen: bindReveal,
+      onSubmit: async function (f, fd) {
+        var key = needKey(fd, name), reason = needReason(fd), out = $('[data-pkres]', f);
+        out.innerHTML = '';
+        try {
+          return await api(pkUrl(a), { method: 'PUT', body: { key: key, reason: reason, force: !!fd.get('force') } });
+        } catch (e) {
+          if (e.status !== 422) throw e;
+          out.innerHTML = '<div class="alert alert-danger"><div class="alert-body"><div class="alert-title">Not saved</div><div>' + esc(e.message) + '</div></div></div>';
+          out.scrollIntoView({ block: 'nearest' });
+          return false;
+        }
+      } });
+    if (!res) return null;
+    var t = res.test || {};
+    toast(t.valid ? name + ' key replaced and verified — ' + pkOrgs(((res.platform || {})[a] || {}).organizations_using) + ' now run on it'
+      : name + ' key saved without a passing test (' + (t.detail || 'rejected') + '). Customers on LeadAI-provided ' + name + ' may fail until it works.', t.valid ? 'success' : 'warning');
+    return res;
+  }
+  /** Remove the key saved in LeadAI so the server environment's key applies again. */
+  async function pkResetDialog(a, p) {
+    var name = API_SHORT[a], orgs = pkOrgs(p.organizations_using);
+    var res = await openModal({ title: 'Use the server ' + name + ' key', submitLabel: 'Use the server key', danger: !p.environment_set, body:
+      '<p style="margin:0;color:var(--text-secondary)">' + esc('Removes the ' + name + ' key saved in LeadAI (' + p.hint + '). The server environment\'s ' + p.env_name + ' applies again for every customer on LeadAI-provided ' + name + ' (' + orgs + ').') + '</p>' +
+      (p.environment_set ? '<p class="sa-small" style="margin:0">Server key: <span class="sa-mono">' + esc(p.environment_hint) + '</span></p>' : '') +
+      '<div data-pk-noenv' + (p.environment_set ? ' hidden' : '') + '><div class="alert alert-danger"><div class="alert-body"><div class="alert-title">' + esc('The server environment has no ' + p.env_name) + '</div><div>' +
+        esc('With no key at all, every customer on LeadAI-provided ' + name + ' (' + orgs + ') stops working. Replace the key instead, unless you really mean to switch ' + name + ' off.') + '</div></div></div>' +
+        '<label class="sa-check" style="margin-top:10px"><input type="checkbox" name="force"> I understand — every customer on LeadAI-provided ' + esc(name) + ' stops</label></div>' +
+      reasonField('pkrReason'),
+      onSubmit: async function (f, fd) {
+        var reason = needReason(fd);
+        try {
+          return await api(pkUrl(a), { method: 'DELETE', body: { reason: reason, force: !!fd.get('force') } });
+        } catch (e) {
+          if (e.status === 409) $('[data-pk-noenv]', f).hidden = false; // the server knows best: ask for the explicit tick
+          throw e;
+        }
+      } });
+    if (!res) return null;
+    var np = (res.platform || {})[a] || {};
+    toast(np.set ? name + ' now uses the server key (' + np.hint + ')' : 'No ' + name + ' key is set now — customers on LeadAI-provided ' + name + ' are stopped until you add one.', np.set ? 'success' : 'warning');
+    return res;
+  }
+
+  async function viewProviderKeys(root, q) {
+    var base = '/api/super-admin/provider-keys';
+    var st = { show: PK_SHOW.some(function (x) { return x[0] === q.show; }) ? q.show : 'own', q: q.q || '' };
+    var seq = 0, stats, list;
+    var fail = function (e) { toast(e.message, 'error'); };
+    var plain = function () { return st.show === 'own' && !st.q; }; // the stats request already is this list
+    var first = await Promise.all([api(base + '?show=own'), plain() ? null : api(base + qs({ show: st.show, q: st.q }))]);
+    stats = first[0]; list = first[1] || first[0];
+    root.innerHTML = header('API keys', 'Apify (scraping) and Gemini (AI): the keys LeadAI provides to customers, and the keys customers bring themselves. Keys are never shown here — only masked hints.',
+      '<button type="button" class="btn btn-secondary btn-sm" id="pkRefresh">' + ICON_SVG('repeat') + 'Refresh</button><a class="btn btn-secondary btn-sm" href="#/plans">' + ICON_SVG('layers') + 'Plans &amp; own-key prices</a>') +
+      '<div class="sa-grid sa-kpis sa-pk-kpis" data-pk-kpis></div>' +
+      '<div class="sa-pk-head" data-section="pk-platform" tabindex="-1"><h2>Keys LeadAI provides</h2><span class="sa-small sa-muted">Every organization on LeadAI-provided for an API runs on these keys.</span></div>' +
+      '<div class="sa-grid sa-2" data-pk-platform></div>' +
+      '<div class="sa-card sa-section" data-section="pk-orgs" tabindex="-1"><h3><span>Customers\' own keys <span class="sa-small sa-muted">organizations that bring an Apify or Gemini key</span></span></h3>' +
+      '<div class="sa-filters"><div class="sa-chips" role="group" aria-label="Show">' + PK_SHOW.map(function (x) {
+        return '<button type="button" class="sa-chip" data-show="' + x[0] + '" aria-pressed="false">' + esc(x[1]) + (x[0] === 'problems' ? ' <b data-pk-pcount></b>' : '') + '</button>';
+      }).join('') + '</div>' +
+      '<div class="sa-q sa-grow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
+      '<label class="sr-only" for="pkQ">Search organizations</label><input class="form-input" type="search" id="pkQ" placeholder="Search organization name or slug…" value="' + esc(st.q) + '" autocomplete="off"></div></div>' +
+      '<div data-pk-rows aria-live="polite"></div></div>';
+    var kpisEl = $('[data-pk-kpis]', root), platEl = $('[data-pk-platform]', root), rowsEl = $('[data-pk-rows]', root);
+
+    function syncUrl() {
+      try { history.replaceState(null, '', '#/provider-keys' + qs({ show: st.show === 'own' ? '' : st.show, q: st.q })); } catch (e) { /* ignore */ }
+    }
+    function setShow(show) {
+      st.show = show; syncUrl();
+      $$('[data-show]', root).forEach(function (b) { var on = b.getAttribute('data-show') === show; b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); });
+      loadList();
+    }
+    function renderTop() {
+      var P = stats.platform || {}, orgs = stats.organizations || [];
+      var states = API_KEYS.map(function (a) { return pkState(P[a]); });
+      var working = states.filter(function (s) { return s[0] === 'ok'; }).length;
+      var own = orgs.filter(function (o) { return API_KEYS.some(function (a) { return (o.coverage || {})[a] === 'own'; }); });
+      var probs = orgs.filter(function (o) { return (o.problems || []).length; }).length;
+      kpisEl.innerHTML =
+        kpi('LeadAI keys working', working + '/' + API_KEYS.length, esc(API_KEYS.map(function (a, i) { return API_SHORT[a] + ' ' + states[i][1]; }).join(' · ')),
+          { href: '#pk-platform', icon: 'key', tone: states.some(function (s) { return s[0] === 'bad'; }) ? 'bad' : working < API_KEYS.length ? 'warn' : '' }) +
+        kpi('Organizations on own keys', fmtN(own.length), esc(API_KEYS.map(function (a) { return API_SHORT[a] + ' ' + fmtN(own.filter(function (o) { return o.coverage[a] === 'own'; }).length); }).join(' · ')),
+          { href: '#/provider-keys', icon: 'org' }) +
+        kpi('Need attention', fmtN(probs), probs ? 'own API without a working key' : 'every own-key API has a working key', { href: '#/provider-keys?show=problems', icon: 'flag', tone: probs ? 'bad' : '' });
+      bindScrollKpis(kpisEl, root);
+      $$('[data-go^="#/provider-keys"]', kpisEl).forEach(function (b) {
+        b._go = true;
+        b.addEventListener('click', function (e) {
+          e.preventDefault();
+          if (st.q) { st.q = ''; $('#pkQ', root).value = ''; }
+          setShow(/show=problems/.test(b.getAttribute('data-go')) ? 'problems' : 'own');
+          var card = $('[data-section="pk-orgs"]', root);
+          card.scrollIntoView({ block: 'start', behavior: window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+          card.focus({ preventScroll: true });
+        });
+      });
+      platEl.innerHTML = API_KEYS.map(function (a) { return pkCard(a, P[a] || { name: API_SHORT[a], source: 'not_set' }); }).join('');
+      $$('[data-pk-replace]', platEl).forEach(function (b) {
+        var a = b.getAttribute('data-pk-replace');
+        b.onclick = function () { pkReplaceDialog(a, stats.platform[a]).then(function (r) { if (r) return refresh(); }).catch(fail); };
+      });
+      $$('[data-pk-test]', platEl).forEach(function (b) {
+        var a = b.getAttribute('data-pk-test');
+        b.onclick = function () {
+          busy(b, function () { return api(pkUrl(a) + '/test', { method: 'POST' }); }).then(function (r) {
+            testToast(API_SHORT[a], r.test);
+            if (r.platform) { stats.platform = r.platform; renderTop(); var again = $('[data-pk-test="' + a + '"]', platEl); if (again) again.focus(); }
+          }).catch(fail);
+        };
+      });
+      $$('[data-pk-reset]', platEl).forEach(function (b) {
+        var a = b.getAttribute('data-pk-reset');
+        b.onclick = function () { pkResetDialog(a, stats.platform[a]).then(function (r) { if (r) return refresh(); }).catch(fail); };
+      });
+      $$('[data-pk-pcount]', root).forEach(function (x) { x.textContent = fmtN(probs); });
+      setCount('apikeys', probs + states.filter(function (x) { return x[1] === 'not set' || x[1] === 'last test failed'; }).length);
+    }
+    function apiCell(o, a) {
+      var k = (o.keys || {})[a] || {}, own = (o.coverage || {})[a] === 'own', bad = (o.problems || []).indexOf(a) >= 0;
+      var btn = function (act, label, cls) { return '<button type="button" class="btn ' + (cls || 'btn-secondary') + ' btn-xs" data-act="' + act + '" data-a="' + a + '" aria-label="' + esc(label + ' — ' + API_SHORT[a] + ' · ' + o.name) + '">' + esc(label) + '</button>'; };
+      return '<div class="sa-pk-api"><div class="sa-pk-line">' + (own ? badge('Own key', 'primary') : badge('LeadAI', 'success')) +
+        (k.configured ? '<span class="sa-mono" title="Masked — the key itself is never shown">' + esc(k.hint || '••••••••') + '</span>' : '') + orgKeyPill(k, own) + '</div>' +
+        (bad ? '<div class="sa-small sa-pk-bad">' + esc(API_SHORT[a] + ' work is stopped until a working key is saved or LeadAI provides it.') + '</div>' : '') +
+        '<div class="sa-pk-acts">' + btn('set', k.configured ? 'Replace key' : 'Set key') + (k.configured ? btn('test', 'Test') : '') +
+        btn('sw', own ? 'Switch to LeadAI' : 'Switch to own key') + (k.configured ? btn('rm', 'Remove key', 'btn-danger') : '') + '</div></div>';
+    }
+    function renderRows() {
+      var rows = list.organizations || [];
+      if (!rows.length) {
+        var e = st.q ? ['No organization matches “' + st.q + '”', 'Search looks at the organization name and slug.']
+          : st.show === 'problems' ? ['Nothing needs attention', 'Every API an organization runs on its own key has a working key.']
+          : st.show === 'own' ? ['No organization uses its own keys', 'Every organization runs on the keys LeadAI provides.'] : ['No organizations', ''];
+        rowsEl.innerHTML = emptyState(e[0], e[1], st.q ? '<button type="button" class="btn btn-secondary btn-sm" data-pk-clear>Clear search</button>' : '');
+        var c = $('[data-pk-clear]', rowsEl);
+        if (c) c.onclick = function () { st.q = ''; $('#pkQ', root).value = ''; syncUrl(); loadList(); $('#pkQ', root).focus(); };
+        return;
+      }
+      rowsEl.innerHTML = '<div class="sa-table-wrap"><table class="sa-table sa-pk-table"><caption class="sr-only">Who provides Apify and Gemini for each organization, and its own keys (masked)</caption><thead><tr>' +
+        '<th scope="col">Organization</th><th scope="col">Uses</th>' + API_KEYS.map(function (a) { return '<th scope="col">' + esc(API_LABEL[a]) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        rows.map(function (o, i) {
+          return '<tr data-i="' + i + '" data-org="' + esc(o.id) + '"><td data-label="Organization"><a class="sa-link cell-main" href="#/organizations/' + esc(encodeURIComponent(o.id)) + '?tab=api">' + esc(o.name || o.id) + '</a>' +
+            '<span class="cell-sub">' + esc(o.slug || '') + (o.status && o.status !== 'active' ? ' · ' + esc(PILL_LABEL[o.status] || titleCase(o.status)) : '') + '</span></td>' +
+            '<td data-label="Uses">' + esc(o.label || coverageLabel(o.coverage)) + (o.plan_id ? '<span class="cell-sub">' + esc(o.plan_id) + ' plan</span>' : '') + '</td>' +
+            API_KEYS.map(function (a) { return '<td data-label="' + esc(API_LABEL[a]) + '">' + apiCell(o, a) + '</td>'; }).join('') + '</tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<div class="sa-pager"><span>Showing <b>' + fmtN(rows.length) + '</b> organization' + (rows.length === 1 ? '' : 's') + (rows.length >= 500 ? ' (the first 500 — search to narrow down)' : '') + '</span></div>';
+      $$('[data-act]', rowsEl).forEach(function (b) {
+        var o = rows[+b.closest('tr').getAttribute('data-i')];
+        b.onclick = function () { orgAction(o, b.getAttribute('data-a'), b.getAttribute('data-act'), b).catch(fail); };
+      });
+    }
+    async function orgAction(o, a, act, b) {
+      var k = (o.keys || {})[a] || {}, own = (o.coverage || {})[a] === 'own', r;
+      if (act === 'set') r = await orgKeyDialog(o.id, o.name, a, k, own);
+      else if (act === 'test') r = await orgKeyTest(o.id, a, b);
+      else if (act === 'rm') r = await orgKeyRemove(o.id, o.name, a, k, own);
+      else if (act === 'sw') {
+        var it = (await busy(b, function () { return api(orgBase(o.id) + '/api-coverage'); })).integrations || {};
+        r = await switchCoverageDialog(o.id, o.name, it, a, own ? 'leadai' : 'own');
+      }
+      if (!r) return;
+      await refresh();
+      var again = $('tr[data-org="' + o.id + '"] [data-act="' + act + '"][data-a="' + a + '"]', rowsEl) || $('tr[data-org="' + o.id + '"] a', rowsEl);
+      if (again) again.focus();
+    }
+    async function refresh() {
+      var my = ++seq;
+      var r = await Promise.all([api(base + '?show=own'), plain() ? null : api(base + qs({ show: st.show, q: st.q }))]);
+      if (my !== seq) return;
+      stats = r[0]; list = r[1] || r[0];
+      renderTop(); renderRows();
+    }
+    async function loadList() {
+      var my = ++seq;
+      rowsEl.style.opacity = '.55'; rowsEl.setAttribute('aria-busy', 'true');
+      try {
+        var d = await api(base + qs({ show: st.show, q: st.q }));
+        if (my !== seq) return;
+        list = d;
+        if (plain()) { stats = d; renderTop(); }
+        renderRows();
+      } catch (e) {
+        if (my === seq) rowsEl.innerHTML = errorState(e, loadList);
+      } finally {
+        if (my === seq) { rowsEl.style.opacity = ''; rowsEl.removeAttribute('aria-busy'); }
+      }
+    }
+    $$('[data-show]', root).forEach(function (b) {
+      var on = b.getAttribute('data-show') === st.show;
+      b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on));
+      b.onclick = function () { if (st.show !== b.getAttribute('data-show')) setShow(b.getAttribute('data-show')); };
+    });
+    var timer;
+    $('#pkQ', root).addEventListener('input', function () {
+      var v = this.value.trim();
+      clearTimeout(timer);
+      timer = setTimeout(function () { if (v === st.q) return; st.q = v; syncUrl(); loadList(); }, 300);
+    });
+    $('#pkRefresh', root).onclick = function () { busy(this, refresh).catch(fail); };
+    renderTop(); renderRows();
   }
 
   // ════════════════════════════════════════════════════════
@@ -2975,17 +3310,17 @@
     var i = (await api('/api/super-admin/integrations')).integrations;
     var ap = i.apify, ai = i.ai, pay = i.payments, em = i.email;
     root.innerHTML = header('Integrations', 'Connection status only — secret values are never sent to the browser.') + '<div class="sa-grid sa-2">' +
-      '<div class="sa-card"><h3>Apify <a class="sa-link" href="/admin#/apify" target="_blank" rel="noopener">Manage ↗</a></h3><dl class="sa-kv"><dt>API token</dt><dd>' + yes(ap.configured) + '</dd><dt>Last connection test</dt><dd>' + (ap.last_test_ok == null ? '<span class="sa-muted">never</span>' : pill(ap.last_test_ok ? 'active' : 'failed', ap.last_test_ok ? 'Passed' : 'Failed')) + ' <span class="sa-small sa-muted">' + esc(ap.last_test_at ? fmtDT(ap.last_test_at) : '') + '</span></dd>' +
+      '<div class="sa-card"><h3>Apify <a class="sa-link" href="/admin#/apify" target="_blank" rel="noopener">Manage ↗</a></h3><dl class="sa-kv"><dt>API token</dt><dd>' + yes(ap.configured) + ' <a class="sa-link sa-small" href="#/provider-keys">Replace or test →</a></dd><dt>Last connection test</dt><dd>' + (ap.last_test_ok == null ? '<span class="sa-muted">never</span>' : pill(ap.last_test_ok ? 'active' : 'failed', ap.last_test_ok ? 'Passed' : 'Failed')) + ' <span class="sa-small sa-muted">' + esc(ap.last_test_at ? fmtDT(ap.last_test_at) : '') + '</span></dd>' +
       '<dt>Jobs (24h)</dt><dd>' + fmtN(ap.jobs_24h) + ' · <span style="color:' + (ap.failures_24h ? 'var(--danger-text)' : 'inherit') + '">' + fmtN(ap.failures_24h) + ' failed</span></dd><dt>Usage (30d)</dt><dd>$' + esc(Number(ap.usage_usd_30d || 0).toFixed(2)) + '</dd>' +
       Object.keys(ap.actors).map(function (p) { return '<dt>' + esc(titleCase(p)) + '</dt><dd><span class="sa-mono">' + esc(ap.actors[p] || '—') + '</span> ' + (ap.platforms_enabled[p] ? pill('active', 'On') : pill('disabled', 'Off')) + '</dd>'; }).join('') + '</dl></div>' +
-      '<div class="sa-card"><h3>AI provider <a class="sa-link" href="#/ai">AI management →</a></h3><dl class="sa-kv"><dt>Provider</dt><dd>' + esc(titleCase(ai.provider)) + '</dd><dt>API key</dt><dd>' + yes(ai.configured) + '</dd><dt>AI enabled</dt><dd>' + yes(ai.enabled, 'Enabled', 'Disabled') + '</dd><dt>Model</dt><dd class="sa-mono">' + esc(ai.model) + '</dd><dt>Calls (24h)</dt><dd>' + fmtN(ai.requests_24h) + ' · ' + fmtN(ai.failures_24h) + ' failed</dd></dl></div>' +
+      '<div class="sa-card"><h3>AI provider <a class="sa-link" href="#/ai">AI management →</a></h3><dl class="sa-kv"><dt>Provider</dt><dd>' + esc(titleCase(ai.provider)) + '</dd><dt>API key</dt><dd>' + yes(ai.configured) + (String(ai.provider || '').toLowerCase() === 'gemini' ? ' <a class="sa-link sa-small" href="#/provider-keys">Replace or test →</a>' : '') + '</dd><dt>AI enabled</dt><dd>' + yes(ai.enabled, 'Enabled', 'Disabled') + '</dd><dt>Model</dt><dd class="sa-mono">' + esc(ai.model) + '</dd><dt>Calls (24h)</dt><dd>' + fmtN(ai.requests_24h) + ' · ' + fmtN(ai.failures_24h) + ' failed</dd></dl></div>' +
       '<div class="sa-card"><h3>Payment provider</h3><dl class="sa-kv"><dt>Active provider</dt><dd>' + pill(pay.provider === 'mock' ? 'warn' : 'active', titleCase(pay.provider)) + '</dd><dt>Stripe secret key</dt><dd>' + yes(pay.stripe_key_configured) + '</dd><dt>Stripe webhook secret</dt><dd>' + yes(pay.stripe_webhook_secret_configured) + '</dd><dt>BILLING_WEBHOOK_SECRET</dt><dd>' + yes(pay.billing_webhook_secret_configured) + '</dd><dt>Failed payments (7d)</dt><dd>' + fmtN(pay.failed_payments_7d) + '</dd></dl>' +
       (pay.provider === 'mock' ? '<p class="sa-small sa-muted">The mock provider is active because no Stripe secret key is configured.</p>' : '') + '</div>' +
       '<div class="sa-card"><h3>Email <a class="sa-link" href="#/notifications?tab=outbox">Outbox →</a></h3><dl class="sa-kv"><dt>SMTP host</dt><dd>' + yes(em.smtp_configured, 'Configured', 'Not configured — queue only') + '</dd><dt>SMTP auth</dt><dd>' + yes(em.smtp_auth_configured) + '</dd><dt>PUBLIC_BASE_URL</dt><dd>' + yes(em.public_base_url_configured, 'Set', 'Not set — links are relative') + '</dd>' +
       '<dt>Outbox</dt><dd>' + fmtN(em.outbox.queued) + ' queued · ' + fmtN(em.outbox.sent) + ' sent · ' + fmtN(em.outbox.failed) + ' failed</dd></dl></div>' +
       '<div class="sa-card"><h3>Storage</h3><dl class="sa-kv"><dt>Exports</dt><dd>' + fmtN(i.storage.exports) + '</dd><dt>Website media files</dt><dd>' + fmtN(i.storage.media_files) + '</dd></dl></div>' +
       '<div class="sa-card"><h3>Database <a class="sa-link" href="/admin#/database" target="_blank" rel="noopener">Details ↗</a></h3><dl class="sa-kv"><dt>Connection</dt><dd>' + yes(i.database.connected, 'Connected', 'Unreachable') + '</dd><dt>Ping latency</dt><dd>' + esc(i.database.latency_ms == null ? '—' : i.database.latency_ms + ' ms') + '</dd></dl></div></div>' +
-      '<p class="sa-small sa-muted sa-section">Secrets are edited only in the locked environment panel of the platform console (<a href="/admin#/environment" target="_blank" rel="noopener">Environment ↗</a>).</p>';
+      '<p class="sa-small sa-muted sa-section">The Apify and Gemini keys LeadAI provides to customers are replaced and tested on <a href="#/provider-keys">API keys</a>. Other secrets are edited only in the locked environment panel of the platform console (<a href="/admin#/environment" target="_blank" rel="noopener">Environment ↗</a>).</p>';
     // environment-only variables that still have a value stored in the app
     try {
       var lo = await api('/api/super-admin/config/legacy-overrides');
@@ -3207,7 +3542,7 @@
   var MENU = [
     ['Overview', [['dashboard', 'Dashboard', 'dash']]],
     ['Customers', [['organizations', 'Organizations', 'org'], ['admins', 'Admins', 'shield'], ['users', 'Users', 'users'], ['demo', 'Demo Management', 'gift', 'demo'], ['support', 'Support', 'msg', 'support']]],
-    ['Revenue', [['plans', 'Plans', 'layers'], ['pricing', 'Pricing', 'tag'], ['subscriptions', 'Subscriptions', 'repeat', 'queue'], ['payments', 'Payments', 'card'], ['tokens', 'Tokens & Usage', 'coin']]],
+    ['Revenue', [['plans', 'Plans', 'layers'], ['pricing', 'Pricing', 'tag'], ['provider-keys', 'API keys', 'key', 'apikeys'], ['subscriptions', 'Subscriptions', 'repeat', 'queue'], ['payments', 'Payments', 'card'], ['tokens', 'Tokens & Usage', 'coin']]],
     ['LeadAI Operations', [['ops/agent', 'URL Search Agent', 'bolt'], ['ops/searches', 'Searches', 'search'], ['ops/jobs', 'Apify Jobs', 'cpu'], ['/admin#/pages', 'Pages', 'file'], ['/admin#/posts', 'Posts', 'msg'], ['/admin#/ci', 'Comments', 'msg'], ['ops/leads', 'Leads', 'star']]],
     ['Intelligence', [['ai', 'AI Management', 'brain'], ['industries', 'Industries', 'layers'], ['analytics', 'Analytics', 'chart']]],
     ['Governance', [['notifications', 'Notifications', 'bell', 'notif'], ['audit', 'Audit Logs', 'list'], ['security', 'Security Center', 'lock'], ['roles', 'Roles & Permissions', 'key']]],
@@ -3215,7 +3550,7 @@
   ];
   var ROUTES = {
     dashboard: [viewDashboard, 'Dashboard'], organizations: [viewOrganizations, 'Organizations', viewOrgDetail], admins: [viewAdmins, 'Admins'],
-    users: [viewUsers, 'Users', viewUserDetail], demo: [viewDemo, 'Demo Management'], plans: [viewPlans, 'Plans'], pricing: [viewPricing, 'Pricing'],
+    users: [viewUsers, 'Users', viewUserDetail], demo: [viewDemo, 'Demo Management'], plans: [viewPlans, 'Plans'], pricing: [viewPricing, 'Pricing'], 'provider-keys': [viewProviderKeys, 'API keys'],
     subscriptions: [viewSubscriptions, 'Subscriptions'], payments: [viewPayments, 'Payments'], tokens: [viewTokens, 'Tokens & Usage'],
     'ops/agent': [viewOpsAgent, 'URL Search Agent'], 'ops/searches': [viewOpsSearches, 'Searches'], 'ops/jobs': [viewOpsJobs, 'Apify Jobs'],
     'ops/leads': [viewOpsLeads, 'Leads'], 'ops/chain': [null, 'Investigation', viewChain],
@@ -3346,6 +3681,10 @@
     try { setCount('demo', (await api('/api/super-admin/demo-requests?status=pending&limit=1')).total || 0); } catch (e) {}
     try { setCount('queue', (await api('/api/super-admin/subscriptions/queue?limit=1')).total || 0); } catch (e) {}
     try { setCount('support', (await api('/api/super-admin/support/tickets?status=active&limit=1')).total || 0); } catch (e) {}
+    try {
+      var pk = await api('/api/super-admin/provider-keys?show=problems');
+      setCount('apikeys', (pk.total || 0) + API_KEYS.filter(function (a) { var p = (pk.platform || {})[a]; return !p || !p.set || (p.last_test && !p.last_test.valid); }).length);
+    } catch (e) {}
     EXT_COUNTS.forEach(function (fn) { try { fn(); } catch (e) {} });
   }
   function renderBell() {

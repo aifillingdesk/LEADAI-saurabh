@@ -326,6 +326,23 @@
   .sa-pgrid tbody th{text-transform:none;letter-spacing:0;font-size:13px;font-weight:600;color:var(--text-primary);background:none;border-bottom:1px solid var(--border-subtle);white-space:normal}
   .sa-pgrid tbody tr:last-child th{border-bottom:0}
   .sa-pgrid tr.sa-cov-cur th,.sa-pgrid tr.sa-cov-cur td{background:var(--primary-light)}
+  /* API keys page: LeadAI's keys + customers' own keys (masked hints only) */
+  .sa-pk-kpis{grid-template-columns:repeat(auto-fill,minmax(270px,1fr))}
+  .sa-pk-head{display:flex;align-items:baseline;gap:4px 10px;flex-wrap:wrap;margin:20px 0 10px}
+  .sa-pk-head h2{margin:0;font-size:15px;font-weight:700}
+  .sa-pk-head:focus{outline:none}
+  .sa-pk-head:focus-visible{outline:2px solid var(--primary);outline-offset:4px;border-radius:6px}
+  .sa-pk-card.bad{border-color:var(--danger-border)}
+  .sa-pk-card .alert{margin-bottom:10px}
+  .sa-pk-bad{color:var(--danger-text)}
+  .sa-pk-err{display:inline-flex;cursor:help}
+  .sa-keyin{display:flex;gap:6px}
+  .sa-keyin .form-input{flex:1;min-width:0}
+  .sa-filters .sa-chips{margin:0}
+  .sa-pk-table td{vertical-align:top}
+  .sa-pk-api{display:grid;gap:6px;min-width:0}
+  .sa-pk-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .sa-pk-acts{display:flex;flex-wrap:wrap;gap:4px}
   .sa-card[data-section]:focus{outline:none}
   .sa-card[data-section]:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
   .sa-chip:focus-visible,.sa-tab:focus-visible,.sa-item:focus-visible,.sa-group-btn:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
@@ -359,6 +376,15 @@
     .sa-profile-btn{padding:3px}
     .sa-filters .form-select,.sa-filters .sa-q{flex:1 1 140px;min-width:0}
     .sa-head h1{font-size:19px}
+    /* API keys table: one card per organization */
+    .sa-pk-table thead{display:none}
+    .sa-pk-table,.sa-pk-table tbody,.sa-pk-table tr,.sa-pk-table td{display:block;width:100%}
+    .sa-pk-table tr{padding:10px 12px;border-bottom:1px solid var(--border)}
+    .sa-pk-table tr:last-child{border-bottom:0}
+    .sa-pk-table td{border:0;padding:5px 0}
+    .sa-pk-table td[data-label]::before{content:attr(data-label);display:block;margin-bottom:3px;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--sa-muted)}
+    .sa-filters .sa-chips{flex-basis:100%}
+    .sa-pk-kpis{grid-template-columns:minmax(0,1fr)}
   }
 </style>
 </head>
@@ -416,7 +442,7 @@
 </div>
 <div id="saLayer"></div>
 <div id="toast-container" aria-live="polite"></div>
-<script src="/static/super-admin.js?v=apicov1" defer></script>
+<script src="/static/super-admin.js?v=keys1" defer></script>
 <script src="/static/super-admin-partners.js?v=apicov1" defer></script>
 <script src="/static/super-admin-access.js" defer></script>
 </body>

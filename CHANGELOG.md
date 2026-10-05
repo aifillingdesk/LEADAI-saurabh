@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Marketing center with private file uploads, categories, per-partner visibility, email templates and download tracking.
   - Coupon and fraud notifications.
   - Partner API: an index endpoint, notifications readable with an API key, and key usage tracking.
+- **Super Admin → API keys: change LeadAI's keys and customers' keys in one place**:
+  - Keys LeadAI provides (Apify, Gemini): replace (tested first, refused if the provider rejects it unless forced), test, or go back to the server environment's key (refused when there is none). Saved keys are now stored encrypted; the old Environment panel writes them encrypted too.
+  - Customers' own keys: every organization on its own keys, with a "Needs attention" filter. Set or replace a key for an organization (its admins are notified), test, remove, or switch each API between LeadAI and its own key.
 - **Every comment of a post, qualified or not**, on the post's comments screen:
   - A new filter shows qualified comments (matched the comment filter and went to AI), not-qualified ones (kept, never sent to AI) or both. Each comment carries a Qualified / Not qualified badge, and the summary line counts both.
   - When the platform reports more comments than were collected (e.g. 35 on the post, 1 collected because of "Max / post"), a **Collect all comments** button collects the rest on demand, up to the plan's per-post limit.

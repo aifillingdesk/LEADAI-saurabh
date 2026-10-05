@@ -306,14 +306,41 @@ def get_envvar(name: str) -> Any:
     if hit is not None and now - hit[0] < _CACHE_TTL:
         return hit[1]
     doc = None if name in _LOCKED_NAMES else _sync_override(name)
-    if doc is not None and doc.get("value") is not None:
-        value = _coerce(name, doc["value"])
+    stored = _unseal(name, doc.get("value")) if doc is not None else None
+    if stored is not None:
+        value = _coerce(name, stored)
     else:
         env_value = _settings_value(name)
         if env_value is None or (isinstance(env_value, str) and not env_value):
             env_value = os.environ.get(name)
         value = _coerce(name, env_value) if env_value is not None else _default(name)
     _CACHE[name] = (now, value)
+    return value
+
+
+# platform API keys LeadAI pays for: stored encrypted when overridden here
+_SEALED = {"GEMINI_API_KEY"}
+
+
+def _seal(name: str, value: Any) -> Any:
+    if name in _SEALED and isinstance(value, str) and value:
+        from app.services import secret_box
+        if not secret_box.is_encrypted(value):
+            return secret_box.encrypt(value)
+    return value
+
+
+def _unseal(name: str, value: Any) -> Any:
+    """The stored override in plain text; None when it can't be decrypted any
+    more (then the environment value applies)."""
+    if name in _SEALED and isinstance(value, str) and value:
+        from app.services import secret_box
+        if secret_box.is_encrypted(value):
+            plain = secret_box.decrypt(value)
+            if plain is None:
+                logger.error("The saved %s can't be decrypted (API_KEY_ENCRYPTION_KEY changed?) — "
+                             "using the environment value. Save it again.", name)
+            return plain
     return value
 
 
@@ -340,7 +367,7 @@ def set_envvar_override(name: str, value: Any, by: str = "admin") -> bool:
         return False
     if name == "APIFY_API_TOKEN":
         return s_set_apify_token(value, by)
-    coerced = _coerce(name, value)
+    coerced = _seal(name, _coerce(name, value))
     try:
         db = get_sync_db()
         if db is None:
@@ -363,7 +390,7 @@ async def aset_envvar_override(name: str, value: Any, by: str = "admin") -> bool
         return False
     if name == "APIFY_API_TOKEN":
         return s_set_apify_token(value, by)
-    coerced = _coerce(name, value)
+    coerced = _seal(name, _coerce(name, value))
     try:
         db = get_async_db()
         if db is None:

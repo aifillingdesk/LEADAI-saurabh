@@ -351,3 +351,109 @@ def test_admin_organization_responses_never_carry_stored_keys(env):
         text = r.text
         assert RAW_APIFY not in text and RAW_GEMINI not in text and "fernet:" not in text, path
         assert "custom_api_keys" not in text, path
+
+
+# ── Super Admin: LeadAI's own keys and organizations' keys ──────────────────────
+
+def _clear_platform_overrides(db):
+    from app.admin.envvars import _CACHE
+    from app.admin.settings import clear_settings_cache
+    db.system_settings.delete_one({"_id": "apify.token"})
+    db.env_overrides.delete_one({"_id": "GEMINI_API_KEY"})
+    db.platform_api_key_status.delete_many({})
+    _CACHE.clear()
+    clear_settings_cache()
+
+
+def test_super_admin_replaces_leadais_keys_encrypted_and_tested(env):
+    from app.services.tenant_api_keys import platform_key
+    client, db = env
+    _clear_platform_overrides(db)
+    sa = _login(client, SUPER, TEST_SUPERADMIN_PASSWORD, scope="admin")
+    url = "/api/super-admin/provider-keys/platform/apify"
+    try:
+        assert sa.put(url, json={"key": RAW_APIFY}).status_code == 422                    # reason required
+        bad = AsyncMock(return_value={"valid": False, "detail": "Invalid token"})
+        with patch("app.services.platform_api_keys.test_apify_token_connection", bad):
+            r = sa.put(url, json={"key": RAW_APIFY, "reason": "rotate"})
+        assert r.status_code == 422 and "Nothing was changed" in r.json()["detail"]
+        assert db.system_settings.find_one({"_id": "apify.token"}) is None              # refused, not saved
+        with patch("app.services.platform_api_keys.test_apify_token_connection", VALID):
+            r = sa.put(url, json={"key": RAW_APIFY, "reason": "rotate"})
+        assert r.status_code == 200, r.text
+        assert RAW_APIFY not in r.text
+        stored = db.system_settings.find_one({"_id": "apify.token"})["value"]
+        assert stored.startswith("fernet:") and RAW_APIFY not in stored                  # encrypted at rest
+        assert platform_key("apify") == RAW_APIFY                                         # used decrypted
+        info = r.json()["platform"]["apify"]
+        assert info["source"] == "saved" and info["hint"] == "apif…7890" and info["last_test"]["valid"]
+        # Gemini: same, stored in the environment overrides
+        with patch("app.services.platform_api_keys.test_gemini_key_connection", VALID):
+            r = sa.put("/api/super-admin/provider-keys/platform/gemini", json={"key": RAW_GEMINI, "reason": "rotate"})
+        assert r.status_code == 200
+        assert db.env_overrides.find_one({"_id": "GEMINI_API_KEY"})["value"].startswith("fernet:")
+        assert platform_key("gemini") == RAW_GEMINI
+        overview = sa.get("/api/super-admin/provider-keys")
+        assert overview.status_code == 200 and RAW_APIFY not in overview.text and RAW_GEMINI not in overview.text
+        assert db.audit_logs.find_one({"action": "platform_api_key.replaced"})
+        # reset: refused when the environment has no key (every customer would stop)
+        with patch("app.services.platform_api_keys.environment_key", return_value=""):
+            r = sa.request("DELETE", url, json={"reason": "back to env"})
+        assert r.status_code == 409
+        with patch("app.services.platform_api_keys.environment_key", return_value="apify_api_ENVvalue000000000"):
+            r = sa.request("DELETE", url, json={"reason": "back to env"})
+        assert r.status_code == 200 and db.system_settings.find_one({"_id": "apify.token"}) is None
+    finally:
+        _clear_platform_overrides(db)
+
+
+def test_undecryptable_platform_key_falls_back_to_the_environment(env):
+    from app.admin.settings import clear_settings_cache, get_apify_token
+    from app.config import get_settings
+    client, db = env
+    db.system_settings.update_one({"_id": "apify.token"}, {"$set": {"value": "fernet:not-a-real-token"}}, upsert=True)
+    clear_settings_cache()
+    try:
+        assert get_apify_token() == (get_settings().apify_api_token or "")
+    finally:
+        _clear_platform_overrides(db)
+
+
+def test_super_admin_sets_and_tests_an_organizations_own_key(env):
+    client, db = env
+    org = _org(db)
+    _user(db, "owner@acme.example", org, "owner")
+    db.organizations.update_one({"_id": ObjectId(org)}, {"$set": {"api_coverage": {"apify": "own", "gemini": "leadai"}}})
+    sa = _login(client, SUPER, TEST_SUPERADMIN_PASSWORD, scope="admin")
+    listing = sa.get("/api/super-admin/provider-keys?show=problems").json()["organizations"]
+    assert [o["problems"] for o in listing if o["id"] == org] == [["apify"]]                 # own, no key
+    url = f"/api/super-admin/organizations/{org}/api-keys/apify"
+    assert sa.put(url, json={"key": RAW_APIFY}).status_code == 422                           # reason required
+    with patch("app.services.tenant_api_keys.test_apify_token_connection", VALID):
+        r = sa.put(url, json={"key": RAW_APIFY, "reason": "customer emailed the new token"})
+    assert r.status_code == 200 and RAW_APIFY not in r.text
+    assert r.json()["integrations"]["keys"]["apify"]["verified"] is True
+    doc = db.organizations.find_one({"_id": ObjectId(org)})
+    assert doc["custom_api_keys"]["apify"]["ciphertext"].startswith("fernet:")
+    assert db.notifications.find_one({"type": "api_key_updated"})
+    assert db.audit_logs.find_one({"action": "api_key.saved", "details.via": "super_admin"})
+    with patch("app.services.tenant_api_keys.test_apify_token_connection", VALID):
+        r = sa.post(f"{url}/test")
+    assert r.status_code == 200 and r.json()["test"]["valid"] is True
+    listing = sa.get("/api/super-admin/provider-keys?show=problems").json()["organizations"]
+    assert org not in [o["id"] for o in listing]                                             # fixed
+    owner = _login(client, "owner@acme.example", PW)
+    assert owner.put(url, json={"key": RAW_APIFY, "reason": "xyz"}).status_code in (401, 403)
+
+
+def test_platform_key_times_carry_their_zone(env):
+    client, db = env
+    _clear_platform_overrides(db)
+    sa = _login(client, SUPER, TEST_SUPERADMIN_PASSWORD, scope="admin")
+    try:
+        with patch("app.services.platform_api_keys.test_gemini_key_connection", VALID):
+            r = sa.put("/api/super-admin/provider-keys/platform/gemini", json={"key": RAW_GEMINI, "reason": "rotate"})
+        g = r.json()["platform"]["gemini"]
+        assert g["updated_at"].endswith("+00:00") and g["last_test"]["tested_at"].endswith("+00:00")
+    finally:
+        _clear_platform_overrides(db)

@@ -361,10 +361,30 @@ def get_str(key: str, fallback: str = "") -> str:
     return str(value) if value is not None else fallback
 
 
+def _seal(key: str, value: Any) -> Any:
+    """Secrets (the platform Apify token) are stored encrypted at rest."""
+    if key in _SECRET_KEYS and isinstance(value, str) and value:
+        from app.services import secret_box
+        if not secret_box.is_encrypted(value):
+            return secret_box.encrypt(value)
+    return value
+
+
+def _reveal(value: Any) -> Optional[str]:
+    """A stored secret in plain text: decrypts sealed values, passes older
+    plain values through, None when it can no longer be decrypted."""
+    if not value:
+        return ""
+    from app.services import secret_box
+    if secret_box.is_encrypted(str(value)):
+        return secret_box.decrypt(str(value))
+    return str(value)
+
+
 def set_setting(key: str, value: Any, by: str = "admin") -> bool:
     """Persist a coerced value. Returns True on success, False if Mongo is
     down (the change is lost, but the app keeps running on env defaults)."""
-    coerced = _coerce(key, value)
+    coerced = _seal(key, _coerce(key, value))
     try:
         db = get_sync_db()
         if db is None:
@@ -448,7 +468,7 @@ async def _async_get(key: str) -> Optional[Any]:
 
 
 async def aset_setting(key: str, value: Any, by: str = "admin") -> bool:
-    coerced = _coerce(key, value)
+    coerced = _seal(key, _coerce(key, value))
     try:
         db = get_async_db()
         if db is None:
@@ -478,7 +498,7 @@ async def get_all_settings() -> Dict[str, Any]:
         value = await aget_setting(key)
         if key in _SECRET_KEYS:
             result[key] = ""
-            result[f"{key}.masked"] = _mask(value)
+            result[f"{key}.masked"] = _mask(_reveal(value) or "")
         else:
             result[key] = value
         if value is not None:
@@ -538,7 +558,13 @@ def get_actor_id(platform: str, kind: str = "main") -> str:
 
 def get_apify_token() -> str:
     """Effective Apify token: admin override first, then the environment."""
-    override = get_str("apify.token", "")
+    stored = get_str("apify.token", "")
+    override = _reveal(stored)
+    if override is None:
+        # encrypted with a key this server no longer has: use the environment's
+        logger.error("The saved platform Apify token can't be decrypted (API_KEY_ENCRYPTION_KEY changed?) "
+                     "— using APIFY_API_TOKEN from the environment. Save the token again.")
+        override = ""
     return override or settings.apify_api_token
 
 

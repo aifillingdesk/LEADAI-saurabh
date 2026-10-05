@@ -571,6 +571,165 @@ async def remove_org_api_key(org_id: str, provider: str, body: ReasonBody, reque
     return {"success": True, "config": cfg}
 
 
+# ── API keys: LeadAI's own (platform) and organizations' own ───────────────────
+
+class ApiKeyAdminBody(BaseModel):
+    key: str = ""
+    reason: str = ""
+    force: bool = False      # platform key: save even if the provider test fails
+
+
+def _api_provider(provider: str) -> str:
+    from app.services.tenant_api_keys import PROVIDER_NAMES
+    if provider not in PROVIDER_NAMES:
+        raise HTTPException(status_code=404, detail="Unknown API")
+    return provider
+
+
+def _need_reason(reason: str) -> str:
+    if len((reason or "").strip()) < 3:
+        raise HTTPException(status_code=422, detail="Give a reason (recorded in the audit log)")
+    return reason.strip()[:300]
+
+
+@router.get("/provider-keys")
+async def api_keys_overview(q: Optional[str] = None, show: str = "own",
+                            ctx: TenantContext = Depends(SUPER)):
+    """LeadAI's keys (masked) + every organization with its own keys.
+    show: own (any API on own keys or a key saved) | problems | all."""
+    from app.billing.plans import coverage_label
+    from app.services.platform_api_keys import platform_key_status
+    from app.services.tenant_api_keys import coverage_of, public_config
+    db = _db()
+    query: Dict[str, Any] = {"status": {"$ne": "deleted"}}
+    if show != "all":
+        query["$or"] = [{"api_coverage.apify": "own"}, {"api_coverage.gemini": "own"},
+                        {"custom_api_keys.apify.ciphertext": {"$exists": True}},
+                        {"custom_api_keys.gemini.ciphertext": {"$exists": True}}]
+    if q and q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        query = {"$and": [query, {"$or": [{"name": rx}, {"slug": rx}]}]}
+    rows = []
+    async for org in db.organizations.find(query).sort("name", 1).limit(500):
+        cfg = public_config(org)
+        cov = coverage_of(org)
+        problems = [api for api in ("apify", "gemini") if cov[api] == "own" and not (
+            cfg["keys"][api]["configured"] and cfg["keys"][api]["verified"])]
+        if show == "problems" and not problems:
+            continue
+        rows.append({"id": str(org["_id"]), "name": org.get("name"), "slug": org.get("slug"),
+                     "status": org.get("status"), "plan_id": org.get("plan_id"), "coverage": cov,
+                     "label": coverage_label(cov), "keys": cfg["keys"], "problems": problems})
+    return {"success": True, "platform": await platform_key_status(db), "organizations": rows,
+            "total": len(rows)}
+
+
+@router.put("/provider-keys/platform/{provider}")
+async def replace_platform_api_key(provider: str, body: ApiKeyAdminBody, request: Request,
+                                   ctx: TenantContext = Depends(SUPER)):
+    """Replace the key LeadAI provides to every customer on LeadAI-provided."""
+    from app.services.platform_api_keys import platform_key_status, replace_platform_key
+    from app.services.tenant_api_keys import PROVIDER_NAMES, mask_key
+    provider = _api_provider(provider)
+    reason = _need_reason(body.reason)
+    db = _db()
+    res = await replace_platform_key(db, provider, body.key, actor_email=ctx.email or "super_admin",
+                                     force=body.force)
+    if not res["saved"]:
+        detail = res["test"].get("detail") or "The key was not saved"
+        raise HTTPException(status_code=422, detail=(
+            f"{PROVIDER_NAMES[provider]} rejected this key: {detail}. Nothing was changed. "
+            "Tick \"Save anyway\" only if you're sure." if body.key.strip() else detail))
+    await aaudit("platform_api_key.replaced", "security", user=ctx.audit_user(), resource_type="platform",
+                 resource_id=provider, details={"provider": provider, "hint": mask_key(body.key.strip()),
+                                                "verified": bool(res["test"].get("valid")),
+                                                "forced": body.force, "reason": reason}, **_meta(request))
+    return {"success": True, "test": res["test"], "platform": await platform_key_status(db)}
+
+
+@router.post("/provider-keys/platform/{provider}/test")
+async def test_platform_api_key(provider: str, request: Request, ctx: TenantContext = Depends(SUPER)):
+    from app.services.platform_api_keys import platform_key_status, test_platform_key
+    provider = _api_provider(provider)
+    db = _db()
+    test = await test_platform_key(db, provider)
+    await aaudit("platform_api_key.tested", "security", user=ctx.audit_user(), resource_type="platform",
+                 resource_id=provider, details={"provider": provider, "valid": bool(test.get("valid"))},
+                 **_meta(request))
+    return {"success": True, "test": test, "platform": await platform_key_status(db)}
+
+
+@router.delete("/provider-keys/platform/{provider}")
+async def reset_platform_api_key(provider: str, body: ApiKeyAdminBody, request: Request,
+                                 ctx: TenantContext = Depends(SUPER)):
+    """Remove the key saved here: the server environment's key applies again."""
+    from app.services.platform_api_keys import ENV_NAMES, environment_key, platform_key_status, reset_platform_key
+    from app.services.tenant_api_keys import PROVIDER_NAMES
+    provider = _api_provider(provider)
+    reason = _need_reason(body.reason)
+    if not environment_key(provider) and not body.force:
+        raise HTTPException(status_code=409, detail=(
+            f"The server environment has no {ENV_NAMES[provider]}: every customer on LeadAI-provided "
+            f"{PROVIDER_NAMES[provider]} would stop working. Replace the key instead."))
+    if not reset_platform_key(provider):
+        raise HTTPException(status_code=503, detail="Couldn't remove the saved key. Try again.")
+    if provider == "gemini":
+        from app.pipeline.comment_ai import reset_circuit_breaker
+        reset_circuit_breaker()
+    db = _db()
+    await aaudit("platform_api_key.reset", "security", user=ctx.audit_user(), resource_type="platform",
+                 resource_id=provider, details={"provider": provider, "reason": reason, "forced": body.force},
+                 **_meta(request))
+    return {"success": True, "platform": await platform_key_status(db)}
+
+
+@router.put("/organizations/{org_id}/api-keys/{provider}")
+async def set_org_api_key(org_id: str, provider: str, body: ApiKeyAdminBody, request: Request,
+                          ctx: TenantContext = Depends(SUPER)):
+    """Add or replace an organization's own key for it (e.g. sent to support).
+    Encrypted, tested, never returned; the organization's admins are told."""
+    from app.billing.api_coverage import coverage_summary
+    from app.services.tenant_api_keys import PROVIDER_NAMES, mask_key, save_key
+    provider = _api_provider(provider)
+    reason = _need_reason(body.reason)
+    db = _db()
+    if not _oid(org_id) or not await db.organizations.find_one({"_id": _oid(org_id)}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    try:
+        res = await save_key(org_id, provider, body.key, actor_email=ctx.email or "super_admin", db=db)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    valid = bool(res["test"].get("valid"))
+    await aaudit("api_key.saved", "security", user=ctx.audit_user(), organization_id=org_id,
+                 resource_type="organization", resource_id=org_id,
+                 details={"provider": provider, "hint": mask_key(body.key.strip()), "verified": valid,
+                          "reason": reason, "via": "super_admin"}, **_meta(request))
+    from app.events.notifications import notify_org_admins
+    notify_org_admins(org_id, "api_key_updated", f"LeadAI support updated your {PROVIDER_NAMES[provider]} key",
+                      f"LeadAI support saved a new {PROVIDER_NAMES[provider]} key for your organization "
+                      f"({mask_key(body.key.strip())}): {reason}."
+                      + ("" if valid else " It didn't pass the provider's test yet — check it in Admin portal → "
+                                          "API keys & plan."),
+                      severity="info" if valid else "warning", email=True, link="/org-admin#integrations")
+    return {"success": True, "test": res["test"], "integrations": await coverage_summary(db, org_id)}
+
+
+@router.post("/organizations/{org_id}/api-keys/{provider}/test")
+async def test_org_api_key(org_id: str, provider: str, request: Request, ctx: TenantContext = Depends(SUPER)):
+    from app.billing.api_coverage import coverage_summary
+    from app.services.tenant_api_keys import verify_saved_key
+    provider = _api_provider(provider)
+    db = _db()
+    if not _oid(org_id) or not await db.organizations.find_one({"_id": _oid(org_id)}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    res = await verify_saved_key(org_id, provider, db=db)
+    await aaudit("api_key.tested", "security", user=ctx.audit_user(), organization_id=org_id,
+                 resource_type="organization", resource_id=org_id,
+                 details={"provider": provider, "valid": bool(res["test"].get("valid")), "via": "super_admin"},
+                 **_meta(request))
+    return {"success": True, "test": res["test"], "integrations": await coverage_summary(db, org_id)}
+
+
 @router.patch("/organizations/{org_id}/members/{user_id}/role")
 async def change_member_role(org_id: str, user_id: str, body: MemberRoleBody, request: Request,
                              ctx: TenantContext = Depends(SUPER)):
